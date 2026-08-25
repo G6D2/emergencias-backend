@@ -1,9 +1,8 @@
 const { v4: uuidv4 } = require('uuid');
-const { KafkaService } = require('../services/kafka.service');
 
 class PanicButtonController {
-  constructor() {
-    this.kafkaService = new KafkaService();
+  constructor(kafkaService) {
+    this.kafkaService = kafkaService;
     // In-memory storage for demo (no persistence yet)
     this.emergencies = new Map();
   }
