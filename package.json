@@ -1,0 +1,34 @@
+{
+  "name": "emergencias-backend",
+  "version": "0.1.0",
+  "description": "Backend para módulo de Emergencias y Seguridad - CityPass+",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest --coverage",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
+  },
+  "keywords": [
+    "emergencies",
+    "panic-button",
+    "security",
+    "citypass"
+  ],
+  "author": "Grupo 6 - Emergencias y Seguridad",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "kafkajs": "^2.2.4",
+    "dotenv": "^16.3.1",
+    "uuid": "^9.0.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3",
+    "eslint": "^8.50.0"
+  }
+}
