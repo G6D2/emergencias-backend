@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: emergencias-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node src/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: emergencias-db
+          property: connectionString
+      - key: KAFKA_BROKER
+        sync: false
+      - key: KAFKA_CLIENT_ID
+        value: emergencias-backend
+      - key: TOPIC_PANIC_BUTTON
+        value: emergencias.boton-panico
+
+databases:
+  - name: emergencias-db
+    databaseName: emergencias
+    user: emergencias
+    plan: free

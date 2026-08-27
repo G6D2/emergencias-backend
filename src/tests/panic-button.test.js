@@ -1,5 +1,12 @@
 const request = require('supertest');
-const app = require('../index');
+const { createApp } = require('../app');
+
+const mockKafkaService = {
+  publishEvent: async () => {},
+  isConnected: () => false,
+};
+
+const app = createApp(mockKafkaService);
 
 describe('Panic Button API', () => {
   describe('POST /api/panic-button', () => {
