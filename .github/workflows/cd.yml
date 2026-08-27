@@ -26,4 +26,7 @@ jobs:
         run: npm run migrate
 
       - name: Deploy to Render
-        run: curl --fail -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}"
+        if: ${{ env.RENDER_DEPLOY_HOOK_URL != '' }}
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl --fail -X POST "$RENDER_DEPLOY_HOOK_URL"
