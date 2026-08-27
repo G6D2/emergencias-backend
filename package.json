@@ -7,6 +7,9 @@
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
     "test": "jest --coverage",
+    "test:integration": "jest --config jest.integration.config.js --runInBand",
+    "migrate": "node scripts/migrate.js migrate",
+    "migrate:info": "node scripts/migrate.js info",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix"
   },
@@ -23,12 +26,19 @@
     "kafkajs": "^2.2.4",
     "dotenv": "^16.3.1",
     "uuid": "^9.0.0",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "pg": "^8.13.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.1",
     "jest": "^29.7.0",
     "supertest": "^6.3.3",
     "eslint": "^8.50.0"
+  },
+  "jest": {
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "\\.integration\\.test\\.js$"
+    ]
   }
 }
