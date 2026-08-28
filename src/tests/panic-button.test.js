@@ -6,7 +6,20 @@ const mockKafkaService = {
   isConnected: () => false,
 };
 
-const app = createApp(mockKafkaService);
+function createMockEmergencyRepository() {
+  const emergencies = new Map();
+
+  return {
+    create: async (emergency) => {
+      const saved = { ...emergency };
+      emergencies.set(saved.id, saved);
+      return saved;
+    },
+    findById: async (id) => emergencies.get(id) || null,
+  };
+}
+
+const app = createApp(mockKafkaService, createMockEmergencyRepository());
 
 describe('Panic Button API', () => {
   describe('POST /api/panic-button', () => {

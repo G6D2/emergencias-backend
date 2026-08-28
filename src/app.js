@@ -2,8 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { createPanicButtonRoutes } = require('./routes/panic-button.routes');
+const { createEmergenciesRoutes } = require('./routes/emergencies.routes');
 
-function createApp(kafkaService) {
+function createApp(kafkaService, emergencyRepository) {
   const app = express();
 
   app.use(cors());
@@ -17,11 +18,13 @@ function createApp(kafkaService) {
     });
   });
 
-  app.use('/api/panic-button', createPanicButtonRoutes(kafkaService));
+  app.use('/api/panic-button', createPanicButtonRoutes(kafkaService, emergencyRepository));
+  app.use('/emergencies', createEmergenciesRoutes(kafkaService, emergencyRepository));
 
   app.use((err, req, res, next) => {
     console.error(err.stack);
-    res.status(500).json({ error: 'Internal Server Error', message: err.message });
+    const statusCode = err.statusCode || 500;
+    res.status(statusCode).json({ error: err.name || 'Internal Server Error', message: err.message });
   });
 
   return app;

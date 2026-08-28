@@ -120,6 +120,15 @@ src/
 
 ---
 
+## 🗄️ Persistencia (PostgreSQL / Supabase)
+
+Las emergencias y su historial de cambios de estado se persisten en PostgreSQL
+(hosteado en Supabase) mediante `pg` y migrations versionadas con Flyway. Ver
+[db/README.md](db/README.md) para el detalle del schema, cómo correr las
+migrations y cómo probar el repository.
+
+---
+
 ## 📊 Kafka Topics
 
 - `emergencias.boton-panico`: Eventos de botón de pánico
@@ -149,7 +158,7 @@ npm test -- --coverage
 ## 👥 Equipo
 
 - **Backend:** Matías, Lucca
-- **Security:** Valentín
+- **Security:** Valentina
 - **DevOps:** Kevin
 - **PM:** Juani
 - **Frontend:** Santino
@@ -159,7 +168,7 @@ npm test -- --coverage
 
 ## 📋 Próximos Pasos
 
-- [ ] ID 4: Persistencia de emergencias (PostgreSQL/MongoDB)
+- [x] ID 4: Persistencia de emergencias (PostgreSQL)
 - [ ] ID 3: Visualización en tiempo real (WebSockets)
 - [ ] Integración con grupo de Login Federado
 - [ ] Tests de integración con otros módulos
