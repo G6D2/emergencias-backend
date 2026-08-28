@@ -10,11 +10,13 @@ function createApp(kafkaService, emergencyRepository) {
   app.use(cors());
   app.use(express.json());
 
-  app.get('/health', (req, res) => {
+  app.get('/health', async (req, res) => {
+    const kafkaConnected = kafkaService ? await kafkaService.checkHealth() : false;
+
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
-      kafka: kafkaService?.isConnected() ? 'connected' : 'disconnected',
+      kafka: kafkaConnected ? 'connected' : 'disconnected',
     });
   });
 
