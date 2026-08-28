@@ -1,46 +1,41 @@
 const { v4: uuidv4 } = require('uuid');
 
 class PanicButtonController {
-  constructor(kafkaService) {
+  constructor(kafkaService, emergencyRepository) {
     this.kafkaService = kafkaService;
-    // In-memory storage for demo (no persistence yet)
-    this.emergencies = new Map();
+    this.emergencyRepository = emergencyRepository;
   }
 
   async triggerPanicButton(payload) {
     try {
       const emergencyId = uuidv4();
-      const timestamp = new Date().toISOString();
 
       // Validate required fields
       if (!payload.userId || !payload.location) {
         throw new Error('Missing required fields: userId, location');
       }
 
-      const emergencyEvent = {
+      const emergency = await this.emergencyRepository.create({
         id: emergencyId,
         userId: payload.userId,
-        location: payload.location,
+        latitude: payload.location.latitude,
+        longitude: payload.location.longitude,
         description: payload.description || 'Botón de pánico activado',
         severity: payload.severity || 'critical',
-        timestamp,
-        status: 'creada',
-      };
-
-      // Store in memory
-      this.emergencies.set(emergencyId, emergencyEvent);
+        status: 'PENDIENTE',
+      });
 
       // Publish to Kafka
       await this.kafkaService.publishEvent(
         process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico',
-        emergencyEvent
+        emergency
       );
 
       return {
         success: true,
         emergencyId,
         message: 'Botón de pánico activado',
-        data: emergencyEvent,
+        data: emergency,
       };
     } catch (error) {
       console.error('Error triggering panic button:', error);
@@ -50,7 +45,7 @@ class PanicButtonController {
 
   async getPanicButtonEvent(emergencyId) {
     try {
-      const emergency = this.emergencies.get(emergencyId);
+      const emergency = await this.emergencyRepository.findById(emergencyId);
 
       if (!emergency) {
         throw new Error(`Emergency with ID ${emergencyId} not found`);

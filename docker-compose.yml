@@ -23,7 +23,7 @@ services:
   backend:
     build: .
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       NODE_ENV: development
       KAFKA_BROKER: kafka:9092
