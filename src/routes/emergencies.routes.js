@@ -5,6 +5,15 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository) {
   const router = express.Router();
   const controller = new EmergencyController(kafkaService, emergencyRepository);
 
+  router.get('/', async (req, res, next) => {
+    try {
+      const result = await controller.listEmergencies(req.query);
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // PATCH /emergencies/:id/cancel - cancelación solicitada por el ciudadano
   router.patch('/:id/cancel', async (req, res, next) => {
     try {

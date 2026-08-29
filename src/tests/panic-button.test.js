@@ -16,6 +16,7 @@ function createMockEmergencyRepository() {
       return saved;
     },
     findById: async (id) => emergencies.get(id) || null,
+    findPage: async () => ({ emergencies: [...emergencies.values()], total: emergencies.size }),
   };
 }
 
@@ -76,6 +77,17 @@ describe('Panic Button API', () => {
 
       expect(getResponse.body.success).toBe(true);
       expect(getResponse.body.data.id).toBe(emergencyId);
+    });
+  });
+
+  describe('GET /emergencies', () => {
+    it('returns paginated emergencies for the dashboard', async () => {
+      const response = await request(app)
+        .get('/emergencies?status=PENDIENTE,CANCELADA&priority=critical&page=1&limit=20&sortBy=priority')
+        .expect(200);
+
+      expect(Array.isArray(response.body.data)).toBe(true);
+      expect(response.body.pagination).toMatchObject({ page: 1, limit: 20 });
     });
   });
 });
