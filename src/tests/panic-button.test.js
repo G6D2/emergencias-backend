@@ -1,9 +1,12 @@
 const request = require('supertest');
 const { createApp } = require('../app');
+const { KafkaService } = require('../services/kafka.service');
+const { NotFoundError } = require('../errors/app-errors');
 
 const mockKafkaService = {
   publishEvent: async () => {},
-  isConnected: () => false,
+  isConnected: () => true,
+  checkHealth: async () => false,
 };
 
 function createMockEmergencyRepository() {
@@ -16,6 +19,24 @@ function createMockEmergencyRepository() {
       return saved;
     },
     findById: async (id) => emergencies.get(id) || null,
+    updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
+      const current = emergencies.get(id);
+      if (!current) {
+        throw new NotFoundError(`Emergency with ID ${id} not found`);
+      }
+      const previousStatus = current.status;
+      const updated = { ...current, status: newStatus, updatedAt: new Date().toISOString() };
+      emergencies.set(id, updated);
+      return {
+        emergency: updated,
+        history: {
+          previousStatus,
+          newStatus,
+          actor,
+          reason,
+        },
+      };
+    },
   };
 }
 
@@ -41,6 +62,7 @@ describe('Panic Button API', () => {
       expect(response.body.success).toBe(true);
       expect(response.body.emergencyId).toBeDefined();
       expect(response.body.data.userId).toBe(payload.userId);
+      expect(response.body.data.status).toBe('CREATED');
     });
 
     it('should fail without required fields', async () => {
@@ -51,15 +73,14 @@ describe('Panic Button API', () => {
       const response = await request(app)
         .post('/api/panic-button')
         .send(payload)
-        .expect(500);
+        .expect(400);
 
-      expect(response.body.error).toBeDefined();
+      expect(response.body.error).toBe('ValidationError');
     });
   });
 
   describe('GET /api/panic-button/:id', () => {
     it('should retrieve panic button event', async () => {
-      // First create an emergency
       const createResponse = await request(app)
         .post('/api/panic-button')
         .send({
@@ -69,7 +90,6 @@ describe('Panic Button API', () => {
 
       const emergencyId = createResponse.body.emergencyId;
 
-      // Then retrieve it
       const getResponse = await request(app)
         .get(`/api/panic-button/${emergencyId}`)
         .expect(200);
@@ -77,5 +97,88 @@ describe('Panic Button API', () => {
       expect(getResponse.body.success).toBe(true);
       expect(getResponse.body.data.id).toBe(emergencyId);
     });
+
+    it('should return 404 when emergency does not exist', async () => {
+      const response = await request(app)
+        .get('/api/panic-button/00000000-0000-0000-0000-000000000000')
+        .expect(404);
+
+      expect(response.body.error).toBe('NotFoundError');
+    });
+  });
+});
+
+describe('Emergencies API', () => {
+  it('cancels a pending emergency', async () => {
+    const createResponse = await request(app)
+      .post('/api/panic-button')
+      .send({
+        userId: 'user-789',
+        location: { lat: -34.6037, lng: -58.3816 },
+      })
+      .expect(201);
+
+    const emergencyId = createResponse.body.emergencyId;
+
+    const cancelResponse = await request(app)
+      .patch(`/api/emergencies/${emergencyId}/cancel`)
+      .send({ actor: 'user-789', reason: 'Falsa alarma' })
+      .expect(200);
+
+    expect(cancelResponse.body.success).toBe(true);
+    expect(cancelResponse.body.data.status).toBe('CANCELLED');
+  });
+
+  it('returns 404 when cancelling a missing emergency', async () => {
+    const response = await request(app)
+      .patch('/api/emergencies/00000000-0000-0000-0000-000000000000/cancel')
+      .send({})
+      .expect(404);
+
+    expect(response.body.error).toBe('NotFoundError');
+  });
+
+  it('returns 409 when emergency is not cancellable', async () => {
+    const createResponse = await request(app)
+      .post('/api/panic-button')
+      .send({
+        userId: 'user-conflict',
+        location: { lat: -34.6037, lng: -58.3816 },
+      })
+      .expect(201);
+
+    const emergencyId = createResponse.body.emergencyId;
+
+    await request(app)
+      .patch(`/api/emergencies/${emergencyId}/cancel`)
+      .send({})
+      .expect(200);
+
+    const response = await request(app)
+      .patch(`/api/emergencies/${emergencyId}/cancel`)
+      .send({})
+      .expect(409);
+
+    expect(response.body.error).toBe('ConflictError');
+  });
+});
+
+describe('KafkaService', () => {
+  it('throws 503 when publishing while disconnected', async () => {
+    const service = new KafkaService();
+
+    await expect(service.publishEvent('emergencias.boton-panico', { id: '1' })).rejects.toMatchObject({
+      name: 'ServiceUnavailableError',
+      statusCode: 503,
+    });
+  });
+});
+
+describe('GET /health', () => {
+  it('reports kafka status from checkHealth', async () => {
+    const response = await request(app).get('/health').expect(200);
+
+    expect(response.body.status).toBe('ok');
+    expect(response.body.kafka).toBe('disconnected');
   });
 });

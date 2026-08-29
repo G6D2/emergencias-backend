@@ -1,5 +1,7 @@
-// Mapea filas de Postgres (snake_case) a objetos JS (camelCase) para no filtrar
-// el detalle de columnas de la base fuera del repository.
+const { NotFoundError } = require('../errors/app-errors');
+
+// Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
+// detalle de las columnas no se filtre afuera del repository.
 function mapEmergency(row) {
   if (!row) return null;
   return {
@@ -15,22 +17,21 @@ function mapEmergency(row) {
   };
 }
 
-function mapHistorialEntry(row) {
+function mapHistoryEntry(row) {
   if (!row) return null;
   return {
     id: row.id,
-    emergenciaId: row.emergencia_id,
-    estadoAnterior: row.estado_anterior,
-    estadoNuevo: row.estado_nuevo,
+    emergencyId: row.emergency_id,
+    previousStatus: row.previous_status,
+    newStatus: row.new_status,
     actor: row.actor,
-    motivo: row.motivo,
+    reason: row.reason,
     createdAt: row.created_at,
   };
 }
 
-// Repositorio de persistencia para emergencias (Task 4).
-// No conoce Kafka, controllers ni HTTP: solo SQL. Pensado para que Task 2 lo
-// inyecte donde hoy usa el Map en memoria de PanicButtonController.
+// Repository de persistencia de emergencies.
+// No sabe nada de Kafka, controllers ni HTTP: solo SQL.
 class EmergencyRepository {
   constructor(pool) {
     this.pool = pool;
@@ -38,8 +39,8 @@ class EmergencyRepository {
 
   async create({ id, userId, latitude, longitude, description, severity, status }) {
     const result = await this.pool.query(
-      `INSERT INTO emergencias (id, user_id, latitude, longitude, description, severity, status)
-       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 'PENDIENTE'))
+      `INSERT INTO emergencies (id, user_id, latitude, longitude, description, severity, status)
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 'CREATED'))
        RETURNING *`,
       [id, userId, latitude, longitude, description || null, severity || null, status || null]
     );
@@ -47,52 +48,51 @@ class EmergencyRepository {
   }
 
   async findById(id) {
-    const result = await this.pool.query('SELECT * FROM emergencias WHERE id = $1', [id]);
+    const result = await this.pool.query('SELECT * FROM emergencies WHERE id = $1', [id]);
     return mapEmergency(result.rows[0]);
   }
 
   async findAll() {
-    const result = await this.pool.query('SELECT * FROM emergencias ORDER BY created_at DESC');
+    const result = await this.pool.query('SELECT * FROM emergencies ORDER BY created_at DESC');
     return result.rows.map(mapEmergency);
   }
 
-  async findHistorialByEmergencyId(emergencyId) {
+  async findHistoryByEmergencyId(emergencyId) {
     const result = await this.pool.query(
-      'SELECT * FROM emergencia_estado_historial WHERE emergencia_id = $1 ORDER BY created_at ASC',
+      'SELECT * FROM emergency_status_history WHERE emergency_id = $1 ORDER BY created_at ASC',
       [emergencyId]
     );
-    return result.rows.map(mapHistorialEntry);
+    return result.rows.map(mapHistoryEntry);
   }
 
-  // Actualiza el estado y registra el historial en una única transacción:
-  // si cualquiera de los dos pasos falla, no queda ni el cambio de estado
-  // ni el registro de historial (ROLLBACK). La validez de la transición
-  // (qué estados pueden pasar a cuáles) es responsabilidad de Task 9.
+  // Actualiza el status y deja el historial en la misma transacción.
+  // Si falla cualquiera de los dos pasos, hace ROLLBACK. Las transiciones
+  // válidas las chequean los controllers.
   async updateStatus(id, { newStatus, actor = null, reason = null }) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
-      const current = await client.query('SELECT status FROM emergencias WHERE id = $1 FOR UPDATE', [id]);
+      const current = await client.query('SELECT status FROM emergencies WHERE id = $1 FOR UPDATE', [id]);
       if (current.rows.length === 0) {
-        throw new Error(`Emergency with ID ${id} not found`);
+        throw new NotFoundError(`Emergency with ID ${id} not found`);
       }
       const previousStatus = current.rows[0].status;
 
       const updated = await client.query(
-        'UPDATE emergencias SET status = $1, updated_at = now() WHERE id = $2 RETURNING *',
+        'UPDATE emergencies SET status = $1, updated_at = now() WHERE id = $2 RETURNING *',
         [newStatus, id]
       );
 
-      const historial = await client.query(
-        `INSERT INTO emergencia_estado_historial (emergencia_id, estado_anterior, estado_nuevo, actor, motivo)
+      const history = await client.query(
+        `INSERT INTO emergency_status_history (emergency_id, previous_status, new_status, actor, reason)
          VALUES ($1, $2, $3, $4, $5) RETURNING *`,
         [id, previousStatus, newStatus, actor, reason]
       );
 
       await client.query('COMMIT');
 
-      return { emergency: mapEmergency(updated.rows[0]), historial: mapHistorialEntry(historial.rows[0]) };
+      return { emergency: mapEmergency(updated.rows[0]), history: mapHistoryEntry(history.rows[0]) };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

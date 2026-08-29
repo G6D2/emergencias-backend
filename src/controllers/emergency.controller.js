@@ -1,8 +1,8 @@
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
 
-// Estados desde los que un ciudadano puede cancelar su propia emergencia.
-// DESCARTADA es una decisión del Dispatcher, no pasa por este endpoint.
-const CANCELABLE_STATUSES = new Set(['PENDIENTE']);
+// Estados desde los que un ciudadano puede cancelar su propia emergency.
+// DISCARDED lo decide el Dispatcher; no pasa por este endpoint.
+const CANCELABLE_STATUSES = new Set(['CREATED']);
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
@@ -23,8 +23,8 @@ class EmergencyController {
       );
     }
 
-    const { emergency: updated, historial } = await this.emergencyRepository.updateStatus(id, {
-      newStatus: 'CANCELADA',
+    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+      newStatus: 'CANCELLED',
       actor,
       reason,
     });
@@ -32,12 +32,12 @@ class EmergencyController {
     await this.kafkaService.publishEvent(
       process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
       {
-        type: 'EmergenciaEstadoActualizado',
-        emergenciaId: updated.id,
-        estadoAnterior: historial.estadoAnterior,
-        estadoNuevo: historial.estadoNuevo,
+        type: 'EmergencyStatusUpdated',
+        emergencyId: updated.id,
+        previousStatus: history.previousStatus,
+        newStatus: history.newStatus,
         actor,
-        motivo: reason,
+        reason,
         timestamp: new Date().toISOString(),
       }
     );

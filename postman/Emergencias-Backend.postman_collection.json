@@ -1,0 +1,168 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Emergencias Backend",
+    "description": "CityPass+ — módulo de Emergencias y Seguridad.\n\nFlujo sugerido:\n1. Health\n2. Trigger Panic Button (guardá emergencyId)\n3. Get Panic Button\n4. Cancel Emergency\n5. Cancel de nuevo → 409",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "emergencyId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health",
+            "description": "Chequea si el servicio está vivo y el estado de Kafka."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Panic Button",
+      "item": [
+        {
+          "name": "POST Trigger Panic Button",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.emergencyId) {",
+                  "    pm.collectionVariables.set('emergencyId', body.emergencyId);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": \"user-123\",\n  \"location\": {\n    \"latitude\": -34.6037,\n    \"longitude\": -58.3816\n  },\n  \"description\": \"Necesito ayuda inmediata\",\n  \"severity\": \"critical\"\n}"
+            },
+            "url": "{{baseUrl}}/api/panic-button",
+            "description": "Crea una emergency en status CREATED y publica en Kafka.\nGuarda `emergencyId` en la variable de colección."
+          }
+        },
+        {
+          "name": "POST Trigger Panic Button (400 - missing fields)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Faltan userId y location\"\n}"
+            },
+            "url": "{{baseUrl}}/api/panic-button",
+            "description": "Esperado: 400 ValidationError."
+          }
+        },
+        {
+          "name": "GET Panic Button by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/panic-button/{{emergencyId}}",
+            "description": "Usa el emergencyId guardado por el POST."
+          }
+        },
+        {
+          "name": "GET Panic Button (404 - not found)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/panic-button/00000000-0000-0000-0000-000000000000",
+            "description": "Esperado: 404 NotFoundError."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Emergencies",
+      "item": [
+        {
+          "name": "PATCH Cancel Emergency",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor\": \"user-123\",\n  \"reason\": \"Falsa alarma\"\n}"
+            },
+            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/cancel",
+            "description": "Cancela solo si status es CREATED. Esperado: 200, status CANCELLED."
+          }
+        },
+        {
+          "name": "PATCH Cancel Emergency (409 - already cancelled)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor\": \"user-123\",\n  \"reason\": \"Segundo intento\"\n}"
+            },
+            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/cancel",
+            "description": "Correr después del cancel exitoso. Esperado: 409 ConflictError."
+          }
+        },
+        {
+          "name": "PATCH Cancel Emergency (404 - not found)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"actor\": \"user-123\",\n  \"reason\": \"No existe\"\n}"
+            },
+            "url": "{{baseUrl}}/api/emergencies/00000000-0000-0000-0000-000000000000/cancel",
+            "description": "Esperado: 404 NotFoundError."
+          }
+        }
+      ]
+    }
+  ]
+}
