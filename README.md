@@ -2,46 +2,67 @@
 
 **CityPass+ - Módulo de Emergencias y Seguridad**
 
-## 📋 Descripción
+## Descripción
 
-Backend para el módulo de Emergencias y Seguridad de CityPass+. Gestiona botones de pánico, alertas críticas y priorización de eventos.
+Backend para el módulo de Emergencias y Seguridad de CityPass+. Gestiona botones de pánico, alertas críticas y cambios de estado de emergencias.
 
-## 🎯 Caso de Uso 2: Botón de Pánico
+## Caso de Uso 2: Botón de Pánico
 
 **Objetivo:** Permitir que ciudadanos activen un botón de pánico que genere una emergencia crítica.
 
 ### Flujo
 1. Usuario activa botón de pánico en la app mobile/web
-2. Sistema genera evento de emergencia con ID único
+2. Sistema persiste la emergencia en PostgreSQL (`CREATED`)
 3. Evento se publica en Kafka (`emergencias.boton-panico`)
 4. Operadores pueden visualizar la emergencia en tiempo real
 
 ---
 
-## 🚀 Inicio Rápido
+## Inicio Rápido
 
 ### Requisitos
 - Node.js 18+
-- Docker & Docker Compose
+- Docker & Docker Compose (para **Kafka**; Postgres puede ser Neon o Docker)
 
-### Instalación Local
+### 1. Variables de entorno
 
 ```bash
-# Clonar repo
-git clone https://github.com/G6D2/emergencias-backend.git
-cd emergencias-backend
-
-# Instalar dependencias
-npm install
-
-# Copiar variables de entorno
 cp .env.example .env
+```
 
-# Iniciar con Docker Compose (recomendado)
-docker-compose up
+Editá `.env` según cómo quieras la base:
 
-# O sin Docker
+| Opción | `DATABASE_URL` | `DATABASE_SSL` | Docker que necesitás |
+|--------|----------------|----------------|----------------------|
+| **Neon** (recomendado para equipo / CD) | connection string de Neon | `true` | solo Kafka + Zookeeper |
+| **Postgres local** | `postgresql://postgres:postgres@localhost:5434/emergencias_dev` | `false` | Postgres + Kafka + Zookeeper |
+
+### 2a. Con Neon (Kafka en Docker, DB en la nube)
+
+```bash
+# Pegá la URL de Neon en .env (DATABASE_SSL=true)
+docker-compose up -d kafka zookeeper
+npm install
+npm run migrate
 npm run dev
+```
+
+### 2b. Todo local (Postgres + Kafka en Docker)
+
+```bash
+# En .env usá la URL localhost y DATABASE_SSL=false (está comentada en .env.example)
+docker-compose up -d postgres kafka zookeeper
+npm install
+npm run migrate
+npm run dev
+```
+
+### 2c. Stack completo en contenedores
+
+```bash
+docker-compose up
+# backend en http://localhost:3001 — igual necesitás DATABASE_URL válida
+# (Neon o el servicio postgres del compose)
 ```
 
 ### Verificar que funciona
@@ -50,9 +71,20 @@ npm run dev
 curl http://localhost:3000/health
 ```
 
+Documentación OpenAPI (Swagger UI): [http://localhost:3000/api-docs](http://localhost:3000/api-docs)  
+Spec JSON: [http://localhost:3000/api-docs.json](http://localhost:3000/api-docs.json)
+
+### Postman
+
+Importá en Postman:
+- Colección: [`postman/Emergencias-Backend.postman_collection.json`](postman/Emergencias-Backend.postman_collection.json)
+- Environment: [`postman/Emergencias-Backend-Local.postman_environment.json`](postman/Emergencias-Backend-Local.postman_environment.json)
+
+El POST de panic button guarda `emergencyId` solo para los requests siguientes.
+
 ---
 
-## 💡 API Endpoints
+## API Endpoints
 
 ### POST `/api/panic-button`
 
@@ -63,8 +95,8 @@ Activa el botón de pánico.
 {
   "userId": "user-123",
   "location": {
-    "lat": -34.6037,
-    "lng": -58.3816
+    "latitude": -34.6037,
+    "longitude": -58.3816
   },
   "description": "Necesito ayuda inmediata",
   "severity": "critical"
@@ -80,11 +112,13 @@ Activa el botón de pánico.
   "data": {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "userId": "user-123",
-    "location": { "lat": -34.6037, "lng": -58.3816 },
+    "latitude": -34.6037,
+    "longitude": -58.3816,
     "description": "Necesito ayuda inmediata",
     "severity": "critical",
-    "timestamp": "2026-08-25T10:00:00Z",
-    "status": "creada"
+    "status": "CREATED",
+    "createdAt": "2026-08-25T10:00:00.000Z",
+    "updatedAt": "2026-08-25T10:00:00.000Z"
   }
 }
 ```
@@ -93,69 +127,94 @@ Activa el botón de pánico.
 
 Obtiene detalles de un evento de pánico.
 
-**Response:**
+### PATCH `/api/emergencies/:id/cancel`
+
+Cancela una emergencia en estado `CREATED`.
+
+**Request:**
 ```json
 {
-  "success": true,
-  "data": { /* emergency data */ }
+  "actor": "user-123",
+  "reason": "Falsa alarma"
 }
 ```
 
+### GET `/health`
+
+Estado del servicio y conectividad Kafka.
+
 ---
 
-## 🏗️ Arquitectura
+## Arquitectura
 
 ```
 src/
-├── index.js                 # Entry point
-├── services/
-│   └── kafka.service.js     # Kafka producer/consumer
+├── index.js                      # Composition root (Kafka + pool + app)
+├── app.js                        # Express factory (inyectable en tests)
+├── swagger.js                    # OpenAPI 3 + Swagger UI (/api-docs)
 ├── controllers/
-│   └── panic-button.controller.js  # Lógica de negocio
+│   ├── panic-button.controller.js
+│   └── emergency.controller.js
 ├── routes/
-│   └── panic-button.routes.js      # Endpoints
+│   ├── panic-button.routes.js
+│   └── emergencies.routes.js
+├── repositories/
+│   └── emergency.repository.js   # SQL + mapper + transacciones
+├── services/
+│   └── kafka.service.js
+├── errors/
+│   └── app-errors.js
+├── db/
+│   └── pool.js
 └── tests/
-    └── panic-button.test.js        # Tests
+    ├── panic-button.test.js
+    └── emergency.repository.integration.test.js
+
+db/migrations/                    # Fuente de verdad del schema (Flyway)
 ```
 
 ---
 
-## 🗄️ Persistencia (PostgreSQL / Supabase)
+## Persistencia (PostgreSQL / Neon)
 
-Las emergencias y su historial de cambios de estado se persisten en PostgreSQL
-(hosteado en Supabase) mediante `pg` y migrations versionadas con Flyway. Ver
-[db/README.md](db/README.md) para el detalle del schema, cómo correr las
-migrations y cómo probar el repository.
+Docker **no se va**: Kafka (y opcionalmente Postgres) siguen en `docker-compose`.
+
+- **Neon:** DB remota compartida → `DATABASE_URL` + `DATABASE_SSL=true`. Ideal para el equipo y el secret del CD.
+- **Postgres del compose:** DB local → URL `localhost:5434` + `DATABASE_SSL=false` (puerto 5434 para no chocar con un Postgres de Windows en 5432).
+
+Detalle del schema y migrations: [db/README.md](db/README.md). Plantilla de env: [`.env.example`](.env.example).
 
 ---
 
-## 📊 Kafka Topics
+## Kafka Topics
 
 - `emergencias.boton-panico`: Eventos de botón de pánico
-- `emergencias.creada`: Emergencias creadas
+- `emergencias.estado-actualizado`: Cambios de estado (p. ej. cancelación)
+
+Si Kafka no está conectado, `publishEvent` responde **503** (no se pierde el evento en silencio).
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ```bash
-# Ejecutar tests
+# Unitarios / API con mocks
 npm test
 
-# Con cobertura
-npm test -- --coverage
+# Integración del repository (Postgres efímero + Flyway; requiere Docker)
+npm run test:integration
 ```
 
 ---
 
-## 📝 ADRs Relacionados
+## ADRs Relacionados
 
 - [ADR-001: Event-Driven Architecture](../ADRs/)
 - [ADR-002: Kafka vs RabbitMQ](../ADRs/)
 
 ---
 
-## 👥 Equipo
+## Equipo
 
 - **Backend:** Matías, Lucca
 - **Security:** Valentina
@@ -166,9 +225,10 @@ npm test -- --coverage
 
 ---
 
-## 📋 Próximos Pasos
+## Próximos Pasos
 
-- [x] ID 4: Persistencia de emergencias (PostgreSQL)
-- [ ] ID 3: Visualización en tiempo real (WebSockets)
-- [ ] Integración con grupo de Login Federado
-- [ ] Tests de integración con otros módulos
+- [x] Persistencia de emergencias (PostgreSQL)
+- [x] Cancelación de emergencias
+- [ ] Visualización en tiempo real (WebSockets)
+- [ ] Integración con Login Federado (auth)
+- [ ] Alinear contrato HTTP de location (`lat`/`lng` vs `latitude`/`longitude`)
