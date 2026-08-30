@@ -71,12 +71,14 @@ jobs:
       - name: Run migrations
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/emergencias_test
+          DATABASE_SSL: 'false'
         run: npm run migrate
 
       - name: Unit tests
         env:
           NODE_ENV: test
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/emergencias_test
+          DATABASE_SSL: 'false'
         run: npm test
 
       - name: Integration tests
