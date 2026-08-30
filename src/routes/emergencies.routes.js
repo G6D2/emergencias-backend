@@ -1,10 +1,46 @@
 const express = require('express');
 const { EmergencyController } = require('../controllers/emergency.controller');
 const { asyncHandler } = require('../utils/async-handler');
+const { requireCitizen, requireCitizenOrDispatcher } = require('../auth/authorize');
 
-function createEmergenciesRoutes(kafkaService, emergencyRepository) {
+function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
   const router = express.Router();
   const controller = new EmergencyController(kafkaService, emergencyRepository);
+
+  /**
+   * @openapi
+   * /api/emergencies:
+   *   get:
+   *     tags: [Emergencies]
+   *     summary: Lista emergencias visibles
+   *     description: |
+   *       Requiere `citizen` o `dispatcher`.
+   *       Dispatcher ve todas; citizen solo las propias (`userId === sub`).
+   *     security:
+   *       - bearerAuth: []
+   *     responses:
+   *       200:
+   *         description: Lista de emergencias
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success:
+   *                   type: boolean
+   *                 data:
+   *                   type: array
+   *                   items:
+   *                     $ref: '#/components/schemas/Emergency'
+   *       401:
+   *         description: Token ausente o inválido
+   *       403:
+   *         description: Grupo insuficiente
+   */
+  router.get('/', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.listEmergencies(req.user);
+    res.json(result);
+  }));
 
   /**
    * @openapi
@@ -12,7 +48,9 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository) {
    *   patch:
    *     tags: [Emergencies]
    *     summary: Cancela una emergencia
-   *     description: Solo si el status actual es CREATED. Publica EmergencyStatusUpdated en Kafka.
+   *     description: Requiere grupo `citizen`. Solo la propia emergencia en status CREATED. El actor se toma del JWT (claim sub).
+   *     security:
+   *       - bearerAuth: []
    *     parameters:
    *       - in: path
    *         name: id
@@ -37,6 +75,18 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository) {
    *                   type: boolean
    *                 data:
    *                   $ref: '#/components/schemas/Emergency'
+   *       401:
+   *         description: Token ausente o inválido
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
+   *       403:
+   *         description: No es el dueño o grupo insuficiente
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    *       404:
    *         description: Emergencia no encontrada
    *         content:
@@ -56,10 +106,9 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository) {
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
    */
-  // PATCH /api/emergencies/:id/cancel - el ciudadano cancela su emergency
-  router.patch('/:id/cancel', asyncHandler(async (req, res) => {
-    const { actor, reason } = req.body || {};
-    const result = await controller.cancelEmergency(req.params.id, { actor, reason });
+  router.patch('/:id/cancel', authenticate, requireCitizen, asyncHandler(async (req, res) => {
+    const { reason } = req.body || {};
+    const result = await controller.cancelEmergency(req.params.id, { reason }, req.user);
     res.json(result);
   }));
 

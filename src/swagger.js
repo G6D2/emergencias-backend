@@ -7,7 +7,7 @@ const options = {
       title: 'Emergencias Backend API',
       version: '0.1.0',
       description:
-        'API del módulo de Emergencias y Seguridad (CityPass+). Botón de pánico y cambios de estado de emergencies.',
+        'API del módulo de Emergencias y Seguridad (CityPass+). Botón de pánico y cambios de estado de emergencies. Autenticación vía JWT del IdP CityPass+.',
     },
     servers: [
       {
@@ -22,10 +22,20 @@ const options = {
     ],
     tags: [
       { name: 'Health', description: 'Estado del servicio' },
+      { name: 'User', description: 'Perfil del usuario autenticado' },
+      { name: 'Dev Auth', description: 'Login de desarrollo (solo AUTH_MODE=local)' },
       { name: 'Panic Button', description: 'Activación y consulta de botón de pánico' },
       { name: 'Emergencies', description: 'Cambios de estado de emergencias' },
     ],
     components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'Access token CityPass+ (Authorization: Bearer <token>)',
+        },
+      },
       schemas: {
         Location: {
           type: 'object',
@@ -39,9 +49,14 @@ const options = {
           type: 'object',
           properties: {
             id: { type: 'string', format: 'uuid' },
-            userId: { type: 'string', example: 'user-123' },
-            latitude: { type: 'number', example: -34.6037 },
-            longitude: { type: 'number', example: -58.3816 },
+            userId: { type: 'string', example: 'U000042', description: 'Claim sub del JWT' },
+            latitude: { type: 'number', nullable: true, example: -34.6037 },
+            longitude: { type: 'number', nullable: true, example: -58.3816 },
+            locationAnonymized: {
+              type: 'boolean',
+              example: false,
+              description: 'true si la ubicación fue borrada por política de retención',
+            },
             description: { type: 'string' },
             severity: { type: 'string', example: 'critical' },
             status: {
@@ -55,9 +70,8 @@ const options = {
         },
         PanicButtonRequest: {
           type: 'object',
-          required: ['userId', 'location'],
+          required: ['location'],
           properties: {
-            userId: { type: 'string', example: 'user-123' },
             location: { $ref: '#/components/schemas/Location' },
             description: {
               type: 'string',
@@ -82,8 +96,47 @@ const options = {
         CancelEmergencyRequest: {
           type: 'object',
           properties: {
-            actor: { type: 'string', nullable: true, example: 'user-123' },
             reason: { type: 'string', nullable: true, example: 'Falsa alarma' },
+          },
+        },
+        DevLoginRequest: {
+          type: 'object',
+          required: ['sub'],
+          properties: {
+            sub: { type: 'string', example: 'U000042', description: 'Identificador estable del usuario' },
+            preferred_username: { type: 'string', example: 'jperez' },
+            groups: {
+              type: 'array',
+              items: { type: 'string' },
+              example: ['citizen'],
+            },
+          },
+        },
+        CurrentUserResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: {
+              type: 'object',
+              properties: {
+                sub: { type: 'string', example: 'U000042' },
+                username: { type: 'string', example: 'jperez' },
+                groups: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  example: ['citizen'],
+                },
+                module: { type: 'string', example: 'emergencias' },
+              },
+            },
+          },
+        },
+        DevLoginResponse: {
+          type: 'object',
+          properties: {
+            access_token: { type: 'string' },
+            token_type: { type: 'string', example: 'Bearer' },
+            expires_in: { type: 'integer', example: 900 },
           },
         },
         ErrorResponse: {
@@ -102,6 +155,11 @@ const options = {
               type: 'string',
               enum: ['connected', 'disconnected'],
               example: 'connected',
+            },
+            authMode: {
+              type: 'string',
+              enum: ['local', 'idp'],
+              example: 'local',
             },
           },
         },

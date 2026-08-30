@@ -1,8 +1,9 @@
 const express = require('express');
 const { PanicButtonController } = require('../controllers/panic-button.controller');
 const { asyncHandler } = require('../utils/async-handler');
+const { requireCitizen, requireCitizenOrDispatcher } = require('../auth/authorize');
 
-function createPanicButtonRoutes(kafkaService, emergencyRepository) {
+function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate) {
   const router = express.Router();
   const controller = new PanicButtonController(kafkaService, emergencyRepository);
 
@@ -12,7 +13,9 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository) {
    *   post:
    *     tags: [Panic Button]
    *     summary: Activa el botón de pánico
-   *     description: Persiste una emergency en status CREATED y publica el evento en Kafka.
+   *     description: Requiere grupo `citizen`. El userId se toma del JWT (claim sub).
+   *     security:
+   *       - bearerAuth: []
    *     requestBody:
    *       required: true
    *       content:
@@ -32,6 +35,18 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository) {
    *           application/json:
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
+   *       401:
+   *         description: Token ausente o inválido
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
+   *       403:
+   *         description: Grupo insuficiente (requiere citizen)
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    *       503:
    *         description: Kafka no disponible
    *         content:
@@ -39,9 +54,8 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository) {
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
    */
-  // POST /api/panic-button - dispara el botón de pánico
-  router.post('/', asyncHandler(async (req, res) => {
-    const result = await controller.triggerPanicButton(req.body);
+  router.post('/', authenticate, requireCitizen, asyncHandler(async (req, res) => {
+    const result = await controller.triggerPanicButton(req.body, req.user);
     res.status(201).json(result);
   }));
 
@@ -51,6 +65,9 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository) {
    *   get:
    *     tags: [Panic Button]
    *     summary: Obtiene un evento de botón de pánico
+   *     description: Requiere `citizen` (solo propias) o `dispatcher` (todas).
+   *     security:
+   *       - bearerAuth: []
    *     parameters:
    *       - in: path
    *         name: id
@@ -70,6 +87,18 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository) {
    *                   type: boolean
    *                 data:
    *                   $ref: '#/components/schemas/Emergency'
+   *       401:
+   *         description: Token ausente o inválido
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
+   *       403:
+   *         description: Sin permiso para esta emergencia
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    *       404:
    *         description: Emergencia no encontrada
    *         content:
@@ -77,9 +106,8 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository) {
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
    */
-  // GET /api/panic-button/:id - detalle de un evento de pánico
-  router.get('/:id', asyncHandler(async (req, res) => {
-    const result = await controller.getPanicButtonEvent(req.params.id);
+  router.get('/:id', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.getPanicButtonEvent(req.params.id, req.user);
     res.json(result);
   }));
 

@@ -37,7 +37,9 @@ function resolveFlywayTarget(info) {
       .find((n) => n.includes('emergencias') && n.endsWith('_default'));
     if (composeNet) {
       return {
-        connectionInfo: { ...info, host: 'postgres' },
+        // Dentro de la red del compose el servicio escucha en 5432, no en el
+        // puerto publicado al host (5434).
+        connectionInfo: { ...info, host: 'postgres', port: '5432' },
         network: composeNet,
       };
     }

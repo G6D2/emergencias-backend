@@ -80,20 +80,172 @@ Importá en Postman:
 - Colección: [`postman/Emergencias-Backend.postman_collection.json`](postman/Emergencias-Backend.postman_collection.json)
 - Environment: [`postman/Emergencias-Backend-Local.postman_environment.json`](postman/Emergencias-Backend-Local.postman_environment.json)
 
-El POST de panic button guarda `emergencyId` solo para los requests siguientes.
+Pegá el `access_token` en `accessToken`. En la primera entrega usá **POST /auth/dev/login** (colección incluida) para obtenerlo sin IdP.
+
+---
+
+## Autenticación (JWT CityPass+)
+
+Los endpoints bajo `/api/*` exigen `Authorization: Bearer <access_token>`.
+
+### Primera entrega — sin IdP (`AUTH_MODE=local`, default)
+
+Funcionás solos con JWT local que **respeta el mismo contrato** que CityPass+ (claims, RS256, `verify()`).
+
+1. `POST /auth/dev/login` → devuelve `access_token` (mismo shape que el IdP)
+2. Mandá ese token en `Authorization: Bearer …` al resto de la API
+
+**Ejemplo dev login:**
+```json
+{
+  "sub": "U000042",
+  "preferred_username": "jperez",
+  "groups": ["citizen"]
+}
+```
+
+**Respuesta:**
+```json
+{
+  "access_token": "eyJhbGciOi...",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+| Variable | Rol |
+|----------|-----|
+| `AUTH_MODE` | `local` (default) o `idp` |
+| `IDP_ISSUER` / `IDP_AUDIENCE` | Claims del token (defaults alineados al contrato) |
+| `LOCAL_TOKEN_TTL_SECONDS` | Vida del token local (default 900) |
+| `LOCAL_JWT_PRIVATE_KEY_PEM` | Opcional: misma clave entre reinicios |
+
+`AUTH_MODE=local` **no arranca en producción** salvo staging pre-IdP (ver abajo).
+
+### Deploy (Render / staging) sin Grupo 2
+
+Sí podés deployar y probar la API antes del IdP. En el dashboard de Render (o secrets del CD) configurá:
+
+```env
+AUTH_MODE=local
+ALLOW_LOCAL_AUTH=true
+```
+
+El server arranca con `NODE_ENV=production` y expone `POST /auth/dev/login` para obtener tokens.  
+**Sacá `ALLOW_LOCAL_AUTH` cuando pasen a IdP real** — es solo para la primera entrega.
+
+### Integración con Grupo 2 — solo cambiar env
+
+```env
+AUTH_MODE=idp
+IDP_ISSUER=https://idp.citypass.local
+IDP_AUDIENCE=citypass-emergencias-api
+IDP_JWKS_URI=https://idp.citypass.local/.well-known/jwks.json
+IDP_CLOCK_TOLERANCE_SECONDS=60
+```
+
+Sin cambios de código: el middleware sigue validando RS256 + claims. El frontend pasa de `/auth/dev/login` al `POST /auth/login` real del IdP.
+
+| Variable (idp) | Rol |
+|----------|-----|
+| `IDP_JWKS_URI` | JWKS público para verificar firma RS256 |
+
+Validaciones: firma RS256 vía JWKS, `iss`, `aud` (lista), `exp`, `token_use: human`, `ver: 1`.
+
+La identidad queda en `req.user` (`sub`, `groups`, `username`, `jti`, …).  
+**No se confía en `userId` ni `actor` del body** — salen del claim `sub`.
+
+Token ausente o inválido → **401**. Sin grupo o sin permiso → **403**.
+
+### Autorización por `groups`
+
+Grupo desconocido no otorga nada. Mapa actual del módulo:
+
+| Grupo | Permisos |
+|-------|----------|
+| `citizen` | Activar pánico; ver y cancelar **solo sus** emergencias |
+| `dispatcher` | Ver **cualquier** emergencia (solo lectura por ahora) |
+
+| Endpoint | Grupo requerido | Regla extra |
+|----------|-----------------|-------------|
+| `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT |
+| `POST /api/panic-button` | `citizen` | — |
+| `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo `userId === sub` |
+| `GET /api/emergencies` | `citizen` o `dispatcher` | dispatcher: todas; citizen: solo propias |
+| `PATCH /api/emergencies/:id/cancel` | `citizen` | solo dueño (`userId === sub`) |
+
+En dev login podés probar groups distintos:
+```json
+{ "sub": "U000042", "groups": ["citizen"] }
+{ "sub": "U000999", "groups": ["dispatcher"] }
+```
+
+Token ausente o inválido → **401 Unauthorized**. `/health`, `/api-docs` y `/auth/dev/*` (solo local) son públicos.
+
+---
+
+## Seguridad de datos (prioridad alta)
+
+### Ubicación cifrada en reposo
+`latitude`/`longitude` **no se guardan en claro**. Se cifra con AES-256-GCM (`LOCATION_ENCRYPTION_KEY`, 32 bytes en base64) y se persiste en `location_encrypted`. Al leer, el repository desencripta solo para la respuesta HTTP autorizada.
+
+Generar clave:
+```bash
+openssl rand -base64 32
+```
+
+### Retención / minimización
+Job en background (y `npm run security:anonymize-locations`) borra el ciphertext después de `LOCATION_RETENTION_HOURS` (default 72). La emergencia sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
+
+### Logs seguros
+No se loguean JWT ni coordenadas. Kafka loguea solo un resumen (`emergencyId`, `status`, `hasLocation`).
+
+### HTTPS / headers
+En `NODE_ENV=production`: HSTS + redirect a HTTPS (vía `X-Forwarded-Proto`, típico en Render). Headers: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, etc.
+
+### Auditoría de lectura
+Cada `GET /api/panic-button/:id` autorizado deja un registro en `emergency_access_audit` (`actor_sub`, `action`, timestamp).
+
+| Variable | Rol |
+|----------|-----|
+| `LOCATION_ENCRYPTION_KEY` | AES-256 key (base64, 32 bytes) — **obligatoria** |
+| `LOCATION_RETENTION_HOURS` | Horas antes de anonimizar (default 72) |
+| `LOCATION_RETENTION_ENABLED` | `false` para desactivar el job |
+| `FORCE_HTTPS` | Forzar HTTPS aunque no sea production |
+| `CORS_ORIGIN` | Origins permitidos (coma-separados) en prod |
 
 ---
 
 ## API Endpoints
 
+### GET `/api/user`
+
+Perfil del usuario autenticado (groups del JWT). Requiere Bearer token.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "sub": "U000042",
+    "username": "jperez",
+    "groups": ["citizen"],
+    "module": "emergencias"
+  }
+}
+```
+
+### POST `/auth/dev/login` (solo `AUTH_MODE=local`)
+
+Emite un access token de desarrollo. Ver ejemplo arriba.
+
 ### POST `/api/panic-button`
 
-Activa el botón de pánico.
+Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`.
 
 **Request:**
 ```json
 {
-  "userId": "user-123",
   "location": {
     "latitude": -34.6037,
     "longitude": -58.3816
@@ -111,7 +263,7 @@ Activa el botón de pánico.
   "message": "Botón de pánico activado",
   "data": {
     "id": "550e8400-e29b-41d4-a716-446655440000",
-    "userId": "user-123",
+    "userId": "U000042",
     "latitude": -34.6037,
     "longitude": -58.3816,
     "description": "Necesito ayuda inmediata",
@@ -125,23 +277,26 @@ Activa el botón de pánico.
 
 ### GET `/api/panic-button/:id`
 
-Obtiene detalles de un evento de pánico.
+Obtiene detalles de un evento de pánico. Requiere JWT.
+
+### GET `/api/emergencies`
+
+Lista emergencias visibles. Dispatcher ve todas; citizen solo las propias.
 
 ### PATCH `/api/emergencies/:id/cancel`
 
-Cancela una emergencia en estado `CREATED`.
+Cancela una emergencia en estado `CREATED`. Requiere JWT. El `actor` se toma de `sub`.
 
 **Request:**
 ```json
 {
-  "actor": "user-123",
   "reason": "Falsa alarma"
 }
 ```
 
 ### GET `/health`
 
-Estado del servicio y conectividad Kafka.
+Estado del servicio y conectividad Kafka (público).
 
 ---
 
@@ -152,12 +307,29 @@ src/
 ├── index.js                      # Composition root (Kafka + pool + app)
 ├── app.js                        # Express factory (inyectable en tests)
 ├── swagger.js                    # OpenAPI 3 + Swagger UI (/api-docs)
+├── auth/
+│   ├── authenticate.js           # Middleware Bearer JWT → req.user
+│   ├── jwt-verifier.js           # verify() RS256 + claims CityPass+
+│   ├── groups.js                 # citizen / dispatcher + permisos
+│   ├── authorize.js              # requireGroups + reglas de ownership
+│   ├── config.js                 # AUTH_MODE + IDP_* desde env
+│   ├── setup.js                  # local vs idp (factory)
+│   ├── local-keys.js             # RSA dev (AUTH_MODE=local)
+│   └── local-token-issuer.js     # POST /auth/dev/login
+├── security/
+│   ├── location-crypto.js        # AES-256-GCM ubicación
+│   ├── location-retention.js     # Job de anonimización
+│   ├── secure-log.js             # Redacción de logs
+│   └── security-headers.js       # HTTPS/HSTS + headers
 ├── controllers/
 │   ├── panic-button.controller.js
-│   └── emergency.controller.js
+│   ├── emergency.controller.js
+│   └── user.controller.js
 ├── routes/
 │   ├── panic-button.routes.js
-│   └── emergencies.routes.js
+│   ├── emergencies.routes.js
+│   ├── user.routes.js
+│   └── dev-auth.routes.js        # Solo AUTH_MODE=local
 ├── repositories/
 │   └── emergency.repository.js   # SQL + mapper + transacciones
 ├── services/
@@ -168,6 +340,7 @@ src/
 │   └── pool.js
 └── tests/
     ├── panic-button.test.js
+    ├── auth.test.js
     └── emergency.repository.integration.test.js
 
 db/migrations/                    # Fuente de verdad del schema (Flyway)
@@ -230,5 +403,7 @@ npm run test:integration
 - [x] Persistencia de emergencias (PostgreSQL)
 - [x] Cancelación de emergencias
 - [ ] Visualización en tiempo real (WebSockets)
-- [ ] Integración con Login Federado (auth)
+- [x] Integración con Login Federado (auth JWT CityPass+)
+- [x] Autorización por `groups` (citizen / dispatcher)
+- [x] Cifrado de ubicación + retención + logs seguros + auditoría de lecturas
 - [ ] Alinear contrato HTTP de location (`lat`/`lng` vs `latitude`/`longitude`)
