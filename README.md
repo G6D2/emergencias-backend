@@ -39,16 +39,34 @@ cp .env.example .env
 
 # Iniciar con Docker Compose (recomendado)
 docker-compose up
+```
 
-# O sin Docker
+**Sin Docker (backend en el host):**
+
+```bash
+# npm install local es obligatorio aunque ya exista node_modules/:
+# si las dependencias se instalaron desde el contenedor (Linux), en el host faltan o no sirven.
+npm install
+
+# En .env: apuntar Kafka al listener del host (NO al de Docker, ver sección Kafka más abajo)
+#   KAFKA_BROKER=localhost:29092
+# Si 3000/3001 están ocupados, elegir otro puerto:
+#   PORT=4000
+
+# Levantar solo la infraestructura de Kafka en Docker
+docker compose up -d kafka
+
 npm run dev
 ```
 
 ### Verificar que funciona
 
 ```bash
+# Reemplazar 3000 por el PORT configurado en .env
 curl http://localhost:3000/health
 ```
+
+El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `connected` solo indica que el producer se conectó — ver la sección de Kafka para una trampa conocida al publicar desde el host.
 
 ---
 
@@ -133,6 +151,19 @@ migrations y cómo probar el repository.
 
 - `emergencias.boton-panico`: Eventos de botón de pánico
 - `emergencias.creada`: Emergencias creadas
+
+---
+
+## ⚠️ Kafka: `kafka:9092` vs `localhost:29092`
+
+El broker del `docker-compose.yml` expone **dos listeners**, y hay que usar el correcto según desde dónde corre el cliente:
+
+| Cliente | Broker a usar |
+|---|---|
+| Proceso dentro de la red de Docker (ej. el backend de compose) | `kafka:9092` |
+| Proceso en el host (ej. `npm run dev`) | `localhost:29092` |
+
+**Trampa conocida:** si desde el host usás `localhost:9092`, la conexión inicial funciona (el health check dice `kafka: connected`) pero al publicar un evento el request queda colgado, con `getaddrinfo ENOTFOUND kafka` repetido en el log. Pasa porque en el handshake el broker les "anuncia" a sus clientes la dirección `kafka:9092`, un hostname que solo resuelve dentro de Docker. El listener `PLAINTEXT_HOST` del puerto `29092` anuncia `localhost:29092` y evita el problema.
 
 ---
 
