@@ -41,6 +41,21 @@ class KafkaService {
     return this.connected && this.producer !== null;
   }
 
+  async checkHealth() {
+    const admin = this.kafka.admin({ retry: { retries: 0 } });
+
+    try {
+      await admin.connect();
+      this.connected = true;
+      return true;
+    } catch (error) {
+      this.connected = false;
+      return false;
+    } finally {
+      await admin.disconnect().catch(() => {});
+    }
+  }
+
   async publishEvent(topic, value) {
     if (!this.isConnected()) {
       console.warn(`⚠️  Kafka not connected. Event not published to ${topic}`);
@@ -60,6 +75,7 @@ class KafkaService {
       });
       console.log(`✓ Event published to ${topic}:`, value);
     } catch (error) {
+      this.connected = false;
       console.error(`Error publishing event to ${topic}:`, error);
       throw error;
     }
