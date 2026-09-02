@@ -25,14 +25,14 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     };
   }
 
-  it('crea una emergencia con estado inicial PENDIENTE', async () => {
+  it('crea una emergencia con estado inicial PENDING', async () => {
     const input = buildEmergency();
 
     const created = await repository.create(input);
 
     expect(created.id).toBe(input.id);
     expect(created.userId).toBe(input.userId);
-    expect(created.status).toBe('PENDIENTE');
+    expect(created.status).toBe('PENDING');
     expect(Number(created.latitude)).toBeCloseTo(input.latitude);
     expect(Number(created.longitude)).toBeCloseTo(input.longitude);
     expect(created.createdAt).toBeDefined();
@@ -68,29 +68,29 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     const input = buildEmergency();
     await repository.create(input);
 
-    const { emergency, historial } = await repository.updateStatus(input.id, {
-      newStatus: 'VALIDADA',
+    const { emergency, history } = await repository.updateStatus(input.id, {
+      newStatus: 'VALIDATED',
       actor: 'operador-1',
       reason: 'Confirmado por operador',
     });
 
-    expect(emergency.status).toBe('VALIDADA');
-    expect(historial.estadoAnterior).toBe('PENDIENTE');
-    expect(historial.estadoNuevo).toBe('VALIDADA');
-    expect(historial.actor).toBe('operador-1');
-    expect(historial.motivo).toBe('Confirmado por operador');
+    expect(emergency.status).toBe('VALIDATED');
+    expect(history.previousStatus).toBe('PENDING');
+    expect(history.newStatus).toBe('VALIDATED');
+    expect(history.actor).toBe('operador-1');
+    expect(history.reason).toBe('Confirmado por operador');
 
-    const historialList = await repository.findHistorialByEmergencyId(input.id);
-    expect(historialList).toHaveLength(1);
+    const historyList = await repository.findHistoryByEmergencyId(input.id);
+    expect(historyList).toHaveLength(1);
   });
 
   it('propaga el error y no deja rastros si la emergencia no existe', async () => {
     const missingId = randomUUID();
 
-    await expect(repository.updateStatus(missingId, { newStatus: 'VALIDADA' })).rejects.toThrow();
+    await expect(repository.updateStatus(missingId, { newStatus: 'VALIDATED' })).rejects.toThrow();
 
-    const historialList = await repository.findHistorialByEmergencyId(missingId);
-    expect(historialList).toHaveLength(0);
+    const historyList = await repository.findHistoryByEmergencyId(missingId);
+    expect(historyList).toHaveLength(0);
   });
 
   it('hace ROLLBACK si el cambio de estado viola una restricción de la base', async () => {
@@ -100,9 +100,9 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     await expect(repository.updateStatus(input.id, { newStatus: null })).rejects.toThrow();
 
     const found = await repository.findById(input.id);
-    expect(found.status).toBe('PENDIENTE');
+    expect(found.status).toBe('PENDING');
 
-    const historialList = await repository.findHistorialByEmergencyId(input.id);
-    expect(historialList).toHaveLength(0);
+    const historyList = await repository.findHistoryByEmergencyId(input.id);
+    expect(historyList).toHaveLength(0);
   });
 });

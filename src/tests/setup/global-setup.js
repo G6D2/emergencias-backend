@@ -30,8 +30,8 @@ async function waitForPostgres(containerName, timeoutMs) {
 }
 
 module.exports = async function globalSetup() {
-  // Si el desarrollador ya apunta a una base de test propia (ej. un branch de
-  // Supabase dedicado a tests), se usa esa y no se orquesta ningún contenedor.
+  // Si ya apuntás a una base de test propia (ej. un branch de Neon solo para tests),
+  // usamos esa y no levantamos ningún contenedor.
   if (process.env.TEST_DATABASE_URL) {
     process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
     process.env.DATABASE_SSL = process.env.DATABASE_SSL || 'false';

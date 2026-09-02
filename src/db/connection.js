@@ -1,8 +1,5 @@
-const { Pool } = require('pg');
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
-
-module.exports = pool;
+/**
+ * Compat con el entry point viejo del pipeline.
+ * Preferí usar `getPool()` / `closePool()` desde `./pool`.
+ */
+module.exports = require('./pool');

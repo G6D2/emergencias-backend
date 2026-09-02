@@ -1,4 +1,5 @@
 const { Kafka } = require('kafkajs');
+const { ServiceUnavailableError } = require('../errors/app-errors');
 
 class KafkaService {
   constructor() {
@@ -31,7 +32,7 @@ class KafkaService {
       return true;
     } catch (error) {
       console.error('Kafka connection error:', error.message);
-      console.log('⚠️  Kafka unavailable - running in degraded mode');
+      console.log('⚠️  Kafka no disponible — seguimos en modo degradado');
       this.connected = false;
       return false;
     }
@@ -46,10 +47,8 @@ class KafkaService {
 
     try {
       await admin.connect();
-      this.connected = true;
       return true;
     } catch (error) {
-      this.connected = false;
       return false;
     } finally {
       await admin.disconnect().catch(() => {});
@@ -58,9 +57,9 @@ class KafkaService {
 
   async publishEvent(topic, value) {
     if (!this.isConnected()) {
-      console.warn(`⚠️  Kafka not connected. Event not published to ${topic}`);
-      console.log('Event would have been:', JSON.stringify(value, null, 2));
-      return;
+      throw new ServiceUnavailableError(
+        `Kafka not connected. Event not published to ${topic}`
+      );
     }
 
     try {
@@ -84,6 +83,8 @@ class KafkaService {
   async disconnect() {
     if (this.producer) {
       await this.producer.disconnect();
+      this.producer = null;
+      this.connected = false;
     }
   }
 }

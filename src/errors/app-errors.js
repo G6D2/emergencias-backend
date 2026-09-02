@@ -1,5 +1,5 @@
-// Errores con statusCode explícito para que el middleware de errores devuelva
-// el código HTTP correcto en vez de siempre 500.
+// Errores con statusCode explícito para que el middleware tire el HTTP
+// que corresponde, y no siempre un 500.
 class NotFoundError extends Error {
   constructor(message) {
     super(message);
@@ -16,4 +16,25 @@ class ConflictError extends Error {
   }
 }
 
-module.exports = { NotFoundError, ConflictError };
+class ValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ValidationError';
+    this.statusCode = 400;
+  }
+}
+
+class ServiceUnavailableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ServiceUnavailableError';
+    this.statusCode = 503;
+  }
+}
+
+module.exports = {
+  NotFoundError,
+  ConflictError,
+  ValidationError,
+  ServiceUnavailableError,
+};

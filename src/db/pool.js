@@ -9,10 +9,9 @@ function getPool() {
     }
     pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      // Supabase requiere SSL; el certificado del pooler no siempre valida contra la
-      // CA por defecto de Node, por eso se relaja la verificación (patrón estándar
-      // recomendado por Supabase para node-postgres). DATABASE_SSL=false desactiva
-      // SSL por completo para Postgres locales (ej. tests de integración).
+      // Neon (y otros Postgres managed) piden SSL. Con el pooler a veces hay que
+      // aflojar la verificación del cert. DATABASE_SSL=false apaga el SSL para
+      // Postgres local (docker-compose / tests de integración).
       ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false },
     });
   }

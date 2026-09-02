@@ -1,16 +1,16 @@
--- Task 4: Historial de cambios de estado de una emergencia.
+-- Historial de cambios de status de una emergency.
 --
--- actor y motivo son nullable: hoy no hay Auth (no sabemos quién ejecuta el cambio)
--- y no todos los cambios necesitan un motivo. Task 9 podrá exigirlos según el caso.
+-- actor y reason son nullable: todavía no hay Auth (a veces no sabemos quién
+-- hizo el cambio) y no todo cambio necesita un motivo.
 
-CREATE TABLE emergencia_estado_historial (
+CREATE TABLE emergency_status_history (
     id BIGSERIAL PRIMARY KEY,
-    emergencia_id UUID NOT NULL REFERENCES emergencias (id) ON DELETE CASCADE,
-    estado_anterior TEXT,
-    estado_nuevo TEXT NOT NULL,
+    emergency_id UUID NOT NULL REFERENCES emergencies (id) ON DELETE CASCADE,
+    previous_status TEXT,
+    new_status TEXT NOT NULL,
     actor TEXT,
-    motivo TEXT,
+    reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_historial_emergencia_id ON emergencia_estado_historial (emergencia_id);
+CREATE INDEX idx_history_emergency_id ON emergency_status_history (emergency_id);
