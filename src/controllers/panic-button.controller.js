@@ -33,7 +33,7 @@ class PanicButtonController {
       longitude,
       description: payload.description || 'Botón de pánico activado',
       severity: payload.severity || 'critical',
-      status: 'CREATED',
+      status: 'PENDING',
     });
 
     await this.kafkaService.publishEvent(

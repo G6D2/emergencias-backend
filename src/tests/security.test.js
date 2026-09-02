@@ -49,7 +49,7 @@ describe('secure-log', () => {
     const summary = summarizeEventForLog('emergencias.boton-panico', {
       id: 'e1',
       userId: 'U1',
-      status: 'CREATED',
+      status: 'PENDING',
       latitude: -34.6,
       longitude: -58.4,
     });
@@ -58,7 +58,7 @@ describe('secure-log', () => {
       topic: 'emergencias.boton-panico',
       type: undefined,
       emergencyId: 'e1',
-      status: 'CREATED',
+      status: 'PENDING',
       userId: 'U1',
       actor: undefined,
       hasLocation: true,

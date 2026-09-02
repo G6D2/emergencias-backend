@@ -13,7 +13,9 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate
    *   post:
    *     tags: [Panic Button]
    *     summary: Activa el botón de pánico
-   *     description: Requiere grupo `citizen`. El userId se toma del JWT (claim sub).
+   *     description: |
+   *       Requiere grupo `citizen`. El userId se toma del JWT (claim `sub`).
+   *       Persiste una emergency en status PENDING y publica el evento en Kafka.
    *     security:
    *       - bearerAuth: []
    *     requestBody:

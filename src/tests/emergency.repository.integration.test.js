@@ -28,14 +28,14 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     };
   }
 
-  it('crea una emergencia con estado inicial CREATED', async () => {
+  it('crea una emergencia con estado inicial PENDING', async () => {
     const input = buildEmergency();
 
     const created = await repository.create(input);
 
     expect(created.id).toBe(input.id);
     expect(created.userId).toBe(input.userId);
-    expect(created.status).toBe('CREATED');
+    expect(created.status).toBe('PENDING');
     expect(Number(created.latitude)).toBeCloseTo(input.latitude);
     expect(Number(created.longitude)).toBeCloseTo(input.longitude);
     expect(created.locationAnonymized).toBe(false);
@@ -94,7 +94,7 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     });
 
     expect(emergency.status).toBe('VALIDATED');
-    expect(history.previousStatus).toBe('CREATED');
+    expect(history.previousStatus).toBe('PENDING');
     expect(history.newStatus).toBe('VALIDATED');
     expect(history.actor).toBe('operador-1');
     expect(history.reason).toBe('Confirmado por operador');
@@ -140,6 +140,27 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(found.locationAnonymized).toBe(true);
   });
 
+  it('findPage devuelve latitude/longitude desencriptadas, no null', async () => {
+    const input = buildEmergency();
+    await repository.create(input);
+
+    const { emergencies, total } = await repository.findPage({
+      statuses: [],
+      page: 1,
+      limit: 50,
+      sortBy: 'createdAt',
+      order: 'desc',
+    });
+
+    expect(total).toBeGreaterThan(0);
+    const found = emergencies.find((emergency) => emergency.id === input.id);
+    expect(found).toBeDefined();
+    expect(found.latitude).not.toBeNull();
+    expect(found.longitude).not.toBeNull();
+    expect(Number(found.latitude)).toBeCloseTo(input.latitude);
+    expect(Number(found.longitude)).toBeCloseTo(input.longitude);
+  });
+
   it('hace ROLLBACK si el cambio de estado viola una restricción de la base', async () => {
     const input = buildEmergency();
     await repository.create(input);
@@ -147,7 +168,7 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     await expect(repository.updateStatus(input.id, { newStatus: null })).rejects.toThrow();
 
     const found = await repository.findById(input.id);
-    expect(found.status).toBe('CREATED');
+    expect(found.status).toBe('PENDING');
 
     const historyList = await repository.findHistoryByEmergencyId(input.id);
     expect(historyList).toHaveLength(0);

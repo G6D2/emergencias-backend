@@ -3,7 +3,7 @@
  * Delega a Flyway (`scripts/migrate.js` + `db/migrations/`).
  *
  * El schema vive en `db/migrations/V1__create_emergencias.sql`
- * (tabla `emergencies`, latitude/longitude, status CREATED).
+ * (tabla `emergencies`, latitude/longitude, status default PENDING desde V5).
  */
 require('dotenv').config();
 

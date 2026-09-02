@@ -11,8 +11,10 @@ en `db/migrations/`.
 
 - **`user_id` sin FK**: el panic button solo manda `payload.userId` (todavía no hay Auth).
 - **`latitude`/`longitude` (sin PostGIS)**: por ahora solo guardamos y devolvemos el punto.
-- **`status` TEXT NOT NULL DEFAULT `'CREATED'`**, sin CHECK: las transiciones las valida la app
-  (ej. cancelar solo desde `CREATED`).
+- **`status` TEXT NOT NULL**, sin CHECK: las transiciones las valida la app
+  (ej. cancelar solo desde `PENDING` o `VALIDATED`).
+  V1 dejó el `DEFAULT` en `'CREATED'` (valor histórico, ya no forma parte del
+  vocabulario de estados); V5 lo cambia al vigente, `'PENDING'`.
 - **`actor`/`reason` nullable** en el historial: Auth pendiente; no todo cambio tiene motivo.
 
 ## Tablas

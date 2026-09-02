@@ -169,7 +169,7 @@
               "raw": "{\n  \"location\": {\n    \"latitude\": -34.6037,\n    \"longitude\": -58.3816\n  },\n  \"description\": \"Necesito ayuda inmediata\",\n  \"severity\": \"critical\"\n}"
             },
             "url": "{{baseUrl}}/api/panic-button",
-            "description": "Crea una emergency en status CREATED. El userId sale del JWT (sub). Guarda emergencyId."
+            "description": "Crea una emergency en status PENDING. El userId sale del JWT (sub). Publica en Kafka.\nGuarda `emergencyId` en la variable de colección."
           }
         },
         {
@@ -235,6 +235,15 @@
       "name": "Emergencies",
       "item": [
         {
+          "name": "GET List Emergencies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/emergencies?status=PENDING,VALIDATED&page=1&limit=20&sortBy=priority",
+            "description": "Lista emergencias paginadas. Filtros soportados: status, severity, from, to, assignedOfficerId, type, page, limit, sortBy, order."
+          }
+        },
+        {
           "name": "PATCH Cancel Emergency",
           "request": {
             "method": "PATCH",
@@ -249,7 +258,7 @@
               "raw": "{\n  \"reason\": \"Falsa alarma\"\n}"
             },
             "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/cancel",
-            "description": "Cancela solo si status es CREATED. El actor sale del JWT (sub). Esperado: 200."
+            "description": "Cancela solo si status es PENDING o VALIDATED y el usuario es el dueño. El actor sale del JWT (sub). Esperado: 200, status CANCELLED."
           }
         },
         {

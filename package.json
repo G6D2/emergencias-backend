@@ -9,6 +9,7 @@
     "migrate": "node scripts/migrate.js migrate",
     "migrate:info": "node scripts/migrate.js info",
     "security:anonymize-locations": "node scripts/anonymize-locations.js",
+    "seed": "node scripts/seed.js",
     "test": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js --runInBand",
     "lint": "eslint src/",

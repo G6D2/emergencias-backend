@@ -1,10 +1,9 @@
 const { NotFoundError, ConflictError, ForbiddenError } = require('../errors/app-errors');
-const { canCancelEmergency, userHasGroup } = require('../auth/authorize');
-const { GROUPS } = require('../auth/groups');
+const { canCancelEmergency } = require('../auth/authorize');
 
 // Estados desde los que un citizen puede cancelar su propia emergency.
 // DISCARDED lo decide el Dispatcher; no pasa por este endpoint.
-const CANCELABLE_STATUSES = new Set(['CREATED']);
+const CANCELABLE_STATUSES = new Set(['PENDING', 'VALIDATED']);
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
@@ -13,17 +12,35 @@ class EmergencyController {
   }
 
   /**
-   * Lista emergencias visibles para el usuario autenticado.
-   * dispatcher → todas; citizen → solo las propias.
-   * @param {{ sub: string, groups?: string[] }} user
+   * Lista paginada de emergencias. Endpoint dispatcher-only (ver requireDispatcher en la ruta).
+   * @param {object} query
    */
-  async listEmergencies(user) {
-    const all = await this.emergencyRepository.findAll();
-    const data = userHasGroup(user, GROUPS.DISPATCHER)
-      ? all
-      : all.filter((emergency) => emergency.userId === user.sub);
+  async listEmergencies(query) {
+    const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
+    const statuses = String(query.status || query.statuses || '')
+      .split(',')
+      .map((status) => status.trim())
+      .filter(Boolean);
+    const sortBy = query.sortBy === 'priority' ? 'priority' : 'createdAt';
+    const order = query.order === 'asc' ? 'asc' : 'desc';
+    const { emergencies, total } = await this.emergencyRepository.findPage({
+      statuses,
+      severity: query.severity || query.priority,
+      from: query.from,
+      to: query.to,
+      assignedOfficerId: query.assignedOfficerId,
+      emergencyType: query.type,
+      page,
+      limit,
+      sortBy,
+      order,
+    });
 
-    return { success: true, data };
+    return {
+      data: emergencies,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   /**

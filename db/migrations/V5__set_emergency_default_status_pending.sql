@@ -1,0 +1,2 @@
+ALTER TABLE emergencies
+    ALTER COLUMN status SET DEFAULT 'PENDING';

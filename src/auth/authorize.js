@@ -49,6 +49,7 @@ function canCancelEmergency(user, emergency) {
 }
 
 const requireCitizen = createRequireGroups(GROUPS.CITIZEN);
+const requireDispatcher = createRequireGroups(GROUPS.DISPATCHER);
 const requireCitizenOrDispatcher = createRequireGroups(
   GROUPS.CITIZEN,
   GROUPS.DISPATCHER
@@ -61,5 +62,6 @@ module.exports = {
   canViewEmergency,
   canCancelEmergency,
   requireCitizen,
+  requireDispatcher,
   requireCitizenOrDispatcher,
 };

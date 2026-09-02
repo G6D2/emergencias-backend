@@ -9,12 +9,12 @@ const mockKafka = {
 
 const mockRepo = {
   create: async (e) => ({ ...e, locationAnonymized: false }),
-  findById: async (id) => (id ? { id, userId: 'U000042', status: 'CREATED', locationAnonymized: false } : null),
+  findById: async (id) => (id ? { id, userId: 'U000042', status: 'PENDING', locationAnonymized: false } : null),
   findAll: async () => [],
   recordAccess: async () => ({}),
   updateStatus: async (id, { newStatus, actor, reason }) => ({
     emergency: { id, status: newStatus, userId: actor, locationAnonymized: false },
-    history: { previousStatus: 'CREATED', newStatus, actor, reason },
+    history: { previousStatus: 'PENDING', newStatus, actor, reason },
   }),
 };
 

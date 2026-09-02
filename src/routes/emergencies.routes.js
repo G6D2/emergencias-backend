@@ -1,7 +1,7 @@
 const express = require('express');
 const { EmergencyController } = require('../controllers/emergency.controller');
 const { asyncHandler } = require('../utils/async-handler');
-const { requireCitizen, requireCitizenOrDispatcher } = require('../auth/authorize');
+const { requireCitizen, requireDispatcher } = require('../auth/authorize');
 
 function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
   const router = express.Router();
@@ -12,33 +12,67 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    * /api/emergencies:
    *   get:
    *     tags: [Emergencies]
-   *     summary: Lista emergencias visibles
+   *     summary: Lista emergencias paginadas
    *     description: |
-   *       Requiere `citizen` o `dispatcher`.
-   *       Dispatcher ve todas; citizen solo las propias (`userId === sub`).
+   *       Requiere grupo `dispatcher`. Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
    *     security:
    *       - bearerAuth: []
+   *     parameters:
+   *       - in: query
+   *         name: status
+   *         schema:
+   *           type: string
+   *         description: Lista de statuses separados por coma (ej. PENDING,VALIDATED)
+   *       - in: query
+   *         name: severity
+   *         schema:
+   *           type: string
+   *       - in: query
+   *         name: from
+   *         schema:
+   *           type: string
+   *           format: date-time
+   *       - in: query
+   *         name: to
+   *         schema:
+   *           type: string
+   *           format: date-time
+   *       - in: query
+   *         name: assignedOfficerId
+   *         schema:
+   *           type: string
+   *       - in: query
+   *         name: type
+   *         schema:
+   *           type: string
+   *       - in: query
+   *         name: page
+   *         schema:
+   *           type: integer
+   *       - in: query
+   *         name: limit
+   *         schema:
+   *           type: integer
+   *       - in: query
+   *         name: sortBy
+   *         schema:
+   *           type: string
+   *           enum: [createdAt, priority]
+   *       - in: query
+   *         name: order
+   *         schema:
+   *           type: string
+   *           enum: [asc, desc]
    *     responses:
    *       200:
-   *         description: Lista de emergencias
-   *         content:
-   *           application/json:
-   *             schema:
-   *               type: object
-   *               properties:
-   *                 success:
-   *                   type: boolean
-   *                 data:
-   *                   type: array
-   *                   items:
-   *                     $ref: '#/components/schemas/Emergency'
+   *         description: Página de emergencias
    *       401:
    *         description: Token ausente o inválido
    *       403:
    *         description: Grupo insuficiente
    */
-  router.get('/', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
-    const result = await controller.listEmergencies(req.user);
+  router.get('/', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.listEmergencies(req.query);
     res.json(result);
   }));
 
@@ -48,7 +82,9 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *   patch:
    *     tags: [Emergencies]
    *     summary: Cancela una emergencia
-   *     description: Requiere grupo `citizen`. Solo la propia emergencia en status CREATED. El actor se toma del JWT (claim sub).
+   *     description: |
+   *       Requiere grupo `citizen` y ser dueño de la emergencia. Solo si el status actual es PENDING o VALIDATED.
+   *       El actor se toma del JWT (claim `sub`). Publica EmergencyStatusUpdated en Kafka.
    *     security:
    *       - bearerAuth: []
    *     parameters:

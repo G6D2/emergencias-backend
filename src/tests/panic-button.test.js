@@ -13,8 +13,10 @@ const mockKafkaService = {
 function createMockEmergencyRepository() {
   const emergencies = new Map();
   const accessAudit = [];
+  const updateStatusCalls = [];
 
   return {
+    updateStatusCalls,
     create: async (emergency) => {
       const saved = {
         ...emergency,
@@ -36,6 +38,7 @@ function createMockEmergencyRepository() {
       return entry;
     },
     updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
+      updateStatusCalls.push({ id, newStatus, actor, reason });
       const current = emergencies.get(id);
       if (!current) {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
@@ -53,6 +56,7 @@ function createMockEmergencyRepository() {
         },
       };
     },
+    findPage: async () => ({ emergencies: [...emergencies.values()], total: emergencies.size }),
   };
 }
 
@@ -95,7 +99,7 @@ describe('Panic Button API', () => {
       expect(response.body.success).toBe(true);
       expect(response.body.emergencyId).toBeDefined();
       expect(response.body.data.userId).toBe('U000042');
-      expect(response.body.data.status).toBe('CREATED');
+      expect(response.body.data.status).toBe('PENDING');
     });
 
     it('ignores client-supplied userId and uses token sub', async () => {
@@ -254,8 +258,14 @@ describe('Panic Button API', () => {
 });
 
 describe('Emergencies API', () => {
-  it('cancels a pending emergency using JWT sub as actor', async () => {
-    const createResponse = await request(app)
+  it('cancels a pending emergency using JWT sub as actor, ignoring a spoofed actor in the body', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const ownerApp = createTestApp({
+      sub: 'U000042',
+      groups: ['citizen'],
+    }, sharedRepo);
+
+    const createResponse = await request(ownerApp)
       .post('/api/panic-button')
       .send({
         location: { latitude: -34.6037, longitude: -58.3816 },
@@ -264,13 +274,15 @@ describe('Emergencies API', () => {
 
     const emergencyId = createResponse.body.emergencyId;
 
-    const cancelResponse = await request(app)
+    const cancelResponse = await request(ownerApp)
       .patch(`/api/emergencies/${emergencyId}/cancel`)
       .send({ actor: 'spoofed-actor', reason: 'Falsa alarma' })
       .expect(200);
 
     expect(cancelResponse.body.success).toBe(true);
     expect(cancelResponse.body.data.status).toBe('CANCELLED');
+    expect(sharedRepo.updateStatusCalls).toHaveLength(1);
+    expect(sharedRepo.updateStatusCalls[0].actor).toBe('U000042');
   });
 
   it('returns 404 when cancelling a missing emergency', async () => {
@@ -347,5 +359,29 @@ describe('GET /health', () => {
 
     expect(response.body.status).toBe('ok');
     expect(response.body.kafka).toBe('disconnected');
+  });
+});
+
+describe('GET /api/emergencies', () => {
+  it('returns paginated emergencies for the dashboard when called by a dispatcher', async () => {
+    const dispatcherApp = createTestApp({
+      sub: 'U000999',
+      groups: ['dispatcher'],
+    });
+
+    const response = await request(dispatcherApp)
+      .get('/api/emergencies?status=PENDING,CANCELLED&priority=critical&page=1&limit=20&sortBy=priority')
+      .expect(200);
+
+    expect(Array.isArray(response.body.data)).toBe(true);
+    expect(response.body.pagination).toMatchObject({ page: 1, limit: 20 });
+  });
+
+  it('forbids a citizen from using the dispatcher listing endpoint', async () => {
+    const response = await request(app)
+      .get('/api/emergencies')
+      .expect(403);
+
+    expect(response.body.error).toBe('ForbiddenError');
   });
 });
