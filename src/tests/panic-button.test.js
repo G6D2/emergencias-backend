@@ -1,5 +1,6 @@
 const request = require('supertest');
 const { createApp } = require('../app');
+const { createAuthenticateMiddleware } = require('../auth/authenticate');
 const { KafkaService } = require('../services/kafka.service');
 const { NotFoundError } = require('../errors/app-errors');
 
@@ -11,15 +12,33 @@ const mockKafkaService = {
 
 function createMockEmergencyRepository() {
   const emergencies = new Map();
+  const accessAudit = [];
+  const updateStatusCalls = [];
 
   return {
+    updateStatusCalls,
     create: async (emergency) => {
-      const saved = { ...emergency };
+      const saved = {
+        ...emergency,
+        locationAnonymized: false,
+      };
       emergencies.set(saved.id, saved);
       return saved;
     },
     findById: async (id) => emergencies.get(id) || null,
+    recordAccess: async ({ emergencyId, actorSub, action }) => {
+      const entry = {
+        id: accessAudit.length + 1,
+        emergencyId,
+        actorSub,
+        action,
+        createdAt: new Date().toISOString(),
+      };
+      accessAudit.push(entry);
+      return entry;
+    },
     updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
+      updateStatusCalls.push({ id, newStatus, actor, reason });
       const current = emergencies.get(id);
       if (!current) {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
@@ -41,16 +60,33 @@ function createMockEmergencyRepository() {
   };
 }
 
-const app = createApp(mockKafkaService, createMockEmergencyRepository());
+/** Stub auth: fija req.user sin validar JWT (los tests de firma viven en auth.test.js). */
+function stubAuthenticate(user = {
+  sub: 'U000042',
+  groups: ['citizen'],
+  username: 'jperez',
+}) {
+  return (req, res, next) => {
+    req.user = user;
+    next();
+  };
+}
+
+function createTestApp(authenticateUser, repository = createMockEmergencyRepository()) {
+  return createApp(mockKafkaService, repository, {
+    authenticate: stubAuthenticate(authenticateUser),
+  });
+}
+
+const app = createTestApp();
 
 describe('Panic Button API', () => {
   describe('POST /api/panic-button', () => {
-    it('should trigger panic button successfully', async () => {
+    it('should trigger panic button successfully using JWT sub as userId', async () => {
       const payload = {
-        userId: 'user-123',
         location: {
-          lat: -34.6037,
-          lng: -58.3816,
+          latitude: -34.6037,
+          longitude: -58.3816,
         },
         description: 'Test panic button',
       };
@@ -62,13 +98,25 @@ describe('Panic Button API', () => {
 
       expect(response.body.success).toBe(true);
       expect(response.body.emergencyId).toBeDefined();
-      expect(response.body.data.userId).toBe(payload.userId);
+      expect(response.body.data.userId).toBe('U000042');
       expect(response.body.data.status).toBe('PENDING');
+    });
+
+    it('ignores client-supplied userId and uses token sub', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          userId: 'attacker-spoofed-id',
+          location: { latitude: -34.6037, longitude: -58.3816 },
+        })
+        .expect(201);
+
+      expect(response.body.data.userId).toBe('U000042');
     });
 
     it('should fail without required fields', async () => {
       const payload = {
-        description: 'Missing userId and location',
+        description: 'Missing location',
       };
 
       const response = await request(app)
@@ -78,6 +126,61 @@ describe('Panic Button API', () => {
 
       expect(response.body.error).toBe('ValidationError');
     });
+
+    it('returns 401 when Authorization is missing', async () => {
+      const unauthApp = createApp(mockKafkaService, createMockEmergencyRepository(), {
+        authenticate: createAuthenticateMiddleware({
+          config: {
+            issuer: 'https://idp.citypass.local',
+            audience: 'citypass-emergencias-api',
+            jwksUri: 'https://idp.citypass.local/.well-known/jwks.json',
+            clockTolerance: 60,
+            expectedTokenUse: 'human',
+            expectedVer: 1,
+          },
+          verifyAccessToken: async () => {
+            throw new Error('verify should not run without Bearer token');
+          },
+        }),
+      });
+
+      const response = await request(unauthApp)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+        })
+        .expect(401);
+
+      expect(response.body.error).toBe('UnauthorizedError');
+    });
+
+    it('returns 403 when user has no citizen group', async () => {
+      const dispatcherApp = createTestApp({
+        sub: 'U000099',
+        groups: ['dispatcher'],
+      });
+
+      const response = await request(dispatcherApp)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(403);
+
+      expect(response.body.error).toBe('ForbiddenError');
+    });
+
+    it('returns 403 when groups is empty', async () => {
+      const noGroupsApp = createTestApp({
+        sub: 'U000042',
+        groups: [],
+      });
+
+      const response = await request(noGroupsApp)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(403);
+
+      expect(response.body.error).toBe('ForbiddenError');
+    });
   });
 
   describe('GET /api/panic-button/:id', () => {
@@ -85,8 +188,7 @@ describe('Panic Button API', () => {
       const createResponse = await request(app)
         .post('/api/panic-button')
         .send({
-          userId: 'user-456',
-          location: { lat: -34.6037, lng: -58.3816 },
+          location: { latitude: -34.6037, longitude: -58.3816 },
         });
 
       const emergencyId = createResponse.body.emergencyId;
@@ -106,28 +208,81 @@ describe('Panic Button API', () => {
 
       expect(response.body.error).toBe('NotFoundError');
     });
+
+    it('returns 403 when citizen tries to view another user emergency', async () => {
+      const sharedRepo = createMockEmergencyRepository();
+      const ownerApp = createTestApp({
+        sub: 'U000042',
+        groups: ['citizen'],
+      }, sharedRepo);
+      const otherApp = createTestApp({
+        sub: 'U000099',
+        groups: ['citizen'],
+      }, sharedRepo);
+
+      const createResponse = await request(ownerApp)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
+
+      const response = await request(otherApp)
+        .get(`/api/panic-button/${createResponse.body.emergencyId}`)
+        .expect(403);
+
+      expect(response.body.error).toBe('ForbiddenError');
+    });
+
+    it('allows dispatcher to view any emergency', async () => {
+      const sharedRepo = createMockEmergencyRepository();
+      const ownerApp = createTestApp({
+        sub: 'U000042',
+        groups: ['citizen'],
+      }, sharedRepo);
+      const dispatcherApp = createTestApp({
+        sub: 'U000999',
+        groups: ['dispatcher'],
+      }, sharedRepo);
+
+      const createResponse = await request(ownerApp)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
+
+      const getResponse = await request(dispatcherApp)
+        .get(`/api/panic-button/${createResponse.body.emergencyId}`)
+        .expect(200);
+
+      expect(getResponse.body.data.userId).toBe('U000042');
+    });
   });
 });
 
 describe('Emergencies API', () => {
-  it('cancels a pending emergency', async () => {
-    const createResponse = await request(app)
+  it('cancels a pending emergency using JWT sub as actor, ignoring a spoofed actor in the body', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const ownerApp = createTestApp({
+      sub: 'U000042',
+      groups: ['citizen'],
+    }, sharedRepo);
+
+    const createResponse = await request(ownerApp)
       .post('/api/panic-button')
       .send({
-        userId: 'user-789',
-        location: { lat: -34.6037, lng: -58.3816 },
+        location: { latitude: -34.6037, longitude: -58.3816 },
       })
       .expect(201);
 
     const emergencyId = createResponse.body.emergencyId;
 
-    const cancelResponse = await request(app)
+    const cancelResponse = await request(ownerApp)
       .patch(`/api/emergencies/${emergencyId}/cancel`)
-      .send({ actor: 'user-789', reason: 'Falsa alarma' })
+      .send({ actor: 'spoofed-actor', reason: 'Falsa alarma' })
       .expect(200);
 
     expect(cancelResponse.body.success).toBe(true);
     expect(cancelResponse.body.data.status).toBe('CANCELLED');
+    expect(sharedRepo.updateStatusCalls).toHaveLength(1);
+    expect(sharedRepo.updateStatusCalls[0].actor).toBe('U000042');
   });
 
   it('returns 404 when cancelling a missing emergency', async () => {
@@ -143,8 +298,7 @@ describe('Emergencies API', () => {
     const createResponse = await request(app)
       .post('/api/panic-button')
       .send({
-        userId: 'user-conflict',
-        location: { lat: -34.6037, lng: -58.3816 },
+        location: { latitude: -34.6037, longitude: -58.3816 },
       })
       .expect(201);
 
@@ -161,6 +315,30 @@ describe('Emergencies API', () => {
       .expect(409);
 
     expect(response.body.error).toBe('ConflictError');
+  });
+
+  it('returns 403 when citizen tries to cancel another user emergency', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const ownerApp = createTestApp({
+      sub: 'U000042',
+      groups: ['citizen'],
+    }, sharedRepo);
+    const otherApp = createTestApp({
+      sub: 'U000099',
+      groups: ['citizen'],
+    }, sharedRepo);
+
+    const createResponse = await request(ownerApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+
+    const response = await request(otherApp)
+      .patch(`/api/emergencies/${createResponse.body.emergencyId}/cancel`)
+      .send({ reason: 'No soy el dueño' })
+      .expect(403);
+
+    expect(response.body.error).toBe('ForbiddenError');
   });
 });
 
@@ -185,12 +363,25 @@ describe('GET /health', () => {
 });
 
 describe('GET /api/emergencies', () => {
-  it('returns paginated emergencies for the dashboard', async () => {
-    const response = await request(app)
+  it('returns paginated emergencies for the dashboard when called by a dispatcher', async () => {
+    const dispatcherApp = createTestApp({
+      sub: 'U000999',
+      groups: ['dispatcher'],
+    });
+
+    const response = await request(dispatcherApp)
       .get('/api/emergencies?status=PENDING,CANCELLED&priority=critical&page=1&limit=20&sortBy=priority')
       .expect(200);
 
     expect(Array.isArray(response.body.data)).toBe(true);
     expect(response.body.pagination).toMatchObject({ page: 1, limit: 20 });
+  });
+
+  it('forbids a citizen from using the dispatcher listing endpoint', async () => {
+    const response = await request(app)
+      .get('/api/emergencies')
+      .expect(403);
+
+    expect(response.body.error).toBe('ForbiddenError');
   });
 });

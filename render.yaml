@@ -19,6 +19,18 @@ services:
         value: emergencias-backend
       - key: TOPIC_PANIC_BUTTON
         value: emergencias.boton-panico
+      - key: LOCATION_ENCRYPTION_KEY
+        sync: false
+      - key: LOCATION_RETENTION_HOURS
+        value: "72"
+      - key: LOCATION_RETENTION_ENABLED
+        value: "true"
+      # Primera entrega sin IdP (Grupo 2): descomentar o setear en el dashboard de Render
+      # - key: AUTH_MODE
+      #   value: local
+      # - key: ALLOW_LOCAL_AUTH
+      #   value: "true"
+      # Cuando conecten IdP: AUTH_MODE=idp + IDP_ISSUER + IDP_AUDIENCE + IDP_JWKS_URI
 
 databases:
   - name: emergencias-db

@@ -1,5 +1,6 @@
 const { Kafka } = require('kafkajs');
 const { ServiceUnavailableError } = require('../errors/app-errors');
+const { secureLog, summarizeEventForLog } = require('../security/secure-log');
 
 class KafkaService {
   constructor() {
@@ -28,11 +29,11 @@ class KafkaService {
       });
       await this.producer.connect();
       this.connected = true;
-      console.log('✓ Kafka producer connected');
+      secureLog('info', 'Kafka producer connected');
       return true;
     } catch (error) {
-      console.error('Kafka connection error:', error.message);
-      console.log('⚠️  Kafka no disponible — seguimos en modo degradado');
+      secureLog('error', 'Kafka connection error', { message: error.message });
+      secureLog('warn', 'Kafka unavailable — degraded mode');
       this.connected = false;
       return false;
     }
@@ -72,10 +73,11 @@ class KafkaService {
           },
         ],
       });
-      console.log(`✓ Event published to ${topic}:`, value);
+      // Nunca loguear el payload completo (puede traer lat/lng).
+      secureLog('info', 'Event published', summarizeEventForLog(topic, value));
     } catch (error) {
       this.connected = false;
-      console.error(`Error publishing event to ${topic}:`, error);
+      secureLog('error', `Error publishing event to ${topic}`, { message: error.message });
       throw error;
     }
   }

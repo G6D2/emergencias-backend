@@ -32,9 +32,12 @@ async function waitForPostgres(containerName, timeoutMs) {
 module.exports = async function globalSetup() {
   // Si ya apuntás a una base de test propia (ej. un branch de Neon solo para tests),
   // usamos esa y no levantamos ningún contenedor.
-  if (process.env.TEST_DATABASE_URL) {
+    if (process.env.TEST_DATABASE_URL) {
     process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
     process.env.DATABASE_SSL = process.env.DATABASE_SSL || 'false';
+    process.env.LOCATION_ENCRYPTION_KEY =
+      process.env.LOCATION_ENCRYPTION_KEY
+      || 'flxqyJtbe6+mibyHqK76N6LSnFe0w22hnyDZg9KWIcs=';
     const connectionInfo = parseDatabaseUrl(process.env.TEST_DATABASE_URL);
     runFlyway(connectionInfo, {
       command: 'migrate',
@@ -79,4 +82,7 @@ module.exports = async function globalSetup() {
 
   process.env.DATABASE_URL = `postgresql://${dbUser}:${dbPassword}@localhost:${hostPort}/${dbName}`;
   process.env.DATABASE_SSL = 'false';
+  process.env.LOCATION_ENCRYPTION_KEY =
+    process.env.LOCATION_ENCRYPTION_KEY
+    || 'flxqyJtbe6+mibyHqK76N6LSnFe0w22hnyDZg9KWIcs=';
 };

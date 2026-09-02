@@ -6,6 +6,9 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
   let repository;
 
   beforeAll(() => {
+    process.env.LOCATION_ENCRYPTION_KEY =
+      process.env.LOCATION_ENCRYPTION_KEY
+      || 'flxqyJtbe6+mibyHqK76N6LSnFe0w22hnyDZg9KWIcs=';
     repository = new EmergencyRepository(getPool());
   });
 
@@ -35,7 +38,23 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(created.status).toBe('PENDING');
     expect(Number(created.latitude)).toBeCloseTo(input.latitude);
     expect(Number(created.longitude)).toBeCloseTo(input.longitude);
+    expect(created.locationAnonymized).toBe(false);
     expect(created.createdAt).toBeDefined();
+  });
+
+  it('persiste ubicación cifrada (sin lat/lng en claro en la fila)', async () => {
+    const input = buildEmergency();
+    await repository.create(input);
+
+    const raw = await getPool().query(
+      'SELECT latitude, longitude, location_encrypted FROM emergencies WHERE id = $1',
+      [input.id]
+    );
+    const row = raw.rows[0];
+    expect(row.latitude).toBeNull();
+    expect(row.longitude).toBeNull();
+    expect(row.location_encrypted).toBeTruthy();
+    expect(row.location_encrypted).not.toContain(String(input.latitude));
   });
 
   it('busca una emergencia por id', async () => {
@@ -91,6 +110,55 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
 
     const historyList = await repository.findHistoryByEmergencyId(missingId);
     expect(historyList).toHaveLength(0);
+  });
+
+  it('registra auditoría de acceso y anonimiza ubicaciones vencidas', async () => {
+    const input = buildEmergency();
+    await repository.create(input);
+
+    await repository.recordAccess({
+      emergencyId: input.id,
+      actorSub: 'U000999',
+      action: 'emergency:read',
+    });
+
+    const audit = await repository.findAccessAuditByEmergencyId(input.id);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].actorSub).toBe('U000999');
+
+    await getPool().query(
+      `UPDATE emergencies SET created_at = now() - interval '100 hours' WHERE id = $1`,
+      [input.id]
+    );
+
+    const result = await repository.anonymizeExpiredLocations(72);
+    expect(result.ids).toContain(input.id);
+
+    const found = await repository.findById(input.id);
+    expect(found.latitude).toBeNull();
+    expect(found.longitude).toBeNull();
+    expect(found.locationAnonymized).toBe(true);
+  });
+
+  it('findPage devuelve latitude/longitude desencriptadas, no null', async () => {
+    const input = buildEmergency();
+    await repository.create(input);
+
+    const { emergencies, total } = await repository.findPage({
+      statuses: [],
+      page: 1,
+      limit: 50,
+      sortBy: 'createdAt',
+      order: 'desc',
+    });
+
+    expect(total).toBeGreaterThan(0);
+    const found = emergencies.find((emergency) => emergency.id === input.id);
+    expect(found).toBeDefined();
+    expect(found.latitude).not.toBeNull();
+    expect(found.longitude).not.toBeNull();
+    expect(Number(found.latitude)).toBeCloseTo(input.latitude);
+    expect(Number(found.longitude)).toBeCloseTo(input.longitude);
   });
 
   it('hace ROLLBACK si el cambio de estado viola una restricción de la base', async () => {

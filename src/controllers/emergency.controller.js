@@ -1,6 +1,7 @@
-const { NotFoundError, ConflictError } = require('../errors/app-errors');
+const { NotFoundError, ConflictError, ForbiddenError } = require('../errors/app-errors');
+const { canCancelEmergency } = require('../auth/authorize');
 
-// Estados desde los que un ciudadano puede cancelar su propia emergency.
+// Estados desde los que un citizen puede cancelar su propia emergency.
 // DISCARDED lo decide el Dispatcher; no pasa por este endpoint.
 const CANCELABLE_STATUSES = new Set(['PENDING', 'VALIDATED']);
 
@@ -10,6 +11,10 @@ class EmergencyController {
     this.emergencyRepository = emergencyRepository;
   }
 
+  /**
+   * Lista paginada de emergencias. Endpoint dispatcher-only (ver requireDispatcher en la ruta).
+   * @param {object} query
+   */
   async listEmergencies(query) {
     const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
@@ -38,11 +43,21 @@ class EmergencyController {
     };
   }
 
-  async cancelEmergency(id, { actor = null, reason = null } = {}) {
+  /**
+   * @param {string} id
+   * @param {{ reason?: string|null }} options - reason del body; actor sale del JWT
+   * @param {{ sub: string }} user - identidad autenticada (req.user)
+   */
+  async cancelEmergency(id, { reason = null } = {}, user) {
+    const actor = user.sub;
     const emergency = await this.emergencyRepository.findById(id);
 
     if (!emergency) {
       throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    if (!canCancelEmergency(user, emergency)) {
+      throw new ForbiddenError('You cannot cancel this emergency');
     }
 
     if (!CANCELABLE_STATUSES.has(emergency.status)) {
