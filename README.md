@@ -12,7 +12,7 @@ Backend para el módulo de Emergencias y Seguridad de CityPass+. Gestiona botone
 
 ### Flujo
 1. Usuario activa botón de pánico en la app mobile/web
-2. Sistema persiste la emergencia en PostgreSQL (`CREATED`)
+2. Sistema persiste la emergencia en PostgreSQL (`PENDING`)
 3. Evento se publica en Kafka (`emergencias.boton-panico`)
 4. Operadores pueden visualizar la emergencia en tiempo real
 
@@ -47,6 +47,24 @@ npm run migrate
 npm run dev
 ```
 
+**Sin Docker (backend en el host):**
+
+```bash
+# npm install local es obligatorio aunque ya exista node_modules/:
+# si las dependencias se instalaron desde el contenedor (Linux), en el host faltan o no sirven.
+npm install
+
+# En .env: apuntar Kafka al listener del host (NO al de Docker, ver sección Kafka más abajo)
+#   KAFKA_BROKER=localhost:9092
+# Si 3000/3001 están ocupados, elegir otro puerto:
+#   PORT=4000
+
+# Levantar solo la infraestructura de Kafka en Docker
+docker compose up -d kafka
+
+npm run dev
+```
+
 ### 2b. Todo local (Postgres + Kafka en Docker)
 
 ```bash
@@ -68,6 +86,7 @@ docker-compose up
 ### Verificar que funciona
 
 ```bash
+# Reemplazar 3000 por el PORT configurado en .env
 curl http://localhost:3000/health
 ```
 
@@ -81,6 +100,8 @@ Importá en Postman:
 - Environment: [`postman/Emergencias-Backend-Local.postman_environment.json`](postman/Emergencias-Backend-Local.postman_environment.json)
 
 El POST de panic button guarda `emergencyId` solo para los requests siguientes.
+
+El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `connected` solo indica que el producer se conectó — ver la sección de Kafka para una trampa conocida al publicar desde el host.
 
 ---
 
@@ -116,7 +137,7 @@ Activa el botón de pánico.
     "longitude": -58.3816,
     "description": "Necesito ayuda inmediata",
     "severity": "critical",
-    "status": "CREATED",
+    "status": "PENDING",
     "createdAt": "2026-08-25T10:00:00.000Z",
     "updatedAt": "2026-08-25T10:00:00.000Z"
   }
@@ -129,7 +150,7 @@ Obtiene detalles de un evento de pánico.
 
 ### PATCH `/api/emergencies/:id/cancel`
 
-Cancela una emergencia en estado `CREATED`.
+Cancela una emergencia en estado `PENDING` o `VALIDATED`.
 
 **Request:**
 ```json
@@ -195,7 +216,20 @@ Si Kafka no está conectado, `publishEvent` responde **503** (no se pierde el ev
 
 ---
 
-## Testing
+## ⚠️ Kafka: `kafka:29092` vs `localhost:9092`
+
+El broker del `docker-compose.yml` expone **dos listeners**, y hay que usar el correcto según desde dónde corre el cliente:
+
+| Cliente | Listener | Broker a usar |
+|---|---|---|
+| Proceso dentro de la red de Docker (ej. el backend de compose) | `PLAINTEXT` | `kafka:29092` |
+| Proceso en el host (ej. `npm run dev`) | `PLAINTEXT_HOST` | `localhost:9092` |
+
+**Trampa conocida:** si desde el host usás `localhost:29092`, la conexión inicial puede funcionar pero al publicar un evento el request queda colgado, con `getaddrinfo ENOTFOUND kafka` repetido en el log. Pasa porque ese puerto corresponde al listener `PLAINTEXT`, que en el handshake anuncia `kafka:29092` — un hostname que solo resuelve dentro de la red de Docker. El listener `PLAINTEXT_HOST`, publicado en el puerto `9092`, anuncia `localhost:9092` y es el que deben usar los clientes del host.
+
+---
+
+## 🧪 Testing
 
 ```bash
 # Unitarios / API con mocks

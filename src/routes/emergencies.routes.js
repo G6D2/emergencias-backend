@@ -8,11 +8,73 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository) {
 
   /**
    * @openapi
+   * /api/emergencies:
+   *   get:
+   *     tags: [Emergencies]
+   *     summary: Lista emergencias paginadas
+   *     description: Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
+   *     parameters:
+   *       - in: query
+   *         name: status
+   *         schema:
+   *           type: string
+   *         description: Lista de statuses separados por coma (ej. PENDING,VALIDATED)
+   *       - in: query
+   *         name: severity
+   *         schema:
+   *           type: string
+   *       - in: query
+   *         name: from
+   *         schema:
+   *           type: string
+   *           format: date-time
+   *       - in: query
+   *         name: to
+   *         schema:
+   *           type: string
+   *           format: date-time
+   *       - in: query
+   *         name: assignedOfficerId
+   *         schema:
+   *           type: string
+   *       - in: query
+   *         name: type
+   *         schema:
+   *           type: string
+   *       - in: query
+   *         name: page
+   *         schema:
+   *           type: integer
+   *       - in: query
+   *         name: limit
+   *         schema:
+   *           type: integer
+   *       - in: query
+   *         name: sortBy
+   *         schema:
+   *           type: string
+   *           enum: [createdAt, priority]
+   *       - in: query
+   *         name: order
+   *         schema:
+   *           type: string
+   *           enum: [asc, desc]
+   *     responses:
+   *       200:
+   *         description: Página de emergencias
+   */
+  router.get('/', asyncHandler(async (req, res) => {
+    const result = await controller.listEmergencies(req.query);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
    * /api/emergencies/{id}/cancel:
    *   patch:
    *     tags: [Emergencies]
    *     summary: Cancela una emergencia
-   *     description: Solo si el status actual es CREATED. Publica EmergencyStatusUpdated en Kafka.
+   *     description: Solo si el status actual es PENDING o VALIDATED. Publica EmergencyStatusUpdated en Kafka.
    *     parameters:
    *       - in: path
    *         name: id

@@ -12,7 +12,7 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository) {
    *   post:
    *     tags: [Panic Button]
    *     summary: Activa el botón de pánico
-   *     description: Persiste una emergency en status CREATED y publica el evento en Kafka.
+   *     description: Persiste una emergency en status PENDING y publica el evento en Kafka.
    *     requestBody:
    *       required: true
    *       content:

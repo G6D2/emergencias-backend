@@ -2,12 +2,40 @@ const { NotFoundError, ConflictError } = require('../errors/app-errors');
 
 // Estados desde los que un ciudadano puede cancelar su propia emergency.
 // DISCARDED lo decide el Dispatcher; no pasa por este endpoint.
-const CANCELABLE_STATUSES = new Set(['CREATED']);
+const CANCELABLE_STATUSES = new Set(['PENDING', 'VALIDATED']);
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
     this.kafkaService = kafkaService;
     this.emergencyRepository = emergencyRepository;
+  }
+
+  async listEmergencies(query) {
+    const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
+    const statuses = String(query.status || query.statuses || '')
+      .split(',')
+      .map((status) => status.trim())
+      .filter(Boolean);
+    const sortBy = query.sortBy === 'priority' ? 'priority' : 'createdAt';
+    const order = query.order === 'asc' ? 'asc' : 'desc';
+    const { emergencies, total } = await this.emergencyRepository.findPage({
+      statuses,
+      severity: query.severity || query.priority,
+      from: query.from,
+      to: query.to,
+      assignedOfficerId: query.assignedOfficerId,
+      emergencyType: query.type,
+      page,
+      limit,
+      sortBy,
+      order,
+    });
+
+    return {
+      data: emergencies,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async cancelEmergency(id, { actor = null, reason = null } = {}) {

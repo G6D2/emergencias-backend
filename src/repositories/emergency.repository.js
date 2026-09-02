@@ -12,6 +12,8 @@ function mapEmergency(row) {
     description: row.description,
     severity: row.severity,
     status: row.status,
+    assignedOfficerId: row.assigned_officer_id,
+    emergencyType: row.emergency_type,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -40,7 +42,7 @@ class EmergencyRepository {
   async create({ id, userId, latitude, longitude, description, severity, status }) {
     const result = await this.pool.query(
       `INSERT INTO emergencies (id, user_id, latitude, longitude, description, severity, status)
-       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 'CREATED'))
+       VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 'PENDING'))
        RETURNING *`,
       [id, userId, latitude, longitude, description || null, severity || null, status || null]
     );
@@ -63,6 +65,44 @@ class EmergencyRepository {
       [emergencyId]
     );
     return result.rows.map(mapHistoryEntry);
+  }
+
+  async findPage({ statuses, severity, from, to, assignedOfficerId, emergencyType, page, limit, sortBy, order }) {
+    const conditions = [];
+    const values = [];
+
+    function addCondition(sql, value) {
+      values.push(value);
+      conditions.push(sql.replace('?', `$${values.length}`));
+    }
+
+    if (statuses.length > 0) addCondition('status = ANY(?)', statuses);
+    if (severity) addCondition('severity = ?', severity);
+    if (from) addCondition('created_at >= ?', from);
+    if (to) addCondition('created_at <= ?', to);
+    if (assignedOfficerId) addCondition('assigned_officer_id = ?', assignedOfficerId);
+    if (emergencyType) addCondition('emergency_type = ?', emergencyType);
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const offset = (page - 1) * limit;
+    const direction = order === 'asc' ? 'ASC' : 'DESC';
+    const sortExpression = sortBy === 'priority'
+      ? "CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END"
+      : 'created_at';
+
+    const countResult = await this.pool.query(
+      `SELECT COUNT(*)::int AS total FROM emergencies ${where}`,
+      values
+    );
+    values.push(limit, offset);
+    const result = await this.pool.query(
+      `SELECT * FROM emergencies ${where}
+       ORDER BY ${sortExpression} ${direction}, created_at ASC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values
+    );
+
+    return { emergencies: result.rows.map(mapEmergency), total: countResult.rows[0].total };
   }
 
   // Actualiza el status y deja el historial en la misma transacción.

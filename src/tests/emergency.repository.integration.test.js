@@ -25,14 +25,14 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     };
   }
 
-  it('crea una emergencia con estado inicial CREATED', async () => {
+  it('crea una emergencia con estado inicial PENDING', async () => {
     const input = buildEmergency();
 
     const created = await repository.create(input);
 
     expect(created.id).toBe(input.id);
     expect(created.userId).toBe(input.userId);
-    expect(created.status).toBe('CREATED');
+    expect(created.status).toBe('PENDING');
     expect(Number(created.latitude)).toBeCloseTo(input.latitude);
     expect(Number(created.longitude)).toBeCloseTo(input.longitude);
     expect(created.createdAt).toBeDefined();
@@ -75,7 +75,7 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     });
 
     expect(emergency.status).toBe('VALIDATED');
-    expect(history.previousStatus).toBe('CREATED');
+    expect(history.previousStatus).toBe('PENDING');
     expect(history.newStatus).toBe('VALIDATED');
     expect(history.actor).toBe('operador-1');
     expect(history.reason).toBe('Confirmado por operador');
@@ -100,7 +100,7 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     await expect(repository.updateStatus(input.id, { newStatus: null })).rejects.toThrow();
 
     const found = await repository.findById(input.id);
-    expect(found.status).toBe('CREATED');
+    expect(found.status).toBe('PENDING');
 
     const historyList = await repository.findHistoryByEmergencyId(input.id);
     expect(historyList).toHaveLength(0);

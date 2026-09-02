@@ -37,6 +37,7 @@ function createMockEmergencyRepository() {
         },
       };
     },
+    findPage: async () => ({ emergencies: [...emergencies.values()], total: emergencies.size }),
   };
 }
 
@@ -62,7 +63,7 @@ describe('Panic Button API', () => {
       expect(response.body.success).toBe(true);
       expect(response.body.emergencyId).toBeDefined();
       expect(response.body.data.userId).toBe(payload.userId);
-      expect(response.body.data.status).toBe('CREATED');
+      expect(response.body.data.status).toBe('PENDING');
     });
 
     it('should fail without required fields', async () => {
@@ -180,5 +181,16 @@ describe('GET /health', () => {
 
     expect(response.body.status).toBe('ok');
     expect(response.body.kafka).toBe('disconnected');
+  });
+});
+
+describe('GET /api/emergencies', () => {
+  it('returns paginated emergencies for the dashboard', async () => {
+    const response = await request(app)
+      .get('/api/emergencies?status=PENDING,CANCELLED&priority=critical&page=1&limit=20&sortBy=priority')
+      .expect(200);
+
+    expect(Array.isArray(response.body.data)).toBe(true);
+    expect(response.body.pagination).toMatchObject({ page: 1, limit: 20 });
   });
 });

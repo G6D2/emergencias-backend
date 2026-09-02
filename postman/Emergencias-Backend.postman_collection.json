@@ -64,7 +64,7 @@
               "raw": "{\n  \"userId\": \"user-123\",\n  \"location\": {\n    \"latitude\": -34.6037,\n    \"longitude\": -58.3816\n  },\n  \"description\": \"Necesito ayuda inmediata\",\n  \"severity\": \"critical\"\n}"
             },
             "url": "{{baseUrl}}/api/panic-button",
-            "description": "Crea una emergency en status CREATED y publica en Kafka.\nGuarda `emergencyId` en la variable de colección."
+            "description": "Crea una emergency en status PENDING y publica en Kafka.\nGuarda `emergencyId` en la variable de colección."
           }
         },
         {
@@ -109,6 +109,15 @@
       "name": "Emergencies",
       "item": [
         {
+          "name": "GET List Emergencies",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/emergencies?status=PENDING,VALIDATED&page=1&limit=20&sortBy=priority",
+            "description": "Lista emergencias paginadas. Filtros soportados: status, severity, from, to, assignedOfficerId, type, page, limit, sortBy, order."
+          }
+        },
+        {
           "name": "PATCH Cancel Emergency",
           "request": {
             "method": "PATCH",
@@ -123,7 +132,7 @@
               "raw": "{\n  \"actor\": \"user-123\",\n  \"reason\": \"Falsa alarma\"\n}"
             },
             "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/cancel",
-            "description": "Cancela solo si status es CREATED. Esperado: 200, status CANCELLED."
+            "description": "Cancela solo si status es PENDING o VALIDATED. Esperado: 200, status CANCELLED."
           }
         },
         {
