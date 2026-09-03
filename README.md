@@ -213,6 +213,21 @@ Generar clave:
 openssl rand -base64 32
 ```
 
+Cada ciphertext lleva una cabecera con el id de la clave que lo cifró
+(`ELC || version || keyId || iv || authTag || ct`), así que la clave se puede rotar
+sin perder los datos ya guardados.
+
+**Rotar la clave:**
+1. Generar la clave nueva y publicar las dos en el keyring, dejando la vieja activa:
+   `LOCATION_ENCRYPTION_KEYS=v1:<vieja>,v2:<nueva>` + `LOCATION_ENCRYPTION_KEY_ID=v1`.
+2. Cambiar el activo a `v2`. Las filas nuevas se cifran con `v2`; las viejas se
+   siguen leyendo con `v1`.
+3. Cuando ya no queden filas con `v1` (con retención de 72h, después de 72h),
+   sacar `v1` del keyring.
+
+Las filas escritas antes de esta versión no tienen cabecera y se desencriptan
+probando las claves del keyring, así que la migración no requiere backfill.
+
 ### Retención / minimización
 Job en background (y `npm run security:anonymize-locations`) borra el ciphertext después de `LOCATION_RETENTION_HOURS` (default 72). La emergencia sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
 
@@ -227,7 +242,9 @@ Cada `GET /api/panic-button/:id` autorizado deja un registro en `emergency_acces
 
 | Variable | Rol |
 |----------|-----|
-| `LOCATION_ENCRYPTION_KEY` | AES-256 key (base64, 32 bytes) — **obligatoria** |
+| `LOCATION_ENCRYPTION_KEY` | AES-256 key (base64, 32 bytes) — **obligatoria** (salvo que se use `LOCATION_ENCRYPTION_KEYS`) |
+| `LOCATION_ENCRYPTION_KEYS` | Keyring para rotar: `id:base64key,id2:base64key2` (opcional) |
+| `LOCATION_ENCRYPTION_KEY_ID` | Id de la clave con la que se cifra (default: `1`, o la primera del keyring) |
 | `LOCATION_RETENTION_HOURS` | Horas antes de anonimizar (default 72) |
 | `LOCATION_RETENTION_ENABLED` | `false` para desactivar el job |
 | `FORCE_HTTPS` | Forzar HTTPS aunque no sea production |
