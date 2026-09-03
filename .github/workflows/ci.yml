@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [main]
     types: [opened, edited, synchronize, reopened]
+  push:
+    branches-ignore: [main]
 
 permissions:
   contents: read
@@ -11,6 +13,7 @@ permissions:
 jobs:
   validate-pr:
     name: Validate PR metadata
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Check title is not empty
