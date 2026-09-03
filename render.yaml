@@ -15,6 +15,10 @@ services:
           property: connectionString
       - key: KAFKA_BROKER
         sync: false
+      # Poner en 'false' si todavia no hay un broker Kafka real desplegado
+      # (evita reintentos de conexion ruidosos en los logs, no bloquea el arranque).
+      - key: KAFKA_ENABLED
+        value: "false"
       - key: KAFKA_CLIENT_ID
         value: emergencias-backend
       - key: TOPIC_PANIC_BUTTON
