@@ -5,6 +5,7 @@ const path = require('path');
 
 const FLYWAY_IMAGE = 'flyway/flyway:10-alpine';
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const OPTIONAL_FLYWAY_ENV_VARS = ['FLYWAY_BASELINE_ON_MIGRATE', 'FLYWAY_BASELINE_VERSION'];
 
 function buildJdbcUrl({ host, port, database }, sslmode) {
   const query = sslmode ? `?sslmode=${sslmode}` : '';
@@ -74,6 +75,9 @@ function runFlyway(connectionInfo, { command = 'migrate', migrationsDir, sslmode
       `FLYWAY_USER=${target.connectionInfo.user}`,
       `FLYWAY_PASSWORD=${target.connectionInfo.password}`,
       'FLYWAY_CONNECT_RETRIES=15',
+      ...OPTIONAL_FLYWAY_ENV_VARS.flatMap((envVar) =>
+        process.env[envVar] ? [`${envVar}=${process.env[envVar]}`] : []
+      ),
     ].join('\n'),
     { mode: 0o600 }
   );
