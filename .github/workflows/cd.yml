@@ -23,18 +23,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Sin baseline forzado: la base productiva ya tiene la tabla de historial
+      # de Flyway (creada por el primer deploy con baseline), y una base vacia
+      # debe recibir V1..V5 completas. Con FLYWAY_BASELINE_VERSION=5 una base
+      # nueva quedaba sin tablas.
       - name: Run migrations
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          FLYWAY_BASELINE_ON_MIGRATE: 'true'
-          FLYWAY_BASELINE_VERSION: '5'
         run: npm run migrate
 
       - name: Deploy to Render
         if: ${{ env.RENDER_DEPLOY_HOOK_URL != '' }}
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-        run: curl --fail -X POST "$RENDER_DEPLOY_HOOK_URL"
+        run: curl --fail -sS -X POST "$RENDER_DEPLOY_HOOK_URL"
 
   notify-failure:
     name: Notify deploy failure
