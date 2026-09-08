@@ -11,10 +11,6 @@ jobs:
   deploy:
     name: Migrate & Deploy
     runs-on: ubuntu-latest
-    # Definido a nivel job para poder usarlo en el `if` del paso de deploy:
-    # el `if` de un paso no ve el `env` declarado en ese mismo paso.
-    env:
-      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +33,9 @@ jobs:
         run: npm run migrate
 
       - name: Deploy to Render
-        if: env.RENDER_DEPLOY_HOOK_URL != ''
+        if: ${{ env.RENDER_DEPLOY_HOOK_URL != '' }}
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: curl --fail -sS -X POST "$RENDER_DEPLOY_HOOK_URL"
 
   notify-failure:
