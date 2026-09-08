@@ -1,0 +1,41 @@
+name: Keep warm
+
+# Render (plan free) duerme el servicio tras 15 minutos sin tráfico y tarda
+# entre 30 y 90 segundos en despertar. Este workflow lo mantiene despierto
+# SOLO en la ventana de clase (jueves 17:30 a 23:00 hora Argentina, UTC-3),
+# para no consumir las 750 horas gratis mensuales de Render manteniéndolo
+# siempre prendido. Para una demo fuera de ese horario: Actions → Keep warm
+# → Run workflow (o ampliar el cron por unos días).
+#
+# Nota: GitHub puede demorar o saltear ejecuciones programadas en momentos
+# de alta carga; no es un reloj exacto.
+
+on:
+  schedule:
+    # Jueves 20:00–23:59 UTC (17:00–20:59 ART) y viernes 00:00–02:59 UTC
+    # (21:00–23:59 ART del jueves), cada 10 minutos.
+    - cron: '*/10 20-23 * * 4'
+    - cron: '*/10 0-2 * * 5'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    name: Ping backend (y frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BACKEND_URL: ${{ vars.BACKEND_URL || 'https://emergencias-backend-34go.onrender.com' }}
+      FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+    steps:
+      - name: Backend /health
+        run: |
+          echo "GET $BACKEND_URL/health"
+          curl -sS --max-time 120 --retry 2 --retry-delay 15 -w '\nhttp %{http_code} en %{time_total}s\n' "$BACKEND_URL/health"
+
+      - name: Frontend /api/warmup
+        if: env.FRONTEND_URL != ''
+        run: |
+          echo "GET $FRONTEND_URL/api/warmup"
+          curl -sS --max-time 120 --retry 2 --retry-delay 15 -w '\nhttp %{http_code} en %{time_total}s\n' "$FRONTEND_URL/api/warmup"
