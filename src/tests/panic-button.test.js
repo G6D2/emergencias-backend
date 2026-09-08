@@ -598,3 +598,94 @@ describe('GET /api/emergencies', () => {
     expect(response.body.error).toBe('ForbiddenError');
   });
 });
+
+describe('Emergencies API - máquina de estados', () => {
+  // Deja una emergencia creada por el citizen en el estado pedido, forzando
+  // el estado en el mock (sin pasar por el controller).
+  async function createEmergencyInStatus(sharedRepo, citizenApp, status) {
+    const createResponse = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+    const emergencyId = createResponse.body.emergencyId;
+    const current = await sharedRepo.findById(emergencyId);
+    current.status = status;
+    sharedRepo.updateStatusCalls.length = 0;
+    return emergencyId;
+  }
+
+  it('returns 409 when validating a terminal (CANCELLED) emergency and does not touch the repository', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+    const emergencyId = await createEmergencyInStatus(sharedRepo, citizenApp, 'CANCELLED');
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${emergencyId}/validate`)
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: 'ConflictError',
+      message: 'Emergency in terminal status CANCELLED cannot transition to VALIDATED',
+    });
+    expect(sharedRepo.updateStatusCalls).toHaveLength(0);
+  });
+
+  it('returns 409 when discarding a VALIDATED emergency (only PENDING can be discarded)', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+    const emergencyId = await createEmergencyInStatus(sharedRepo, citizenApp, 'VALIDATED');
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${emergencyId}/discard`)
+      .send({ reason: 'Ya fue validada' })
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: 'ConflictError',
+      message: 'Invalid transition VALIDATED → DISCARDED',
+    });
+    expect(sharedRepo.updateStatusCalls).toHaveLength(0);
+  });
+
+  it('allows a citizen to cancel a VALIDATED emergency but not a DISPATCHED one', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+
+    const validatedId = await createEmergencyInStatus(sharedRepo, citizenApp, 'VALIDATED');
+    const okResponse = await request(citizenApp)
+      .patch(`/api/emergencies/${validatedId}/cancel`)
+      .send({ reason: 'Ya no hace falta' })
+      .expect(200);
+    expect(okResponse.body.data.status).toBe('CANCELLED');
+
+    const dispatchedId = await createEmergencyInStatus(sharedRepo, citizenApp, 'DISPATCHED');
+    const response = await request(citizenApp)
+      .patch(`/api/emergencies/${dispatchedId}/cancel`)
+      .send({ reason: 'Tarde' })
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: 'ConflictError',
+      message: 'Invalid transition DISPATCHED → CANCELLED',
+    });
+    expect(sharedRepo.updateStatusCalls).toHaveLength(0);
+  });
+
+  it('returns 409 when cancelling a terminal (DISCARDED) emergency', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+    const emergencyId = await createEmergencyInStatus(sharedRepo, citizenApp, 'DISCARDED');
+
+    const response = await request(citizenApp)
+      .patch(`/api/emergencies/${emergencyId}/cancel`)
+      .send({})
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: 'ConflictError',
+      message: 'Emergency in terminal status DISCARDED cannot transition to CANCELLED',
+    });
+  });
+});

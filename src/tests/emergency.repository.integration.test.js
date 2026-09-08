@@ -161,7 +161,38 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(Number(found.longitude)).toBeCloseTo(input.longitude);
   });
 
-  it('hace ROLLBACK si el cambio de estado viola una restricción de la base', async () => {
+  it('rechaza con ConflictError una transición inválida y no deja rastros (defensa en profundidad)', async () => {
+    const input = buildEmergency();
+    await repository.create(input);
+
+    // PENDING → RESOLVED se salta el flujo: el repository lo frena aunque
+    // ningún controller lo haya validado antes.
+    await expect(repository.updateStatus(input.id, { newStatus: 'RESOLVED', actor: 'operador-1' }))
+      .rejects.toMatchObject({ name: 'ConflictError', statusCode: 409 });
+
+    const found = await repository.findById(input.id);
+    expect(found.status).toBe('PENDING');
+
+    const historyList = await repository.findHistoryByEmergencyId(input.id);
+    expect(historyList).toHaveLength(0);
+  });
+
+  it('rechaza una transición desde un estado terminal', async () => {
+    const input = buildEmergency();
+    await repository.create(input);
+    await repository.updateStatus(input.id, { newStatus: 'CANCELLED', actor: 'user-123' });
+
+    await expect(repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' }))
+      .rejects.toMatchObject({ name: 'ConflictError' });
+
+    const found = await repository.findById(input.id);
+    expect(found.status).toBe('CANCELLED');
+
+    const historyList = await repository.findHistoryByEmergencyId(input.id);
+    expect(historyList).toHaveLength(1);
+  });
+
+  it('hace ROLLBACK y no toca la fila si el estado destino no existe', async () => {
     const input = buildEmergency();
     await repository.create(input);
 

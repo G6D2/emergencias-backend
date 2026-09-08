@@ -338,6 +338,33 @@ Estado del servicio y conectividad Kafka (público).
 
 ---
 
+## Máquina de estados
+
+El ciclo de vida de una emergencia está centralizado en [`src/domain/emergency-status.js`](src/domain/emergency-status.js) (única fuente de verdad: la usan los controllers, el repository y el enum de Swagger).
+
+```
+              ┌────────────────┐
+              ▼                │   (DISPATCHED → VALIDATED: devolución para reasignar)
+PENDING ──► VALIDATED ──► DISPATCHED ──► EN_ROUTE ──► ON_SCENE ──► RESOLVED ──► CLOSED
+   │                │
+   ├──► CANCELLED ◄─┘   (desde PENDING o VALIDATED)
+   └──► DISCARDED       (solo desde PENDING)
+```
+
+| Desde | Hacia |
+|-------|-------|
+| `PENDING` | `VALIDATED`, `CANCELLED`, `DISCARDED` |
+| `VALIDATED` | `DISPATCHED`, `CANCELLED` |
+| `DISPATCHED` | `EN_ROUTE`, `VALIDATED` |
+| `EN_ROUTE` | `ON_SCENE` |
+| `ON_SCENE` | `RESOLVED` |
+| `RESOLVED` | `CLOSED` |
+| `CANCELLED`, `DISCARDED`, `CLOSED` | — (terminales) |
+
+Una transición no listada devuelve **409 Conflict** (`ConflictError`, p. ej. `Invalid transition PENDING → RESOLVED`). La validación corre en el controller y, como defensa en profundidad, en `EmergencyRepository.updateStatus` con la fila bloqueada (`FOR UPDATE`), así ningún endpoint puede saltarse el flujo.
+
+---
+
 ## Arquitectura
 
 ```
@@ -359,6 +386,8 @@ src/
 │   ├── location-retention.js     # Job de anonimización
 │   ├── secure-log.js             # Redacción de logs
 │   └── security-headers.js       # HTTPS/HSTS + headers
+├── domain/
+│   └── emergency-status.js       # Máquina de estados (transiciones válidas)
 ├── controllers/
 │   ├── panic-button.controller.js
 │   ├── emergency.controller.js
@@ -378,6 +407,7 @@ src/
 │   └── pool.js
 └── tests/
     ├── panic-button.test.js
+    ├── emergency-status.test.js
     ├── auth.test.js
     └── emergency.repository.integration.test.js
 
