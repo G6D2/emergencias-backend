@@ -58,12 +58,14 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
    *               $ref: '#/components/schemas/HealthResponse'
    */
   app.get('/health', async (req, res) => {
-    const kafkaConnected = kafkaService ? await kafkaService.checkHealth() : false;
+    const kafkaDisabled =
+      kafkaService && typeof kafkaService.isEnabled === 'function' && !kafkaService.isEnabled();
+    const kafkaConnected = kafkaService && !kafkaDisabled ? await kafkaService.checkHealth() : false;
 
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
-      kafka: kafkaConnected ? 'connected' : 'disconnected',
+      kafka: kafkaDisabled ? 'disabled' : kafkaConnected ? 'connected' : 'disconnected',
       authMode: options.authMode || undefined,
     });
   });

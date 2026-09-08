@@ -18,13 +18,10 @@ async function start() {
   const kafkaService = new KafkaService();
   const emergencyRepository = new EmergencyRepository(getPool(), { locationCrypto });
 
-  if (process.env.KAFKA_ENABLED === 'false') {
-    secureLog('info', 'Kafka disabled via KAFKA_ENABLED=false — skipping connection');
-  } else {
-    kafkaService.connect().catch((err) => {
-      secureLog('error', 'Initial Kafka connection failed', { message: err.message });
-    });
-  }
+  // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
+  kafkaService.connect().catch((err) => {
+    secureLog('error', 'Initial Kafka connection failed', { message: err.message });
+  });
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
 
