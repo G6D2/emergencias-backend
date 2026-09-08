@@ -2,6 +2,7 @@ const { v4: uuidv4 } = require('uuid');
 const { NotFoundError, ValidationError, ForbiddenError } = require('../errors/app-errors');
 const { canViewEmergency } = require('../auth/authorize');
 const { secureLog } = require('../security/secure-log');
+const { normalizeSeverity } = require('../domain/severity');
 
 class PanicButtonController {
   constructor(kafkaService, emergencyRepository) {
@@ -24,6 +25,11 @@ class PanicButtonController {
       throw new ValidationError('location.latitude and location.longitude must be numbers');
     }
 
+    const severity = normalizeSeverity(payload.severity);
+    if (!severity) {
+      throw new ValidationError('severity must be one of: low, medium, high, critical');
+    }
+
     const emergencyId = uuidv4();
 
     const emergency = await this.emergencyRepository.create({
@@ -32,7 +38,7 @@ class PanicButtonController {
       latitude,
       longitude,
       description: payload.description || 'Botón de pánico activado',
-      severity: payload.severity || 'critical',
+      severity,
       status: 'PENDING',
     });
 

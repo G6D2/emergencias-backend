@@ -1,5 +1,6 @@
 const { NotFoundError, ConflictError, ForbiddenError, ValidationError } = require('../errors/app-errors');
 const { canCancelEmergency } = require('../auth/authorize');
+const { isValidSeverity } = require('../domain/severity');
 
 // Estados desde los que un citizen puede cancelar su propia emergency.
 // DISCARDED lo decide el Dispatcher; no pasa por este endpoint.
@@ -16,6 +17,9 @@ class EmergencyController {
    * @param {object} query
    */
   async listEmergencies(query) {
+    if (query.severity && !isValidSeverity(query.severity)) {
+      throw new ValidationError('severity must be one of: low, medium, high, critical');
+    }
     const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
     const statuses = String(query.status || query.statuses || '')
