@@ -109,6 +109,13 @@ const options = {
             reason: { type: 'string', nullable: true, example: 'Falsa alarma' },
           },
         },
+        DiscardEmergencyRequest: {
+          type: 'object',
+          required: ['reason'],
+          properties: {
+            reason: { type: 'string', minLength: 1, example: 'Reporte inválido' },
+          },
+        },
         DevLoginRequest: {
           type: 'object',
           required: ['sub'],
