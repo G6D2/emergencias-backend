@@ -343,13 +343,46 @@ describe('Emergencies API', () => {
 });
 
 describe('KafkaService', () => {
-  it('throws 503 when publishing while disconnected', async () => {
-    const service = new KafkaService();
+  it('throws 503 when publishing while enabled but disconnected', async () => {
+    const service = new KafkaService({ enabled: true });
 
     await expect(service.publishEvent('emergencias.boton-panico', { id: '1' })).rejects.toMatchObject({
       name: 'ServiceUnavailableError',
       statusCode: 503,
     });
+  });
+
+  it('skips publishing without throwing when disabled', async () => {
+    const service = new KafkaService({ enabled: false });
+
+    await expect(service.connect()).resolves.toBe(false);
+    await expect(service.publishEvent('emergencias.boton-panico', { id: '1' })).resolves.toBe(false);
+    expect(service.isConnected()).toBe(false);
+  });
+
+  it('reads KAFKA_ENABLED=false from the environment', () => {
+    const previous = process.env.KAFKA_ENABLED;
+    process.env.KAFKA_ENABLED = 'false';
+    try {
+      expect(new KafkaService().isEnabled()).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.KAFKA_ENABLED;
+      else process.env.KAFKA_ENABLED = previous;
+    }
+  });
+});
+
+describe('GET /health with Kafka disabled', () => {
+  it('reports kafka as disabled instead of disconnected', async () => {
+    const disabledApp = createApp(
+      { ...mockKafkaService, isEnabled: () => false },
+      createMockEmergencyRepository(),
+      { authenticate: stubAuthenticate() }
+    );
+
+    const response = await request(disabledApp).get('/health').expect(200);
+
+    expect(response.body.kafka).toBe('disabled');
   });
 });
 

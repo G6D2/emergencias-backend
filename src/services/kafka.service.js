@@ -3,7 +3,11 @@ const { ServiceUnavailableError } = require('../errors/app-errors');
 const { secureLog, summarizeEventForLog } = require('../security/secure-log');
 
 class KafkaService {
-  constructor() {
+  constructor(options = {}) {
+    // KAFKA_ENABLED=false (Render, entornos sin broker): el servicio arranca
+    // sin conectarse y publishEvent registra el evento en lugar de fallar.
+    this.enabled =
+      options.enabled !== undefined ? Boolean(options.enabled) : process.env.KAFKA_ENABLED !== 'false';
     this.kafka = new Kafka({
       clientId: process.env.KAFKA_CLIENT_ID || 'emergencias-backend',
       brokers: [process.env.KAFKA_BROKER || 'kafka:9092'],
@@ -21,7 +25,16 @@ class KafkaService {
     this.connected = false;
   }
 
+  isEnabled() {
+    return this.enabled;
+  }
+
   async connect() {
+    if (!this.enabled) {
+      secureLog('info', 'Kafka disabled via KAFKA_ENABLED=false — skipping connection');
+      return false;
+    }
+
     try {
       this.producer = this.kafka.producer({
         allowAutoTopicCreation: true,
@@ -57,6 +70,13 @@ class KafkaService {
   }
 
   async publishEvent(topic, value) {
+    if (!this.enabled) {
+      // Sin bus no se pierde la operacion de negocio: la emergencia ya quedo
+      // persistida. Se deja constancia (sin lat/lng) de que el evento no salio.
+      secureLog('warn', 'Kafka disabled — event not published', summarizeEventForLog(topic, value));
+      return false;
+    }
+
     if (!this.isConnected()) {
       throw new ServiceUnavailableError(
         `Kafka not connected. Event not published to ${topic}`
@@ -75,6 +95,7 @@ class KafkaService {
       });
       // Nunca loguear el payload completo (puede traer lat/lng).
       secureLog('info', 'Event published', summarizeEventForLog(topic, value));
+      return true;
     } catch (error) {
       this.connected = false;
       secureLog('error', `Error publishing event to ${topic}`, { message: error.message });
