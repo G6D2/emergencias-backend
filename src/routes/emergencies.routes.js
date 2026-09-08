@@ -78,6 +78,88 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
 
   /**
    * @openapi
+   * /api/emergencies/{id}/validate:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: Valida una emergencia pendiente
+   *     description: |
+   *       Requiere grupo `dispatcher`. Solo permite la transición PENDING -> VALIDATED.
+   *       Registra el actor y publica EmergencyStatusUpdated en Kafka.
+   *     security:
+   *       - bearerAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *           format: uuid
+   *     responses:
+   *       200:
+   *         description: Emergencia validada
+   *       401:
+   *         description: Token ausente o inválido
+   *       403:
+   *         description: Se requiere grupo dispatcher
+   *       404:
+   *         description: Emergencia no encontrada
+   *       409:
+   *         description: La emergencia no está pendiente
+   *       503:
+   *         description: Kafka no disponible
+   */
+  router.patch('/:id/validate', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.validateEmergency(req.params.id, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
+   * /api/emergencies/{id}/discard:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: Descarta una emergencia pendiente
+   *     description: |
+   *       Requiere grupo `dispatcher`. Solo permite la transición PENDING -> DISCARDED.
+   *       El motivo es obligatorio, se registra con el actor y se publica EmergencyStatusUpdated en Kafka.
+   *     security:
+   *       - bearerAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *           format: uuid
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             $ref: '#/components/schemas/DiscardEmergencyRequest'
+   *     responses:
+   *       200:
+   *         description: Emergencia descartada
+   *       400:
+   *         description: El motivo es obligatorio
+   *       401:
+   *         description: Token ausente o inválido
+   *       403:
+   *         description: Se requiere grupo dispatcher
+   *       404:
+   *         description: Emergencia no encontrada
+   *       409:
+   *         description: La emergencia no está pendiente
+   *       503:
+   *         description: Kafka no disponible
+   */
+  router.patch('/:id/discard', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.discardEmergency(req.params.id, req.body || {}, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
    * /api/emergencies/{id}/cancel:
    *   patch:
    *     tags: [Emergencies]

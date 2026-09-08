@@ -258,6 +258,186 @@ describe('Panic Button API', () => {
 });
 
 describe('Emergencies API', () => {
+  it('allows a dispatcher to validate a pending emergency and publishes the status event', async () => {
+    const publishedEvents = [];
+    const validationKafka = {
+      publishEvent: async (topic, event) => publishedEvents.push({ topic, event }),
+      isConnected: () => true,
+      checkHealth: async () => false,
+    };
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createApp(validationKafka, sharedRepo, {
+      authenticate: stubAuthenticate({ sub: 'U000042', groups: ['citizen'] }),
+    });
+    const dispatcherApp = createApp(validationKafka, sharedRepo, {
+      authenticate: stubAuthenticate({ sub: 'U000999', groups: ['dispatcher'] }),
+    });
+
+    const createResponse = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${createResponse.body.emergencyId}/validate`)
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      success: true,
+      data: { status: 'VALIDATED' },
+    });
+    expect(publishedEvents.at(-1)).toMatchObject({
+      topic: 'emergencias.estado-actualizado',
+      event: {
+        type: 'EmergencyStatusUpdated',
+        previousStatus: 'PENDING',
+        newStatus: 'VALIDATED',
+        actor: 'U000999',
+      },
+    });
+  });
+
+  it('forbids a citizen from validating an emergency', async () => {
+    const response = await request(app)
+      .patch('/api/emergencies/00000000-0000-0000-0000-000000000000/validate')
+      .expect(403);
+
+    expect(response.body.error).toBe('ForbiddenError');
+  });
+
+  it('returns 409 when validating an emergency that is not pending', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp({
+      sub: 'U000999',
+      groups: ['dispatcher'],
+    }, sharedRepo);
+    const citizenApp = createTestApp({
+      sub: 'U000042',
+      groups: ['citizen'],
+    }, sharedRepo);
+
+    const createResponse = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+
+    await request(dispatcherApp)
+      .patch(`/api/emergencies/${createResponse.body.emergencyId}/validate`)
+      .expect(200);
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${createResponse.body.emergencyId}/validate`)
+      .expect(409);
+
+    expect(response.body.error).toBe('ConflictError');
+  });
+
+  it('allows a dispatcher to discard a pending emergency with a reason and publishes the status event', async () => {
+    const publishedEvents = [];
+    const discardKafka = {
+      publishEvent: async (topic, event) => publishedEvents.push({ topic, event }),
+      isConnected: () => true,
+      checkHealth: async () => false,
+    };
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createApp(discardKafka, sharedRepo, {
+      authenticate: stubAuthenticate({ sub: 'U000042', groups: ['citizen'] }),
+    });
+    const dispatcherApp = createApp(discardKafka, sharedRepo, {
+      authenticate: stubAuthenticate({ sub: 'U000999', groups: ['dispatcher'] }),
+    });
+
+    const createResponse = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${createResponse.body.emergencyId}/discard`)
+      .send({ reason: 'Reporte invalido' })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      success: true,
+      data: { status: 'DISCARDED' },
+    });
+    expect(sharedRepo.updateStatusCalls.at(-1)).toMatchObject({
+      newStatus: 'DISCARDED',
+      actor: 'U000999',
+      reason: 'Reporte invalido',
+    });
+    expect(publishedEvents.at(-1)).toMatchObject({
+      topic: 'emergencias.estado-actualizado',
+      event: {
+        type: 'EmergencyStatusUpdated',
+        previousStatus: 'PENDING',
+        newStatus: 'DISCARDED',
+        actor: 'U000999',
+        reason: 'Reporte invalido',
+      },
+    });
+  });
+
+  it('requires a discard reason and only allows dispatchers to discard', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({
+      sub: 'U000042',
+      groups: ['citizen'],
+    }, sharedRepo);
+    const dispatcherApp = createTestApp({
+      sub: 'U000999',
+      groups: ['dispatcher'],
+    }, sharedRepo);
+
+    const createResponse = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+    const emergencyId = createResponse.body.emergencyId;
+
+    await request(citizenApp)
+      .patch(`/api/emergencies/${emergencyId}/discard`)
+      .send({ reason: 'No corresponde' })
+      .expect(403);
+
+    const missingReason = await request(dispatcherApp)
+      .patch(`/api/emergencies/${emergencyId}/discard`)
+      .send({ reason: '   ' })
+      .expect(400);
+
+    expect(missingReason.body.error).toBe('ValidationError');
+  });
+
+  it('returns 409 when discarding an emergency that is not pending', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({
+      sub: 'U000042',
+      groups: ['citizen'],
+    }, sharedRepo);
+    const dispatcherApp = createTestApp({
+      sub: 'U000999',
+      groups: ['dispatcher'],
+    }, sharedRepo);
+
+    const createResponse = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+    const emergencyId = createResponse.body.emergencyId;
+
+    await request(dispatcherApp)
+      .patch(`/api/emergencies/${emergencyId}/discard`)
+      .send({ reason: 'Primera revisión' })
+      .expect(200);
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${emergencyId}/discard`)
+      .send({ reason: 'Segundo intento' })
+      .expect(409);
+
+    expect(response.body.error).toBe('ConflictError');
+  });
+
   it('cancels a pending emergency using JWT sub as actor, ignoring a spoofed actor in the body', async () => {
     const sharedRepo = createMockEmergencyRepository();
     const ownerApp = createTestApp({

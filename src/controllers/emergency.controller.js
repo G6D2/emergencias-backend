@@ -1,4 +1,4 @@
-const { NotFoundError, ConflictError, ForbiddenError } = require('../errors/app-errors');
+const { NotFoundError, ConflictError, ForbiddenError, ValidationError } = require('../errors/app-errors');
 const { canCancelEmergency } = require('../auth/authorize');
 
 // Estados desde los que un citizen puede cancelar su propia emergency.
@@ -41,6 +41,82 @@ class EmergencyController {
       data: emergencies,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
+  }
+
+  async validateEmergency(id, user) {
+    const actor = user.sub;
+    const emergency = await this.emergencyRepository.findById(id);
+
+    if (!emergency) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    if (emergency.status !== 'PENDING') {
+      throw new ConflictError(
+        `Emergency in status ${emergency.status} cannot be validated`
+      );
+    }
+
+    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+      newStatus: 'VALIDATED',
+      actor,
+    });
+
+    await this.kafkaService.publishEvent(
+      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+      {
+        type: 'EmergencyStatusUpdated',
+        emergencyId: updated.id,
+        previousStatus: history.previousStatus,
+        newStatus: history.newStatus,
+        actor,
+        timestamp: new Date().toISOString(),
+      }
+    );
+
+    return { success: true, data: updated };
+  }
+
+  async discardEmergency(id, { reason } = {}, user) {
+    const actor = user.sub;
+    const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
+
+    if (!normalizedReason) {
+      throw new ValidationError('A discard reason is required');
+    }
+
+    const emergency = await this.emergencyRepository.findById(id);
+
+    if (!emergency) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    if (emergency.status !== 'PENDING') {
+      throw new ConflictError(
+        `Emergency in status ${emergency.status} cannot be discarded`
+      );
+    }
+
+    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+      newStatus: 'DISCARDED',
+      actor,
+      reason: normalizedReason,
+    });
+
+    await this.kafkaService.publishEvent(
+      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+      {
+        type: 'EmergencyStatusUpdated',
+        emergencyId: updated.id,
+        previousStatus: history.previousStatus,
+        newStatus: history.newStatus,
+        actor,
+        reason: normalizedReason,
+        timestamp: new Date().toISOString(),
+      }
+    );
+
+    return { success: true, data: updated };
   }
 
   /**
