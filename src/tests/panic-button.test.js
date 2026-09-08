@@ -57,6 +57,18 @@ function createMockEmergencyRepository() {
       };
     },
     findPage: async () => ({ emergencies: [...emergencies.values()], total: emergencies.size }),
+    findOutboxPage: async ({ page, limit }) => ({
+      events: [{
+        id: 'outbox-event-1',
+        topic: 'emergencias.boton-panico',
+        status: 'PENDING',
+        attempts: 0,
+        createdAt: new Date().toISOString(),
+      }],
+      total: 1,
+      page,
+      limit,
+    }),
   };
 }
 
@@ -81,6 +93,45 @@ function createTestApp(authenticateUser, repository = createMockEmergencyReposit
 const app = createTestApp();
 
 describe('Panic Button API', () => {
+  it('accepts the emergency when Kafka is unavailable if the repository owns the outbox transaction', async () => {
+    const savedEmergency = {
+      id: 'outbox-emergency-1',
+      userId: 'U000042',
+      status: 'PENDING',
+      locationAnonymized: false,
+    };
+    const outboxEvents = [];
+    const outboxRepository = {
+      insertOutboxEvent: () => {},
+      create: async ({ outboxEvent }) => {
+        outboxEvents.push(outboxEvent);
+        return savedEmergency;
+      },
+      findById: async () => savedEmergency,
+      findPage: async () => ({ emergencies: [savedEmergency], total: 1 }),
+    };
+    const unavailableKafka = {
+      publishEvent: async () => {
+        throw new Error('Kafka unavailable');
+      },
+      isConnected: () => false,
+      isEnabled: () => true,
+      checkHealth: async () => false,
+    };
+    const outboxApp = createApp(unavailableKafka, outboxRepository, {
+      authenticate: stubAuthenticate(),
+    });
+
+    const response = await request(outboxApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+
+    expect(response.body.success).toBe(true);
+    expect(outboxEvents).toHaveLength(1);
+    expect(outboxEvents[0].topic).toBe('emergencias.boton-panico');
+  });
+
   describe('POST /api/panic-button', () => {
     it('should trigger panic button successfully using JWT sub as userId', async () => {
       const payload = {
@@ -258,6 +309,36 @@ describe('Panic Button API', () => {
 });
 
 describe('Emergencies API', () => {
+  it('allows a dispatcher to inspect outbox status without exposing payload', async () => {
+    const dispatcherApp = createTestApp({
+      sub: 'U000999',
+      groups: ['dispatcher'],
+    });
+
+    const response = await request(dispatcherApp)
+      .get('/api/outbox-events?status=PENDING&limit=10')
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      data: [{
+        id: 'outbox-event-1',
+        status: 'PENDING',
+      }],
+      pagination: {
+        page: 1,
+        limit: 10,
+        total: 1,
+      },
+    });
+    expect(response.body.data[0].payload).toBeUndefined();
+  });
+
+  it('forbids a citizen from inspecting outbox status', async () => {
+    await request(app)
+      .get('/api/outbox-events')
+      .expect(403);
+  });
+
   it('allows a dispatcher to validate a pending emergency and publishes the status event', async () => {
     const publishedEvents = [];
     const validationKafka = {

@@ -60,19 +60,33 @@ class EmergencyController {
     const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'VALIDATED',
       actor,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) => ({
+          type: 'EmergencyStatusUpdated',
+          eventId,
+          emergencyId: savedEmergency.id,
+          previousStatus: savedHistory.previousStatus,
+          newStatus: savedHistory.newStatus,
+          actor,
+          timestamp: new Date().toISOString(),
+        }),
+      },
     });
 
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        timestamp: new Date().toISOString(),
-      }
-    );
+    if (typeof this.emergencyRepository.insertOutboxEvent !== 'function') {
+      await this.kafkaService.publishEvent(
+        process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        {
+          type: 'EmergencyStatusUpdated',
+          emergencyId: updated.id,
+          previousStatus: history.previousStatus,
+          newStatus: history.newStatus,
+          actor,
+          timestamp: new Date().toISOString(),
+        }
+      );
+    }
 
     return { success: true, data: updated };
   }
@@ -101,20 +115,35 @@ class EmergencyController {
       newStatus: 'DISCARDED',
       actor,
       reason: normalizedReason,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) => ({
+          type: 'EmergencyStatusUpdated',
+          eventId,
+          emergencyId: savedEmergency.id,
+          previousStatus: savedHistory.previousStatus,
+          newStatus: savedHistory.newStatus,
+          actor,
+          reason: normalizedReason,
+          timestamp: new Date().toISOString(),
+        }),
+      },
     });
 
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        reason: normalizedReason,
-        timestamp: new Date().toISOString(),
-      }
-    );
+    if (typeof this.emergencyRepository.insertOutboxEvent !== 'function') {
+      await this.kafkaService.publishEvent(
+        process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        {
+          type: 'EmergencyStatusUpdated',
+          emergencyId: updated.id,
+          previousStatus: history.previousStatus,
+          newStatus: history.newStatus,
+          actor,
+          reason: normalizedReason,
+          timestamp: new Date().toISOString(),
+        }
+      );
+    }
 
     return { success: true, data: updated };
   }
@@ -146,20 +175,35 @@ class EmergencyController {
       newStatus: 'CANCELLED',
       actor,
       reason,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) => ({
+          type: 'EmergencyStatusUpdated',
+          eventId,
+          emergencyId: savedEmergency.id,
+          previousStatus: savedHistory.previousStatus,
+          newStatus: savedHistory.newStatus,
+          actor,
+          reason,
+          timestamp: new Date().toISOString(),
+        }),
+      },
     });
 
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        reason,
-        timestamp: new Date().toISOString(),
-      }
-    );
+    if (typeof this.emergencyRepository.insertOutboxEvent !== 'function') {
+      await this.kafkaService.publishEvent(
+        process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        {
+          type: 'EmergencyStatusUpdated',
+          emergencyId: updated.id,
+          previousStatus: history.previousStatus,
+          newStatus: history.newStatus,
+          actor,
+          reason,
+          timestamp: new Date().toISOString(),
+        }
+      );
+    }
 
     return { success: true, data: updated };
   }

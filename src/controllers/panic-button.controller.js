@@ -34,12 +34,23 @@ class PanicButtonController {
       description: payload.description || 'Botón de pánico activado',
       severity: payload.severity || 'critical',
       status: 'PENDING',
+      outboxEvent: {
+        topic: process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico',
+        payload: (savedEmergency, eventId) => ({
+          type: 'EmergencyCreated',
+          eventId,
+          data: savedEmergency,
+        }),
+      },
     });
 
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico',
-      emergency
-    );
+    // Compatibilidad con repositories legacy usados por consumidores/tests.
+    if (typeof this.emergencyRepository.insertOutboxEvent !== 'function') {
+      await this.kafkaService.publishEvent(
+        process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico',
+        emergency
+      );
+    }
 
     return {
       success: true,
