@@ -19,7 +19,7 @@ function createOutboxRoutes(emergencyRepository, authenticate) {
    *         name: status
    *         schema:
    *           type: string
-   *           enum: [PENDING, PROCESSING, PUBLISHED]
+  *           enum: [PENDING, PROCESSING, PUBLISHED, FAILED]
    *       - in: query
    *         name: topic
    *         schema:

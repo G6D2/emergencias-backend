@@ -42,6 +42,51 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(created.createdAt).toBeDefined();
   });
 
+  it('crea la emergencia y su evento outbox en la misma transacción', async () => {
+    const input = buildEmergency();
+    const created = await repository.create({
+      ...input,
+      outboxEvent: {
+        topic: 'emergencias.boton-panico',
+        payload: (emergency, eventId) => ({
+          type: 'EmergenciaCreada',
+          eventId,
+          correlationId: emergency.id,
+          data: { id: emergency.id, severity: emergency.severity },
+        }),
+      },
+    });
+
+    const outbox = await getPool().query(
+      `SELECT topic, status, payload
+       FROM outbox_events
+       WHERE payload->'data'->>'id' = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [input.id]
+    );
+
+    expect(created.id).toBe(input.id);
+    expect(outbox.rows).toHaveLength(1);
+    expect(outbox.rows[0].status).toBe('PENDING');
+    expect(outbox.rows[0].payload.data.id).toBe(input.id);
+  });
+
+  it('rolls back the emergency if the outbox insert fails', async () => {
+    const input = buildEmergency();
+
+    await expect(repository.create({
+      ...input,
+      outboxEvent: {
+        topic: null,
+        payload: { type: 'InvalidEvent' },
+      },
+    })).rejects.toThrow();
+
+    const emergency = await repository.findById(input.id);
+    expect(emergency).toBeNull();
+  });
+
   it('persiste ubicación cifrada (sin lat/lng en claro en la fila)', async () => {
     const input = buildEmergency();
     await repository.create(input);

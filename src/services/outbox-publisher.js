@@ -6,6 +6,10 @@ class OutboxPublisher {
     this.kafkaService = kafkaService;
     this.batchSize = options.batchSize || 50;
     this.intervalMs = options.intervalMs || 5000;
+    this.maxAttempts = options.maxAttempts || Number(process.env.OUTBOX_MAX_ATTEMPTS || 10);
+    this.maxBackoffMs = options.maxBackoffMs || Number(process.env.OUTBOX_MAX_BACKOFF_MS || 15 * 60 * 1000);
+    this.publishedRetentionMs = options.publishedRetentionMs
+      || Number(process.env.OUTBOX_PUBLISHED_RETENTION_HOURS || 168) * 60 * 60 * 1000;
     this.timer = null;
     this.running = false;
   }
@@ -47,36 +51,51 @@ class OutboxPublisher {
     );
   }
 
-  async markFailed(id, error) {
+  async markFailed(id, attempts, error) {
+    const failed = attempts >= this.maxAttempts;
+    const backoffMs = Math.min(30_000 * (2 ** Math.max(attempts - 1, 0)), this.maxBackoffMs);
     await this.pool.query(
       `UPDATE outbox_events
-       SET status = 'PENDING', available_at = now() + interval '30 seconds',
-           locked_at = NULL, last_error = $2
+       SET status = $2, available_at = now() + ($3::double precision * interval '1 millisecond'),
+           locked_at = NULL, last_error = $4
        WHERE id = $1`,
-      [id, String(error.message || error).slice(0, 2000)]
+      [id, failed ? 'FAILED' : 'PENDING', failed ? 0 : backoffMs, String(error.message || error).slice(0, 2000)]
     );
   }
 
+  async purgePublished() {
+    const result = await this.pool.query(
+      `DELETE FROM outbox_events
+       WHERE status = 'PUBLISHED'
+         AND published_at < now() - ($1::double precision * interval '1 millisecond')`,
+      [this.publishedRetentionMs]
+    );
+    return result.rowCount;
+  }
+
   async runOnce() {
-    if (this.running || !this.kafkaService.isEnabled()) return 0;
+    if (this.running) return 0;
     this.running = true;
     let published = 0;
     try {
-      const events = await this.claimBatch();
-      for (const event of events) {
-        try {
-          const sent = await this.kafkaService.publishEvent(event.topic, event.payload);
-          if (!sent) throw new Error('Kafka disabled or not connected');
-          await this.markPublished(event.id);
-          published += 1;
-        } catch (error) {
-          await this.markFailed(event.id, error);
-          secureLog('warn', 'Outbox event delivery failed', {
-            ...summarizeEventForLog(event.topic, event.payload),
-            message: error.message,
-          });
+      if (this.kafkaService.isEnabled()) {
+        const events = await this.claimBatch();
+        for (const event of events) {
+          try {
+            const sent = await this.kafkaService.publishEvent(event.topic, event.payload);
+            if (!sent) throw new Error('Kafka disabled or not connected');
+            await this.markPublished(event.id);
+            published += 1;
+          } catch (error) {
+            await this.markFailed(event.id, event.attempts, error);
+            secureLog('warn', 'Outbox event delivery failed', {
+              ...summarizeEventForLog(event.topic, event.payload),
+              message: error.message,
+            });
+          }
         }
       }
+      await this.purgePublished();
       return published;
     } finally {
       this.running = false;

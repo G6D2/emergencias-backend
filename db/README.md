@@ -26,6 +26,12 @@ Los eventos se marcan como `PUBLISHED` solo después de que Kafka confirma el
 envío. El outbox proporciona entrega al menos una vez; los consumidores deben
 usar `event.id` o `emergencyId` para hacer sus operaciones idempotentes.
 
+Los eventos fallidos usan backoff exponencial hasta `OUTBOX_MAX_ATTEMPTS`
+(default: 10); después pasan a `FAILED` para evitar reintentos infinitos.
+Las filas `PUBLISHED` se purgan después de `OUTBOX_PUBLISHED_RETENTION_HOURS`
+(default: 168 horas). Con `KAFKA_ENABLED=false`, los eventos permanecen
+`PENDING` hasta que exista un broker y se habilite el publisher.
+
 ## Decisiones de diseño
 
 - **`user_id` sin FK**: el panic button solo manda `payload.userId` (todavía no hay Auth).

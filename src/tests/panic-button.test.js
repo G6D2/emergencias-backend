@@ -37,8 +37,8 @@ function createMockEmergencyRepository() {
       accessAudit.push(entry);
       return entry;
     },
-    updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
-      updateStatusCalls.push({ id, newStatus, actor, reason });
+    updateStatus: async (id, { newStatus, actor = null, reason = null, outboxEvent = null }) => {
+      updateStatusCalls.push({ id, newStatus, actor, reason, outboxEvent });
       const current = emergencies.get(id);
       if (!current) {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
@@ -130,6 +130,14 @@ describe('Panic Button API', () => {
     expect(response.body.success).toBe(true);
     expect(outboxEvents).toHaveLength(1);
     expect(outboxEvents[0].topic).toBe('emergencias.boton-panico');
+    const event = outboxEvents[0].payload(savedEmergency, 'event-1');
+    expect(event).toMatchObject({
+      type: 'EmergenciaCreada',
+      eventId: 'event-1',
+      correlationId: savedEmergency.id,
+    });
+    expect(event.data.latitude).toBeUndefined();
+    expect(event.data.longitude).toBeUndefined();
   });
 
   describe('POST /api/panic-button', () => {
@@ -339,10 +347,9 @@ describe('Emergencies API', () => {
       .expect(403);
   });
 
-  it('allows a dispatcher to validate a pending emergency and publishes the status event', async () => {
-    const publishedEvents = [];
+  it('allows a dispatcher to validate a pending emergency and stores a status outbox event', async () => {
     const validationKafka = {
-      publishEvent: async (topic, event) => publishedEvents.push({ topic, event }),
+      publishEvent: async () => {},
       isConnected: () => true,
       checkHealth: async () => false,
     };
@@ -367,10 +374,16 @@ describe('Emergencies API', () => {
       success: true,
       data: { status: 'VALIDATED' },
     });
-    expect(publishedEvents.at(-1)).toMatchObject({
-      topic: 'emergencias.estado-actualizado',
-      event: {
-        type: 'EmergencyStatusUpdated',
+    const statusEvent = sharedRepo.updateStatusCalls.at(-1).outboxEvent;
+    expect(statusEvent.topic).toBe('emergencias.estado-actualizado');
+    expect(statusEvent.payload({
+      emergency: response.body.data,
+      history: { previousStatus: 'PENDING', newStatus: 'VALIDATED' },
+    }, 'event-1')).toMatchObject({
+      type: 'EmergenciaEstadoActualizado',
+      eventId: 'event-1',
+      correlationId: response.body.data.id,
+      data: {
         previousStatus: 'PENDING',
         newStatus: 'VALIDATED',
         actor: 'U000999',
@@ -413,10 +426,9 @@ describe('Emergencies API', () => {
     expect(response.body.error).toBe('ConflictError');
   });
 
-  it('allows a dispatcher to discard a pending emergency with a reason and publishes the status event', async () => {
-    const publishedEvents = [];
+  it('allows a dispatcher to discard a pending emergency with a reason and stores the status outbox event', async () => {
     const discardKafka = {
-      publishEvent: async (topic, event) => publishedEvents.push({ topic, event }),
+      publishEvent: async () => {},
       isConnected: () => true,
       checkHealth: async () => false,
     };
@@ -447,10 +459,16 @@ describe('Emergencies API', () => {
       actor: 'U000999',
       reason: 'Reporte invalido',
     });
-    expect(publishedEvents.at(-1)).toMatchObject({
-      topic: 'emergencias.estado-actualizado',
-      event: {
-        type: 'EmergencyStatusUpdated',
+    const statusEvent = sharedRepo.updateStatusCalls.at(-1).outboxEvent;
+    expect(statusEvent.topic).toBe('emergencias.estado-actualizado');
+    expect(statusEvent.payload({
+      emergency: response.body.data,
+      history: { previousStatus: 'PENDING', newStatus: 'DISCARDED' },
+    }, 'event-2')).toMatchObject({
+      type: 'EmergenciaEstadoActualizado',
+      eventId: 'event-2',
+      correlationId: response.body.data.id,
+      data: {
         previousStatus: 'PENDING',
         newStatus: 'DISCARDED',
         actor: 'U000999',
