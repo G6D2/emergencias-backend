@@ -262,7 +262,7 @@ class EmergencyRepository {
     };
   }
 
-  async findPage({ statuses, severity, from, to, assignedOfficerId, emergencyType, page, limit, sortBy, order }) {
+  async findPage({ userId, statuses, severity, from, to, assignedOfficerId, emergencyType, page, limit, sortBy, order }) {
     const conditions = [];
     const values = [];
 
@@ -271,6 +271,7 @@ class EmergencyRepository {
       conditions.push(sql.replace('?', `$${values.length}`));
     }
 
+    if (userId) addCondition('user_id = ?', userId);
     if (statuses.length > 0) addCondition('status = ANY(?)', statuses);
     if (severity) addCondition('severity = ?', severity);
     if (from) addCondition('created_at >= ?', from);

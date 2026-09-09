@@ -1,5 +1,6 @@
 const { NotFoundError, ForbiddenError, ValidationError } = require('../errors/app-errors');
-const { canCancelEmergency } = require('../auth/authorize');
+const { canCancelEmergency, userHasGroup } = require('../auth/authorize');
+const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
 const { assertTransition } = require('../domain/emergency-status');
@@ -16,7 +17,11 @@ class EmergencyController {
    * Lista paginada de emergencias. Endpoint dispatcher-only (ver requireDispatcher en la ruta).
    * @param {object} query
    */
-  async listEmergencies(query) {
+  async listEmergencies(query, user = null) {
+    // Un citizen solo ve lo suyo: se ignora cualquier userId del query y se
+    // usa el sub del token. Dispatcher (y futuros roles operativos) ven todo.
+    const restrictToOwn = Boolean(user) && !userHasGroup(user, GROUPS.DISPATCHER);
+    const userId = restrictToOwn ? user.sub : undefined;
     const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
     const statuses = String(query.status || query.statuses || '')
@@ -26,6 +31,7 @@ class EmergencyController {
     const sortBy = query.sortBy === 'priority' ? 'priority' : 'createdAt';
     const order = query.order === 'asc' ? 'asc' : 'desc';
     const { emergencies, total } = await this.emergencyRepository.findPage({
+      userId,
       statuses,
       severity: query.severity || query.priority,
       from: query.from,

@@ -421,6 +421,50 @@ describe('Panic Button API', () => {
 });
 
 describe('Emergencies API', () => {
+  it('un citizen lista solo sus propias emergencias (filtro forzado por sub del JWT)', async () => {
+    const calls = [];
+    const repository = {
+      ...createMockEmergencyRepository(),
+      findPage: async (filters) => {
+        calls.push(filters);
+        return { emergencies: [], total: 0 };
+      },
+    };
+    const citizenApp = createApp(mockKafkaService, repository, {
+      authenticate: stubAuthenticate({ sub: 'CIT-jperez', groups: ['citizen'] }),
+    });
+
+    await request(citizenApp)
+      .get('/api/emergencies?limit=100&userId=OTRO')
+      .expect(200);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].userId).toBe('CIT-jperez');
+  });
+
+  it('un dispatcher lista sin filtro de usuario', async () => {
+    const calls = [];
+    const repository = {
+      ...createMockEmergencyRepository(),
+      findPage: async (filters) => {
+        calls.push(filters);
+        return { emergencies: [], total: 0 };
+      },
+    };
+    const dispatcherApp = createApp(mockKafkaService, repository, {
+      authenticate: stubAuthenticate({ sub: 'U000999', groups: ['dispatcher'] }),
+    });
+
+    await request(dispatcherApp).get('/api/emergencies').expect(200);
+
+    expect(calls[0].userId).toBeUndefined();
+  });
+
+  it('un usuario sin grupo citizen ni dispatcher recibe 403 al listar', async () => {
+    const otherApp = createTestApp({ sub: 'X1', groups: ['officer'] });
+    await request(otherApp).get('/api/emergencies').expect(403);
+  });
+
   it('allows a dispatcher to inspect outbox status without exposing payload', async () => {
     const dispatcherApp = createTestApp({
       sub: 'U000999',
@@ -793,12 +837,14 @@ describe('GET /api/emergencies', () => {
     expect(response.body.pagination).toMatchObject({ page: 1, limit: 20 });
   });
 
-  it('forbids a citizen from using the dispatcher listing endpoint', async () => {
+  it('a citizen can use the listing endpoint but only sees its own emergencies', async () => {
+    // El mock repository devuelve todo; lo que se verifica acá es que el
+    // endpoint ya no es exclusivo del dispatcher (el scoping se prueba arriba).
     const response = await request(app)
       .get('/api/emergencies')
-      .expect(403);
+      .expect(200);
 
-    expect(response.body.error).toBe('ForbiddenError');
+    expect(Array.isArray(response.body.data)).toBe(true);
   });
 
   it('filtra por emergencyType pasando el alias del front normalizado al repository', async () => {
