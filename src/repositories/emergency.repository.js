@@ -1,5 +1,6 @@
 const { NotFoundError } = require('../errors/app-errors');
 const { assertTransition } = require('../domain/emergency-status');
+const { assertEmergencyType } = require('../domain/emergency-type');
 const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
@@ -37,6 +38,7 @@ function mapEmergency(row, locationCrypto) {
 
   return {
     id: row.id,
+    correlationId: row.correlation_id,
     userId: row.user_id,
     latitude,
     longitude,
@@ -76,6 +78,15 @@ function mapAccessAudit(row) {
   };
 }
 
+// INSERT compartido por las dos ramas de create() (sin/con outbox).
+// correlation_id cae en el propio id si no viene (tarea #58).
+const INSERT_SQL = `INSERT INTO emergencies (
+     id, correlation_id, user_id, latitude, longitude, location_encrypted,
+     description, severity, emergency_type, status
+   )
+   VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'))
+   RETURNING *`;
+
 // Repository de persistencia de emergencies.
 // No sabe nada de Kafka, controllers ni HTTP: solo SQL + cifrado de ubicación.
 class EmergencyRepository {
@@ -84,32 +95,33 @@ class EmergencyRepository {
     this.locationCrypto = options.locationCrypto || createLocationCrypto();
   }
 
-  async create({ id, userId, latitude, longitude, description, severity, status, outboxEvent = null }) {
+  async create({
+    id, correlationId, userId, latitude, longitude, description, severity, emergencyType, status,
+    outboxEvent = null,
+  }) {
     const locationEncrypted = this.locationCrypto.encryptLocation({ latitude, longitude });
+    const insertValues = [
+      id,
+      correlationId || id,
+      userId,
+      locationEncrypted,
+      description || null,
+      severity || null,
+      // Se normaliza también acá (defensa en profundidad, igual que el CHECK
+      // de V10): un alias del front llega al INSERT ya como canónico.
+      assertEmergencyType(emergencyType),
+      status || null,
+    ];
 
     if (!outboxEvent) {
-      const result = await this.pool.query(
-        `INSERT INTO emergencies (
-           id, user_id, latitude, longitude, location_encrypted, description, severity, status
-         )
-         VALUES ($1, $2, NULL, NULL, $3, $4, $5, COALESCE($6, 'PENDING'))
-         RETURNING *`,
-        [id, userId, locationEncrypted, description || null, severity || null, status || null]
-      );
+      const result = await this.pool.query(INSERT_SQL, insertValues);
       return mapEmergency(result.rows[0], this.locationCrypto);
     }
 
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const result = await client.query(
-        `INSERT INTO emergencies (
-           id, user_id, latitude, longitude, location_encrypted, description, severity, status
-         )
-         VALUES ($1, $2, NULL, NULL, $3, $4, $5, COALESCE($6, 'PENDING'))
-         RETURNING *`,
-        [id, userId, locationEncrypted, description || null, severity || null, status || null]
-      );
+      const result = await client.query(INSERT_SQL, insertValues);
       const emergency = mapEmergency(result.rows[0], this.locationCrypto);
       await this.insertOutboxEvent(client, outboxEvent, emergency);
       await client.query('COMMIT');
@@ -264,7 +276,9 @@ class EmergencyRepository {
     if (from) addCondition('created_at >= ?', from);
     if (to) addCondition('created_at <= ?', to);
     if (assignedOfficerId) addCondition('assigned_officer_id = ?', assignedOfficerId);
-    if (emergencyType) addCondition('emergency_type = ?', emergencyType);
+    // El filtro acepta canónico o alias del front; inválido → ValidationError.
+    const normalizedType = assertEmergencyType(emergencyType);
+    if (normalizedType) addCondition('emergency_type = ?', normalizedType);
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const offset = (page - 1) * limit;

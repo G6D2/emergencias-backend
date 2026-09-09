@@ -1,5 +1,6 @@
 const swaggerJsdoc = require('swagger-jsdoc');
 const { EMERGENCY_STATUSES } = require('./domain/emergency-status');
+const { EMERGENCY_TYPES } = require('./domain/emergency-type');
 
 const options = {
   definition: {
@@ -50,6 +51,11 @@ const options = {
           type: 'object',
           properties: {
             id: { type: 'string', format: 'uuid' },
+            correlationId: {
+              type: 'string',
+              format: 'uuid',
+              description: 'Igual al id al crear (ADR-001). Traza creación → priorización → despacho en los eventos.',
+            },
             userId: { type: 'string', example: 'U000042', description: 'Claim sub del JWT' },
             latitude: { type: 'number', nullable: true, example: -34.6037 },
             longitude: { type: 'number', nullable: true, example: -58.3816 },
@@ -60,6 +66,12 @@ const options = {
             },
             description: { type: 'string' },
             severity: { type: 'string', example: 'critical' },
+            emergencyType: {
+              type: 'string',
+              enum: [...EMERGENCY_TYPES],
+              example: 'PANICO',
+              description: 'Catálogo cerrado. PANICO es el botón SOS (sin categoría declarada).',
+            },
             status: {
               type: 'string',
               enum: [...EMERGENCY_STATUSES],
@@ -82,6 +94,15 @@ const options = {
               type: 'string',
               example: 'critical',
               default: 'critical',
+            },
+            emergencyType: {
+              type: 'string',
+              enum: [...EMERGENCY_TYPES],
+              default: 'PANICO',
+              example: 'INCENDIO',
+              description: 'Tipo de emergencia. Si se omite, PANICO (botón SOS). '
+                + 'Se aceptan también los alias en inglés en minúscula por compatibilidad '
+                + '(panic, medical, fire, infrastructure, disturbance, other), que se normalizan al canónico.',
             },
           },
         },

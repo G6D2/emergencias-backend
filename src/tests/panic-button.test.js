@@ -14,12 +14,19 @@ function createMockEmergencyRepository() {
   const emergencies = new Map();
   const accessAudit = [];
   const updateStatusCalls = [];
+  const findPageCalls = [];
 
   return {
     updateStatusCalls,
-    create: async (emergency) => {
+    findPageCalls,
+    // Refleja lo que devuelve mapEmergency: sin el outboxEvent y con
+    // emergencyType/correlationId tal como los recibe del controller.
+    create: async ({ outboxEvent, ...emergency }) => {
+      void outboxEvent;
       const saved = {
         ...emergency,
+        correlationId: emergency.correlationId || emergency.id,
+        emergencyType: emergency.emergencyType || null,
         locationAnonymized: false,
       };
       emergencies.set(saved.id, saved);
@@ -56,7 +63,12 @@ function createMockEmergencyRepository() {
         },
       };
     },
-    findPage: async () => ({ emergencies: [...emergencies.values()], total: emergencies.size }),
+    findPage: async (filters) => {
+      findPageCalls.push(filters);
+      const matching = [...emergencies.values()]
+        .filter((emergency) => !filters.emergencyType || emergency.emergencyType === filters.emergencyType);
+      return { emergencies: matching, total: matching.length };
+    },
     findOutboxPage: async ({ page, limit }) => ({
       events: [{
         id: 'outbox-event-1',
@@ -159,6 +171,98 @@ describe('Panic Button API', () => {
       expect(response.body.emergencyId).toBeDefined();
       expect(response.body.data.userId).toBe('U000042');
       expect(response.body.data.status).toBe('PENDING');
+    });
+
+    it('persiste el emergencyType normalizado al catálogo (alias del front fire → INCENDIO)', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          emergencyType: 'fire',
+        })
+        .expect(201);
+
+      expect(response.body.data.emergencyType).toBe('INCENDIO');
+    });
+
+    it('acepta el canónico en cualquier casing', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          emergencyType: ' medica ',
+        })
+        .expect(201);
+
+      expect(response.body.data.emergencyType).toBe('MEDICA');
+    });
+
+    it('sin emergencyType asume PANICO (es el endpoint del botón SOS)', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
+
+      expect(response.body.data.emergencyType).toBe('PANICO');
+    });
+
+    it('rechaza con 400 un emergencyType fuera del catálogo y no crea nada', async () => {
+      const repo = createMockEmergencyRepository();
+      const isolatedApp = createTestApp(undefined, repo);
+
+      const response = await request(isolatedApp)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          emergencyType: 'flood',
+        })
+        .expect(400);
+
+      expect(response.body.error).toBe('ValidationError');
+      expect(response.body.message).toContain('MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO');
+      const { total } = await repo.findPage({});
+      expect(total).toBe(0);
+    });
+
+    it('devuelve correlationId igual al id de la emergencia', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
+
+      expect(response.body.data.correlationId).toBe(response.body.emergencyId);
+      expect(response.body.data.correlationId).toBe(response.body.data.id);
+    });
+
+    it('el evento EmergenciaCreada lleva el tipo canónico y correlationId = id en data', async () => {
+      const outboxEvents = [];
+      const repo = createMockEmergencyRepository();
+      const originalCreate = repo.create;
+      repo.create = async (emergency) => {
+        outboxEvents.push(emergency.outboxEvent);
+        return originalCreate(emergency);
+      };
+      const eventApp = createTestApp(undefined, repo);
+
+      const response = await request(eventApp)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          emergencyType: 'disturbance',
+        })
+        .expect(201);
+
+      const saved = await repo.findById(response.body.emergencyId);
+      const event = outboxEvents[0].payload(saved, 'event-1');
+      expect(event).toMatchObject({
+        type: 'EmergenciaCreada',
+        correlationId: saved.id,
+        data: {
+          id: saved.id,
+          correlationId: saved.id,
+          emergencyType: 'DISTURBIO_EVENTO_MASIVO',
+        },
+      });
     });
 
     it('ignores client-supplied userId and uses token sub', async () => {
@@ -695,6 +799,52 @@ describe('GET /api/emergencies', () => {
       .expect(403);
 
     expect(response.body.error).toBe('ForbiddenError');
+  });
+
+  it('filtra por emergencyType pasando el alias del front normalizado al repository', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+
+    const medical = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'medical' })
+      .expect(201);
+    await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'fire' })
+      .expect(201);
+
+    const response = await request(dispatcherApp)
+      .get('/api/emergencies?emergencyType=medical')
+      .expect(200);
+
+    expect(sharedRepo.findPageCalls.at(-1)).toMatchObject({ emergencyType: 'MEDICA' });
+    expect(response.body.data).toHaveLength(1);
+    expect(response.body.data[0]).toMatchObject({ id: medical.body.emergencyId, emergencyType: 'MEDICA' });
+  });
+
+  it('mantiene el query param type como alias de emergencyType', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+
+    await request(dispatcherApp)
+      .get('/api/emergencies?type=INCENDIO')
+      .expect(200);
+
+    expect(sharedRepo.findPageCalls.at(-1)).toMatchObject({ emergencyType: 'INCENDIO' });
+  });
+
+  it('rechaza con 400 un filtro emergencyType fuera del catálogo sin consultar el repository', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+
+    const response = await request(dispatcherApp)
+      .get('/api/emergencies?emergencyType=flood')
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
+    expect(sharedRepo.findPageCalls).toHaveLength(0);
   });
 });
 

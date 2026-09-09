@@ -42,6 +42,101 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(created.createdAt).toBeDefined();
   });
 
+  it('persiste emergency_type normalizado al catálogo y correlation_id = id (#44, #58)', async () => {
+    const input = buildEmergency({ emergencyType: 'fire' });
+
+    const created = await repository.create(input);
+
+    expect(created.emergencyType).toBe('INCENDIO');
+    expect(created.correlationId).toBe(input.id);
+
+    const raw = await getPool().query(
+      'SELECT emergency_type, correlation_id FROM emergencies WHERE id = $1',
+      [input.id]
+    );
+    expect(raw.rows[0].emergency_type).toBe('INCENDIO');
+    expect(raw.rows[0].correlation_id).toBe(input.id);
+
+    const found = await repository.findById(input.id);
+    expect(found.emergencyType).toBe('INCENDIO');
+    expect(found.correlationId).toBe(input.id);
+  });
+
+  it('persiste emergency_type y correlation_id también en la rama con outbox', async () => {
+    const input = buildEmergency({ emergencyType: 'MEDICA' });
+
+    const created = await repository.create({
+      ...input,
+      outboxEvent: {
+        topic: 'emergencias.boton-panico',
+        payload: (emergency, eventId) => ({
+          type: 'EmergenciaCreada',
+          eventId,
+          correlationId: emergency.correlationId,
+          data: { id: emergency.id, emergencyType: emergency.emergencyType },
+        }),
+      },
+    });
+
+    expect(created.emergencyType).toBe('MEDICA');
+    expect(created.correlationId).toBe(input.id);
+
+    const outbox = await getPool().query(
+      `SELECT payload FROM outbox_events WHERE payload->'data'->>'id' = $1 LIMIT 1`,
+      [input.id]
+    );
+    expect(outbox.rows[0].payload.correlationId).toBe(input.id);
+    expect(outbox.rows[0].payload.data.emergencyType).toBe('MEDICA');
+  });
+
+  it('el CHECK de V10 rechaza un emergency_type fuera del catálogo insertado directo', async () => {
+    await expect(getPool().query(
+      `INSERT INTO emergencies (id, user_id, description, severity, status, emergency_type)
+       VALUES ($1, 'user-check', 'tipo inválido', 'high', 'PENDING', 'fire')`,
+      [randomUUID()]
+    )).rejects.toMatchObject({ code: '23514' }); // check_violation
+
+    await expect(getPool().query(
+      `INSERT INTO emergencies (id, user_id, description, severity, status, emergency_type)
+       VALUES ($1, 'user-check', 'tipo inválido', 'high', 'PENDING', 'FLOOD')`,
+      [randomUUID()]
+    )).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('el repository rechaza con ValidationError un emergencyType inválido antes de tocar la base', async () => {
+    const input = buildEmergency({ emergencyType: 'flood' });
+
+    await expect(repository.create(input))
+      .rejects.toMatchObject({ name: 'ValidationError', statusCode: 400 });
+
+    const found = await repository.findById(input.id);
+    expect(found).toBeNull();
+  });
+
+  it('findPage filtra por emergencyType aceptando el alias del front', async () => {
+    const medical = buildEmergency({ emergencyType: 'medical' });
+    const fire = buildEmergency({ emergencyType: 'INCENDIO' });
+    await repository.create(medical);
+    await repository.create(fire);
+
+    const { emergencies } = await repository.findPage({
+      statuses: [],
+      emergencyType: 'medical',
+      page: 1,
+      limit: 100,
+      sortBy: 'createdAt',
+      order: 'desc',
+    });
+
+    expect(emergencies.some((emergency) => emergency.id === medical.id)).toBe(true);
+    expect(emergencies.some((emergency) => emergency.id === fire.id)).toBe(false);
+    expect(emergencies.every((emergency) => emergency.emergencyType === 'MEDICA')).toBe(true);
+
+    await expect(repository.findPage({
+      statuses: [], emergencyType: 'flood', page: 1, limit: 10, sortBy: 'createdAt', order: 'desc',
+    })).rejects.toMatchObject({ name: 'ValidationError' });
+  });
+
   it('crea la emergencia y su evento outbox en la misma transacción', async () => {
     const input = buildEmergency();
     const created = await repository.create({
