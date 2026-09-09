@@ -164,6 +164,20 @@ class EmergencyRepository {
     return result.rows.map(mapHistoryEntry);
   }
 
+  /**
+   * Detalle de una emergencia (tarea #32): la emergencia más su historial de
+   * estados en orden cronológico. Son dos queries y no un JOIN para reusar
+   * mapEmergency/mapHistoryEntry y no multiplicar la fila principal por cada
+   * entrada del historial. Devuelve null si la emergencia no existe.
+   */
+  async findDetailById(id) {
+    const emergency = await this.findById(id);
+    if (!emergency) return null;
+
+    const statusHistory = await this.findHistoryByEmergencyId(id);
+    return { ...emergency, statusHistory };
+  }
+
   async recordAccess({ emergencyId, actorSub, action }) {
     const result = await this.pool.query(
       `INSERT INTO emergency_access_audit (emergency_id, actor_sub, action)

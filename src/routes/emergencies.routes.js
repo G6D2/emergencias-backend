@@ -13,9 +13,10 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *   get:
    *     tags: [Emergencies]
    *     summary: Lista emergencias paginadas
-   *     description: Dispatcher ve todas. Citizen solo las propias (se fuerza el filtro por el sub del JWT).
    *     description: |
-   *       Requiere grupo `dispatcher`. Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
+   *       Requiere grupo `citizen` o `dispatcher`. Dispatcher ve todas; citizen solo las propias
+   *       (se fuerza el filtro por el sub del JWT).
+   *       Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
    *     security:
    *       - bearerAuth: []
    *     parameters:
@@ -82,6 +83,75 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
   // fuerza en el controller a partir del sub del JWT, no del query string).
   router.get('/', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
     const result = await controller.listEmergencies(req.query, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
+   * /api/emergencies/{id}:
+   *   get:
+   *     tags: [Emergencies]
+   *     summary: Detalle completo de una emergencia
+   *     description: |
+   *       Devuelve la emergencia con su historial de estados en orden cronológico (tarea #32).
+   *
+   *       Reglas de acceso:
+   *       - `dispatcher`: puede ver cualquier emergencia.
+   *       - `citizen`: solo las propias. Si la emergencia es de otro usuario responde **404**
+   *         (no 403) para no revelar la existencia de ids ajenos.
+   *       - Cualquier otro grupo: 403.
+   *
+   *       `observations` y `reinforcementRequests` se devuelven siempre como listas vacías hasta que
+   *       existan esas funcionalidades; el contrato ya contempla los campos para que el front no cambie.
+   *     security:
+   *       - bearerAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *           format: uuid
+   *     responses:
+   *       200:
+   *         description: Detalle de la emergencia
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success:
+   *                   type: boolean
+   *                   example: true
+   *                 data:
+   *                   $ref: '#/components/schemas/EmergencyDetail'
+   *       400:
+   *         description: El id no tiene formato UUID
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
+   *       401:
+   *         description: Token ausente o inválido
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
+   *       403:
+   *         description: Grupo insuficiente (requiere citizen o dispatcher)
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
+   *       404:
+   *         description: Emergencia inexistente, o ajena para un citizen
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
+   */
+  router.get('/:id', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.getEmergencyDetail(req.params.id, req.user);
     res.json(result);
   }));
 
