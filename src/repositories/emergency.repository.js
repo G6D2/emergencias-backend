@@ -1,6 +1,7 @@
 const { NotFoundError } = require('../errors/app-errors');
 const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
+const { secureLog } = require('../security/secure-log');
 
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
@@ -9,12 +10,24 @@ function mapEmergency(row, locationCrypto) {
 
   let latitude = null;
   let longitude = null;
+  let locationUnavailable = false;
   const locationAnonymized = Boolean(row.location_anonymized_at);
 
   if (!locationAnonymized && row.location_encrypted && locationCrypto) {
-    const location = locationCrypto.decryptLocation(row.location_encrypted);
-    latitude = location.latitude;
-    longitude = location.longitude;
+    try {
+      const location = locationCrypto.decryptLocation(row.location_encrypted);
+      latitude = location.latitude;
+      longitude = location.longitude;
+    } catch (error) {
+      // Una fila cifrada con otra clave (p. ej. insertada desde un entorno
+      // local contra la base compartida) no puede tumbar todo el listado:
+      // se devuelve sin ubicación y se deja constancia para saneamiento.
+      locationUnavailable = true;
+      secureLog('warn', 'Location ciphertext could not be decrypted', {
+        emergencyId: row.id,
+        message: error.message,
+      });
+    }
   } else if (!locationAnonymized && row.latitude != null && row.longitude != null) {
     // Filas legacy (pre-V3) aún en claro hasta retención o re-escritura.
     latitude = Number(row.latitude);
@@ -27,6 +40,7 @@ function mapEmergency(row, locationCrypto) {
     latitude,
     longitude,
     locationAnonymized,
+    locationUnavailable,
     description: row.description,
     severity: row.severity,
     status: row.status,
@@ -183,6 +197,50 @@ class EmergencyRepository {
          AND created_at < now() - ($1::double precision * interval '1 hour')
        RETURNING id`,
       [hours]
+    );
+
+    return {
+      anonymizedCount: result.rowCount,
+      ids: result.rows.map((row) => row.id),
+    };
+  }
+
+  // Anonimiza las filas cuyo ciphertext no se puede descifrar con el keyring
+  // actual (clave distinta o dato corrupto). Devuelve ids afectados.
+  async anonymizeUndecryptableLocations() {
+    const candidates = await this.pool.query(
+      `SELECT id, location_encrypted
+       FROM emergencies
+       WHERE location_anonymized_at IS NULL
+         AND location_encrypted IS NOT NULL`
+    );
+
+    const undecryptable = candidates.rows
+      .filter((row) => {
+        try {
+          this.locationCrypto.decryptLocation(row.location_encrypted);
+          return false;
+        } catch (error) {
+          void error;
+          return true;
+        }
+      })
+      .map((row) => row.id);
+
+    if (undecryptable.length === 0) {
+      return { anonymizedCount: 0, ids: [] };
+    }
+
+    const result = await this.pool.query(
+      `UPDATE emergencies
+       SET location_encrypted = NULL,
+           latitude = NULL,
+           longitude = NULL,
+           location_anonymized_at = now(),
+           updated_at = now()
+       WHERE id = ANY($1::uuid[])
+       RETURNING id`,
+      [undecryptable]
     );
 
     return {
