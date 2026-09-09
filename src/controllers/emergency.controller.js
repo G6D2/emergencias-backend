@@ -1,5 +1,6 @@
 const { NotFoundError, ConflictError, ForbiddenError, ValidationError } = require('../errors/app-errors');
 const { canCancelEmergency } = require('../auth/authorize');
+const { buildEmergencyStatusUpdatedEvent } = require('../services/emergency-events');
 
 // Estados desde los que un citizen puede cancelar su propia emergency.
 // DISCARDED lo decide el Dispatcher; no pasa por este endpoint.
@@ -57,22 +58,20 @@ class EmergencyController {
       );
     }
 
-    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'VALIDATED',
       actor,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            eventId,
+          }),
+      },
     });
-
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        timestamp: new Date().toISOString(),
-      }
-    );
 
     return { success: true, data: updated };
   }
@@ -97,24 +96,22 @@ class EmergencyController {
       );
     }
 
-    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'DISCARDED',
       actor,
       reason: normalizedReason,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            reason: normalizedReason,
+            eventId,
+          }),
+      },
     });
-
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        reason: normalizedReason,
-        timestamp: new Date().toISOString(),
-      }
-    );
 
     return { success: true, data: updated };
   }
@@ -142,24 +139,22 @@ class EmergencyController {
       );
     }
 
-    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'CANCELLED',
       actor,
       reason,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            reason,
+            eventId,
+          }),
+      },
     });
-
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        reason,
-        timestamp: new Date().toISOString(),
-      }
-    );
 
     return { success: true, data: updated };
   }

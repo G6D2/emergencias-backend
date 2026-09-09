@@ -5,6 +5,7 @@ const { swaggerSpec } = require('./swagger');
 const { createPanicButtonRoutes } = require('./routes/panic-button.routes');
 const { createEmergenciesRoutes } = require('./routes/emergencies.routes');
 const { createUserRoutes } = require('./routes/user.routes');
+const { createOutboxRoutes } = require('./routes/outbox.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
 const { secureLog } = require('./security/secure-log');
@@ -73,6 +74,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   app.use('/api/user', createUserRoutes(authenticate));
   app.use('/api/panic-button', createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate));
   app.use('/api/emergencies', createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate));
+  app.use('/api/outbox-events', createOutboxRoutes(emergencyRepository, authenticate));
 
   app.use((err, req, res, next) => {
     const statusCode = err.statusCode || 500;
