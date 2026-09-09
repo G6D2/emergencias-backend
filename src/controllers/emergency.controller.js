@@ -3,6 +3,7 @@ const { canCancelEmergency } = require('../auth/authorize');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
 const { assertTransition } = require('../domain/emergency-status');
+const { buildEmergencyStatusUpdatedEvent } = require('../services/emergency-events');
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
@@ -52,22 +53,20 @@ class EmergencyController {
 
     assertTransition(emergency.status, 'VALIDATED');
 
-    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'VALIDATED',
       actor,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            eventId,
+          }),
+      },
     });
-
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        timestamp: new Date().toISOString(),
-      }
-    );
 
     return { success: true, data: updated };
   }
@@ -88,24 +87,22 @@ class EmergencyController {
 
     assertTransition(emergency.status, 'DISCARDED');
 
-    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'DISCARDED',
       actor,
       reason: normalizedReason,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            reason: normalizedReason,
+            eventId,
+          }),
+      },
     });
-
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        reason: normalizedReason,
-        timestamp: new Date().toISOString(),
-      }
-    );
 
     return { success: true, data: updated };
   }
@@ -129,24 +126,22 @@ class EmergencyController {
 
     assertTransition(emergency.status, 'CANCELLED');
 
-    const { emergency: updated, history } = await this.emergencyRepository.updateStatus(id, {
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'CANCELLED',
       actor,
       reason,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            reason,
+            eventId,
+          }),
+      },
     });
-
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
-      {
-        type: 'EmergencyStatusUpdated',
-        emergencyId: updated.id,
-        previousStatus: history.previousStatus,
-        newStatus: history.newStatus,
-        actor,
-        reason,
-        timestamp: new Date().toISOString(),
-      }
-    );
 
     return { success: true, data: updated };
   }

@@ -2,6 +2,7 @@ const { v4: uuidv4 } = require('uuid');
 const { NotFoundError, ValidationError, ForbiddenError } = require('../errors/app-errors');
 const { canViewEmergency } = require('../auth/authorize');
 const { secureLog } = require('../security/secure-log');
+const { buildEmergencyCreatedEvent } = require('../services/emergency-events');
 
 class PanicButtonController {
   constructor(kafkaService, emergencyRepository) {
@@ -34,12 +35,11 @@ class PanicButtonController {
       description: payload.description || 'Botón de pánico activado',
       severity: payload.severity || 'critical',
       status: 'PENDING',
+      outboxEvent: {
+        topic: process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico',
+        payload: (savedEmergency, eventId) => buildEmergencyCreatedEvent(savedEmergency, eventId),
+      },
     });
-
-    await this.kafkaService.publishEvent(
-      process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico',
-      emergency
-    );
 
     return {
       success: true,

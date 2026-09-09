@@ -231,6 +231,8 @@ probando las claves del keyring, así que la migración no requiere backfill.
 ### Retención / minimización
 Job en background (y `npm run security:anonymize-locations`) borra el ciphertext después de `LOCATION_RETENTION_HOURS` (default 72). La emergencia sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
 
+Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
+
 ### Logs seguros
 No se loguean JWT ni coordenadas. Kafka loguea solo un resumen (`emergencyId`, `status`, `hasLocation`).
 

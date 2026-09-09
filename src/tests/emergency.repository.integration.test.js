@@ -42,6 +42,51 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(created.createdAt).toBeDefined();
   });
 
+  it('crea la emergencia y su evento outbox en la misma transacción', async () => {
+    const input = buildEmergency();
+    const created = await repository.create({
+      ...input,
+      outboxEvent: {
+        topic: 'emergencias.boton-panico',
+        payload: (emergency, eventId) => ({
+          type: 'EmergenciaCreada',
+          eventId,
+          correlationId: emergency.id,
+          data: { id: emergency.id, severity: emergency.severity },
+        }),
+      },
+    });
+
+    const outbox = await getPool().query(
+      `SELECT topic, status, payload
+       FROM outbox_events
+       WHERE payload->'data'->>'id' = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [input.id]
+    );
+
+    expect(created.id).toBe(input.id);
+    expect(outbox.rows).toHaveLength(1);
+    expect(outbox.rows[0].status).toBe('PENDING');
+    expect(outbox.rows[0].payload.data.id).toBe(input.id);
+  });
+
+  it('rolls back the emergency if the outbox insert fails', async () => {
+    const input = buildEmergency();
+
+    await expect(repository.create({
+      ...input,
+      outboxEvent: {
+        topic: null,
+        payload: { type: 'InvalidEvent' },
+      },
+    })).rejects.toThrow();
+
+    const emergency = await repository.findById(input.id);
+    expect(emergency).toBeNull();
+  });
+
   it('persiste ubicación cifrada (sin lat/lng en claro en la fila)', async () => {
     const input = buildEmergency();
     await repository.create(input);
@@ -159,6 +204,41 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(found.longitude).not.toBeNull();
     expect(Number(found.latitude)).toBeCloseTo(input.latitude);
     expect(Number(found.longitude)).toBeCloseTo(input.longitude);
+  });
+
+  it('una fila con ciphertext indescifrable no tumba el listado y se puede sanear', async () => {
+    const good = buildEmergency();
+    await repository.create(good);
+    const badId = randomUUID();
+    await getPool().query(
+      `INSERT INTO emergencies (id, user_id, latitude, longitude, location_encrypted, description, severity, status)
+       VALUES ($1, 'user-bad', NULL, NULL, $2, 'cifrada con otra clave', 'high', 'PENDING')`,
+      [badId, Buffer.from('not-a-valid-ciphertext-at-all-0123456789').toString('base64')]
+    );
+
+    const { emergencies } = await repository.findPage({
+      statuses: [],
+      page: 1,
+      limit: 100,
+      sortBy: 'createdAt',
+      order: 'desc',
+    });
+    const bad = emergencies.find((emergency) => emergency.id === badId);
+    const ok = emergencies.find((emergency) => emergency.id === good.id);
+    expect(bad).toBeDefined();
+    expect(bad.latitude).toBeNull();
+    expect(bad.longitude).toBeNull();
+    expect(bad.locationUnavailable).toBe(true);
+    expect(ok.locationUnavailable).toBe(false);
+    expect(Number(ok.latitude)).toBeCloseTo(good.latitude);
+
+    const result = await repository.anonymizeUndecryptableLocations();
+    expect(result.ids).toContain(badId);
+    expect(result.ids).not.toContain(good.id);
+
+    const after = await repository.findById(badId);
+    expect(after.locationAnonymized).toBe(true);
+    expect(after.locationUnavailable).toBe(false);
   });
 
   it('rechaza con ConflictError una transición inválida y no deja rastros (defensa en profundidad)', async () => {

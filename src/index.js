@@ -7,6 +7,7 @@ const { createAuthSetup } = require('./auth/setup');
 const { createLocationCrypto } = require('./security/location-crypto');
 const { startLocationRetentionJob } = require('./security/location-retention');
 const { secureLog } = require('./security/secure-log');
+const { OutboxPublisher } = require('./services/outbox-publisher');
 
 const PORT = process.env.PORT || 3000;
 
@@ -16,12 +17,15 @@ async function start() {
 
   const auth = await createAuthSetup();
   const kafkaService = new KafkaService();
-  const emergencyRepository = new EmergencyRepository(getPool(), { locationCrypto });
+  const pool = getPool();
+  const emergencyRepository = new EmergencyRepository(pool, { locationCrypto });
+  const outboxPublisher = new OutboxPublisher(pool, kafkaService);
 
   // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
   kafkaService.connect().catch((err) => {
     secureLog('error', 'Initial Kafka connection failed', { message: err.message });
   });
+  outboxPublisher.start();
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
 
@@ -44,6 +48,7 @@ async function start() {
 
   const shutdown = async () => {
     retentionJob.stop();
+    outboxPublisher.stop();
     server.close();
     await kafkaService.disconnect().catch(() => {});
     process.exit(0);
