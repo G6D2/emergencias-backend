@@ -13,7 +13,8 @@
     "test": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js --runInBand",
     "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix"
+    "lint:fix": "eslint src/ --fix",
+    "security:anonymize-undecryptable": "node scripts/anonymize-locations.js --undecryptable"
   },
   "keywords": [
     "emergencies",

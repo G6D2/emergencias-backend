@@ -161,6 +161,41 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(Number(found.longitude)).toBeCloseTo(input.longitude);
   });
 
+  it('una fila con ciphertext indescifrable no tumba el listado y se puede sanear', async () => {
+    const good = buildEmergency();
+    await repository.create(good);
+    const badId = randomUUID();
+    await getPool().query(
+      `INSERT INTO emergencies (id, user_id, latitude, longitude, location_encrypted, description, severity, status)
+       VALUES ($1, 'user-bad', NULL, NULL, $2, 'cifrada con otra clave', 'high', 'PENDING')`,
+      [badId, Buffer.from('not-a-valid-ciphertext-at-all-0123456789').toString('base64')]
+    );
+
+    const { emergencies } = await repository.findPage({
+      statuses: [],
+      page: 1,
+      limit: 100,
+      sortBy: 'createdAt',
+      order: 'desc',
+    });
+    const bad = emergencies.find((emergency) => emergency.id === badId);
+    const ok = emergencies.find((emergency) => emergency.id === good.id);
+    expect(bad).toBeDefined();
+    expect(bad.latitude).toBeNull();
+    expect(bad.longitude).toBeNull();
+    expect(bad.locationUnavailable).toBe(true);
+    expect(ok.locationUnavailable).toBe(false);
+    expect(Number(ok.latitude)).toBeCloseTo(good.latitude);
+
+    const result = await repository.anonymizeUndecryptableLocations();
+    expect(result.ids).toContain(badId);
+    expect(result.ids).not.toContain(good.id);
+
+    const after = await repository.findById(badId);
+    expect(after.locationAnonymized).toBe(true);
+    expect(after.locationUnavailable).toBe(false);
+  });
+
   it('hace ROLLBACK si el cambio de estado viola una restricción de la base', async () => {
     const input = buildEmergency();
     await repository.create(input);
