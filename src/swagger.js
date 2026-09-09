@@ -1,4 +1,5 @@
 const swaggerJsdoc = require('swagger-jsdoc');
+const { EMERGENCY_STATUSES } = require('./domain/emergency-status');
 
 const options = {
   definition: {
@@ -61,17 +62,7 @@ const options = {
             severity: { type: 'string', example: 'critical' },
             status: {
               type: 'string',
-              enum: [
-                'PENDING',
-                'VALIDATED',
-                'DISPATCHED',
-                'EN_ROUTE',
-                'ON_SCENE',
-                'RESOLVED',
-                'CLOSED',
-                'CANCELLED',
-                'DISCARDED',
-              ],
+              enum: [...EMERGENCY_STATUSES],
               example: 'PENDING',
             },
             createdAt: { type: 'string', format: 'date-time' },

@@ -1,4 +1,5 @@
 const { NotFoundError } = require('../errors/app-errors');
+const { assertTransition } = require('../domain/emergency-status');
 const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
@@ -336,8 +337,9 @@ class EmergencyRepository {
   }
 
   // Actualiza el status y deja el historial en la misma transacción.
-  // Si falla cualquiera de los dos pasos, hace ROLLBACK. Las transiciones
-  // válidas las chequean los controllers.
+  // Si falla cualquiera de los dos pasos, hace ROLLBACK. La transición se
+  // valida acá (además de en los controllers) con la fila bloqueada, así
+  // ningún endpoint futuro puede saltarse el flujo ni ganar una carrera.
   async updateStatus(id, { newStatus, actor = null, reason = null, outboxEvent = null }) {
     const client = await this.pool.connect();
     try {
@@ -348,6 +350,7 @@ class EmergencyRepository {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
       }
       const previousStatus = current.rows[0].status;
+      assertTransition(previousStatus, newStatus);
 
       const updated = await client.query(
         'UPDATE emergencies SET status = $1, updated_at = now() WHERE id = $2 RETURNING *',

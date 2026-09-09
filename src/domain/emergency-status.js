@@ -1,0 +1,89 @@
+const { ConflictError } = require('../errors/app-errors');
+
+// Máquina de estados de una emergency (tarea #10 del Task Tracker).
+// Única fuente de verdad de los estados y las transiciones permitidas:
+// la usan los controllers, el repository (defensa en profundidad) y swagger.
+//
+//                 ┌────────────────┐
+//                 ▼                │   (DISPATCHED → VALIDATED: devolución para reasignar)
+//   PENDING ──► VALIDATED ──► DISPATCHED ──► EN_ROUTE ──► ON_SCENE ──► RESOLVED ──► CLOSED
+//      │                │
+//      ├──► CANCELLED ◄─┘   (desde PENDING o VALIDATED)
+//      └──► DISCARDED       (solo desde PENDING)
+//
+// Terminales (sin transiciones de salida): CANCELLED, DISCARDED, CLOSED.
+const EMERGENCY_STATUSES = Object.freeze([
+  'PENDING',
+  'VALIDATED',
+  'DISPATCHED',
+  'EN_ROUTE',
+  'ON_SCENE',
+  'RESOLVED',
+  'CLOSED',
+  'CANCELLED',
+  'DISCARDED',
+]);
+
+const TRANSITIONS = Object.freeze({
+  PENDING: Object.freeze(['VALIDATED', 'CANCELLED', 'DISCARDED']),
+  VALIDATED: Object.freeze(['DISPATCHED', 'CANCELLED']),
+  DISPATCHED: Object.freeze(['EN_ROUTE', 'VALIDATED']),
+  EN_ROUTE: Object.freeze(['ON_SCENE']),
+  ON_SCENE: Object.freeze(['RESOLVED']),
+  RESOLVED: Object.freeze(['CLOSED']),
+  CLOSED: Object.freeze([]),
+  CANCELLED: Object.freeze([]),
+  DISCARDED: Object.freeze([]),
+});
+
+const TERMINAL_STATUSES = Object.freeze(
+  EMERGENCY_STATUSES.filter((status) => TRANSITIONS[status].length === 0)
+);
+
+const ACTIVE_STATUSES = Object.freeze(
+  EMERGENCY_STATUSES.filter((status) => !TERMINAL_STATUSES.includes(status))
+);
+
+function isValidStatus(status) {
+  return typeof status === 'string' && EMERGENCY_STATUSES.includes(status);
+}
+
+function isTerminal(status) {
+  return TERMINAL_STATUSES.includes(status);
+}
+
+function canTransition(from, to) {
+  if (!isValidStatus(from) || !isValidStatus(to)) return false;
+  return TRANSITIONS[from].includes(to);
+}
+
+/**
+ * Lanza ConflictError (409) si la transición no está permitida.
+ * El mensaje distingue estado desconocido, estado terminal y salto de flujo
+ * para que el cliente sepa qué falló.
+ */
+function assertTransition(from, to) {
+  if (!isValidStatus(to)) {
+    throw new ConflictError(`Unknown emergency status ${String(to)}`);
+  }
+  if (!isValidStatus(from)) {
+    throw new ConflictError(`Unknown emergency status ${String(from)}`);
+  }
+  if (isTerminal(from)) {
+    throw new ConflictError(`Emergency in terminal status ${from} cannot transition to ${to}`);
+  }
+  if (!canTransition(from, to)) {
+    throw new ConflictError(`Invalid transition ${from} → ${to}`);
+  }
+}
+
+module.exports = {
+  EMERGENCY_STATUSES,
+  TRANSITIONS,
+  TERMINAL_STATUSES,
+  ACTIVE_STATUSES,
+  isValidStatus,
+  isTerminal,
+  canTransition,
+  assertTransition,
+};

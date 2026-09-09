@@ -1,10 +1,9 @@
-const { NotFoundError, ConflictError, ForbiddenError, ValidationError } = require('../errors/app-errors');
+const { NotFoundError, ForbiddenError, ValidationError } = require('../errors/app-errors');
 const { canCancelEmergency } = require('../auth/authorize');
+// Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
+// una transición inválida lanza ConflictError (409).
+const { assertTransition } = require('../domain/emergency-status');
 const { buildEmergencyStatusUpdatedEvent } = require('../services/emergency-events');
-
-// Estados desde los que un citizen puede cancelar su propia emergency.
-// DISCARDED lo decide el Dispatcher; no pasa por este endpoint.
-const CANCELABLE_STATUSES = new Set(['PENDING', 'VALIDATED']);
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
@@ -52,11 +51,7 @@ class EmergencyController {
       throw new NotFoundError(`Emergency with ID ${id} not found`);
     }
 
-    if (emergency.status !== 'PENDING') {
-      throw new ConflictError(
-        `Emergency in status ${emergency.status} cannot be validated`
-      );
-    }
+    assertTransition(emergency.status, 'VALIDATED');
 
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'VALIDATED',
@@ -90,11 +85,7 @@ class EmergencyController {
       throw new NotFoundError(`Emergency with ID ${id} not found`);
     }
 
-    if (emergency.status !== 'PENDING') {
-      throw new ConflictError(
-        `Emergency in status ${emergency.status} cannot be discarded`
-      );
-    }
+    assertTransition(emergency.status, 'DISCARDED');
 
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'DISCARDED',
@@ -133,11 +124,7 @@ class EmergencyController {
       throw new ForbiddenError('You cannot cancel this emergency');
     }
 
-    if (!CANCELABLE_STATUSES.has(emergency.status)) {
-      throw new ConflictError(
-        `Emergency in status ${emergency.status} cannot be cancelled`
-      );
-    }
+    assertTransition(emergency.status, 'CANCELLED');
 
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'CANCELLED',
