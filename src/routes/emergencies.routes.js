@@ -43,9 +43,15 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *         schema:
    *           type: string
    *       - in: query
+   *         name: emergencyType
+   *         schema:
+   *           type: string
+   *         description: Tipo canónico (MEDICA, INCENDIO, ...) o alias en inglés del front (medical, fire, ...). Inválido → 400.
+   *       - in: query
    *         name: type
    *         schema:
    *           type: string
+   *         description: Alias de emergencyType (compatibilidad)
    *       - in: query
    *         name: page
    *         schema:

@@ -3,6 +3,7 @@ const { NotFoundError, ValidationError, ForbiddenError } = require('../errors/ap
 const { canViewEmergency } = require('../auth/authorize');
 const { secureLog } = require('../security/secure-log');
 const { buildEmergencyCreatedEvent } = require('../services/emergency-events');
+const { assertEmergencyType } = require('../domain/emergency-type');
 
 class PanicButtonController {
   constructor(kafkaService, emergencyRepository) {
@@ -25,15 +26,23 @@ class PanicButtonController {
       throw new ValidationError('location.latitude and location.longitude must be numbers');
     }
 
+    // Catálogo cerrado (tarea #44): un valor inválido corta con 400. Si el
+    // cliente no manda tipo, es el botón SOS: PANICO.
+    const emergencyType = assertEmergencyType(payload.emergencyType) || 'PANICO';
+
     const emergencyId = uuidv4();
 
     const emergency = await this.emergencyRepository.create({
       id: emergencyId,
+      // Tarea #58 (ADR-001): correlationId = emergencyId al crear; con él se
+      // traza creación → priorización → despacho en los eventos.
+      correlationId: emergencyId,
       userId: user.sub,
       latitude,
       longitude,
       description: payload.description || 'Botón de pánico activado',
       severity: payload.severity || 'critical',
+      emergencyType,
       status: 'PENDING',
       outboxEvent: {
         topic: process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico',

@@ -5,6 +5,7 @@ const { GROUPS } = require('../auth/groups');
 // una transición inválida lanza ConflictError (409).
 const { assertTransition } = require('../domain/emergency-status');
 const { buildEmergencyStatusUpdatedEvent } = require('../services/emergency-events');
+const { assertEmergencyType } = require('../domain/emergency-type');
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
@@ -36,7 +37,9 @@ class EmergencyController {
       from: query.from,
       to: query.to,
       assignedOfficerId: query.assignedOfficerId,
-      emergencyType: query.type,
+      // Acepta canónico o alias del front (medical → MEDICA); inválido → 400.
+      // `type` se mantiene por compatibilidad con clientes existentes.
+      emergencyType: assertEmergencyType(query.emergencyType || query.type),
       page,
       limit,
       sortBy,

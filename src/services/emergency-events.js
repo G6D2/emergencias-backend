@@ -1,6 +1,7 @@
 function emergencyData(emergency) {
   const {
     id,
+    correlationId,
     userId,
     description,
     severity,
@@ -13,6 +14,7 @@ function emergencyData(emergency) {
 
   return {
     id,
+    correlationId: correlationId || id,
     userId,
     description,
     severity,
@@ -24,11 +26,13 @@ function emergencyData(emergency) {
   };
 }
 
+// correlationId = emergencyId al crear (tarea #58, ADR-001). Se lee de la
+// columna propia; el fallback al id cubre filas anteriores a V9.
 function buildEmergencyCreatedEvent(emergency, eventId) {
   return {
     type: 'EmergenciaCreada',
     eventId,
-    correlationId: emergency.id,
+    correlationId: emergency.correlationId || emergency.id,
     data: emergencyData(emergency),
   };
 }
@@ -37,9 +41,10 @@ function buildEmergencyStatusUpdatedEvent({ emergency, history, actor, reason, e
   return {
     type: 'EmergenciaEstadoActualizado',
     eventId,
-    correlationId: emergency.id,
+    correlationId: emergency.correlationId || emergency.id,
     data: {
       id: emergency.id,
+      correlationId: emergency.correlationId || emergency.id,
       previousStatus: history.previousStatus,
       newStatus: history.newStatus,
       actor,
