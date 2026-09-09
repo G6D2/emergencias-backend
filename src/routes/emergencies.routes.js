@@ -1,7 +1,7 @@
 const express = require('express');
 const { EmergencyController } = require('../controllers/emergency.controller');
 const { asyncHandler } = require('../utils/async-handler');
-const { requireCitizen, requireDispatcher } = require('../auth/authorize');
+const { requireCitizen, requireDispatcher, requireCitizenOrDispatcher } = require('../auth/authorize');
 
 function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
   const router = express.Router();
@@ -13,6 +13,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *   get:
    *     tags: [Emergencies]
    *     summary: Lista emergencias paginadas
+   *     description: Dispatcher ve todas. Citizen solo las propias (se fuerza el filtro por el sub del JWT).
    *     description: |
    *       Requiere grupo `dispatcher`. Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
    *     security:
@@ -71,8 +72,10 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *       403:
    *         description: Grupo insuficiente
    */
-  router.get('/', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
-    const result = await controller.listEmergencies(req.query);
+  // Dispatcher: todas. Citizen: solo las propias (el filtro por user_id se
+  // fuerza en el controller a partir del sub del JWT, no del query string).
+  router.get('/', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.listEmergencies(req.query, req.user);
     res.json(result);
   }));
 
