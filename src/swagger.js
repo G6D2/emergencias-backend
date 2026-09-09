@@ -27,7 +27,7 @@ const options = {
       { name: 'User', description: 'Perfil del usuario autenticado' },
       { name: 'Dev Auth', description: 'Login de desarrollo (solo AUTH_MODE=local)' },
       { name: 'Panic Button', description: 'Activación y consulta de botón de pánico' },
-      { name: 'Emergencies', description: 'Cambios de estado de emergencias' },
+      { name: 'Emergencies', description: 'Listado, detalle y cambios de estado de emergencias' },
     ],
     components: {
       securitySchemes: {
@@ -77,9 +77,73 @@ const options = {
               enum: [...EMERGENCY_STATUSES],
               example: 'PENDING',
             },
+            assignedOfficerId: {
+              type: 'string',
+              nullable: true,
+              example: null,
+              description: 'Oficial asignado (null hasta el despacho)',
+            },
+            locationUnavailable: {
+              type: 'boolean',
+              example: false,
+              description: 'true si la ubicación cifrada no pudo descifrarse con la clave actual',
+            },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
           },
+        },
+        StatusHistoryEntry: {
+          type: 'object',
+          properties: {
+            id: { type: 'integer', example: 1 },
+            emergencyId: { type: 'string', format: 'uuid' },
+            previousStatus: {
+              type: 'string',
+              enum: [...EMERGENCY_STATUSES],
+              example: 'PENDING',
+            },
+            newStatus: {
+              type: 'string',
+              enum: [...EMERGENCY_STATUSES],
+              example: 'VALIDATED',
+            },
+            actor: {
+              type: 'string',
+              nullable: true,
+              example: 'D000007',
+              description: 'Claim sub del JWT de quien hizo la transición',
+            },
+            reason: { type: 'string', nullable: true, example: 'Confirmado por operador' },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        EmergencyDetail: {
+          description: 'Emergencia con su historial de estados (GET /api/emergencies/{id}, tarea #32).',
+          allOf: [
+            { $ref: '#/components/schemas/Emergency' },
+            {
+              type: 'object',
+              properties: {
+                statusHistory: {
+                  type: 'array',
+                  description: 'Transiciones de estado en orden cronológico ascendente',
+                  items: { $ref: '#/components/schemas/StatusHistoryEntry' },
+                },
+                observations: {
+                  type: 'array',
+                  description: 'Placeholder: siempre vacío hasta que exista el registro de observaciones.',
+                  items: { type: 'object' },
+                  example: [],
+                },
+                reinforcementRequests: {
+                  type: 'array',
+                  description: 'Placeholder: siempre vacío hasta que existan las solicitudes de refuerzo.',
+                  items: { type: 'object' },
+                  example: [],
+                },
+              },
+            },
+          ],
         },
         PanicButtonRequest: {
           type: 'object',

@@ -243,6 +243,41 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(historyList).toHaveLength(1);
   });
 
+  it('findDetailById devuelve la emergencia con su historial de estados (tarea #32)', async () => {
+    const input = buildEmergency({ emergencyType: 'medical' });
+    await repository.create(input);
+
+    await repository.updateStatus(input.id, {
+      newStatus: 'VALIDATED',
+      actor: 'D000007',
+    });
+
+    const detail = await repository.findDetailById(input.id);
+
+    expect(detail).toMatchObject({
+      id: input.id,
+      correlationId: input.id,
+      userId: input.userId,
+      emergencyType: 'MEDICA',
+      status: 'VALIDATED',
+      assignedOfficerId: null,
+    });
+    expect(Number(detail.latitude)).toBeCloseTo(input.latitude);
+    expect(detail.statusHistory).toHaveLength(1);
+    expect(detail.statusHistory[0]).toMatchObject({
+      emergencyId: input.id,
+      previousStatus: 'PENDING',
+      newStatus: 'VALIDATED',
+      actor: 'D000007',
+      reason: null,
+    });
+    expect(detail.statusHistory[0].createdAt).toBeDefined();
+  });
+
+  it('findDetailById devuelve null si la emergencia no existe', async () => {
+    expect(await repository.findDetailById(randomUUID())).toBeNull();
+  });
+
   it('propaga el error y no deja rastros si la emergencia no existe', async () => {
     const missingId = randomUUID();
 

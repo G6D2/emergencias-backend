@@ -1,5 +1,6 @@
+const { validate: isUuid } = require('uuid');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../errors/app-errors');
-const { canCancelEmergency, userHasGroup } = require('../auth/authorize');
+const { canCancelEmergency, canViewEmergency, userHasGroup } = require('../auth/authorize');
 const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
@@ -49,6 +50,51 @@ class EmergencyController {
     return {
       data: emergencies,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  /**
+   * Detalle completo de una emergencia (tarea #32): datos principales,
+   * ubicación, prioridad, estado actual, oficial asignado e historial de
+   * estados. Observaciones y solicitudes de refuerzo todavía no existen en
+   * el modelo: se devuelven como listas vacías para que el front pueda
+   * pintarlas sin cambios de contrato cuando aparezcan.
+   *
+   * Reglas de acceso (misma fuente que GET /api/panic-button/:id, vía
+   * canViewEmergency): dispatcher ve cualquiera; citizen solo las propias.
+   * Una emergencia ajena responde 404 y no 403, para no revelar que el id
+   * existe. Un grupo que no sea citizen/dispatcher ya cortó con 403 en el
+   * middleware requireCitizenOrDispatcher de la ruta.
+   *
+   * TODO(#13): cuando exista el grupo `officer`, debe ver solo las
+   * emergencias que tiene asignadas (emergency.assignedOfficerId === user.sub).
+   * Agregar la regla en canViewEmergency (src/auth/authorize.js) y sumar el
+   * grupo al middleware de la ruta; este método no necesita cambios.
+   *
+   * @param {string} id - UUID de la emergencia (formato inválido → 400)
+   * @param {{ sub: string, groups: string[] }} user - identidad autenticada (req.user)
+   */
+  async getEmergencyDetail(id, user) {
+    // Se valida el formato antes de ir a la base: Postgres tiraría un error
+    // de sintaxis de uuid (22P02) que terminaría en 500 en vez de 400.
+    if (!isUuid(id)) {
+      throw new ValidationError('Emergency id must be a valid UUID');
+    }
+
+    const detail = await this.emergencyRepository.findDetailById(id);
+
+    if (!detail || !canViewEmergency(user, detail)) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    return {
+      success: true,
+      data: {
+        ...detail,
+        // Placeholders hasta que existan las tareas de observaciones y refuerzos.
+        observations: [],
+        reinforcementRequests: [],
+      },
     };
   }
 

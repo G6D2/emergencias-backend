@@ -12,6 +12,7 @@ const mockKafkaService = {
 
 function createMockEmergencyRepository() {
   const emergencies = new Map();
+  const statusHistory = new Map();
   const accessAudit = [];
   const updateStatusCalls = [];
   const findPageCalls = [];
@@ -53,15 +54,26 @@ function createMockEmergencyRepository() {
       const previousStatus = current.status;
       const updated = { ...current, status: newStatus, updatedAt: new Date().toISOString() };
       emergencies.set(id, updated);
-      return {
-        emergency: updated,
-        history: {
-          previousStatus,
-          newStatus,
-          actor,
-          reason,
-        },
+      // Mismo shape que mapHistoryEntry; se acumula para findHistoryByEmergencyId.
+      const entries = statusHistory.get(id) || [];
+      const history = {
+        id: entries.length + 1,
+        emergencyId: id,
+        previousStatus,
+        newStatus,
+        actor,
+        reason,
+        createdAt: new Date().toISOString(),
       };
+      entries.push(history);
+      statusHistory.set(id, entries);
+      return { emergency: updated, history };
+    },
+    findHistoryByEmergencyId: async (id) => [...(statusHistory.get(id) || [])],
+    findDetailById: async (id) => {
+      const emergency = emergencies.get(id);
+      if (!emergency) return null;
+      return { ...emergency, statusHistory: [...(statusHistory.get(id) || [])] };
     },
     findPage: async (filters) => {
       findPageCalls.push(filters);
@@ -766,6 +778,155 @@ describe('Emergencies API', () => {
       .expect(403);
 
     expect(response.body.error).toBe('ForbiddenError');
+  });
+});
+
+describe('GET /api/emergencies/:id (detalle, tarea #32)', () => {
+  const citizen = { sub: 'U000042', groups: ['citizen'] };
+  const otherCitizen = { sub: 'U000099', groups: ['citizen'] };
+  const dispatcher = { sub: 'D000007', groups: ['dispatcher'] };
+
+  async function createEmergencyAs(user, repository) {
+    const response = await request(createTestApp(user, repository))
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'fire' })
+      .expect(201);
+    return response.body.emergencyId;
+  }
+
+  it('un dispatcher obtiene el detalle con statusHistory cronológico y placeholders vacíos', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+    const dispatcherApp = createTestApp(dispatcher, repository);
+
+    await request(dispatcherApp).patch(`/api/emergencies/${emergencyId}/validate`).expect(200);
+
+    const response = await request(dispatcherApp)
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    const { data } = response.body;
+    expect(data).toMatchObject({
+      id: emergencyId,
+      correlationId: emergencyId,
+      userId: 'U000042',
+      emergencyType: 'INCENDIO',
+      severity: 'critical',
+      status: 'VALIDATED',
+      latitude: -34.6037,
+      longitude: -58.3816,
+      observations: [],
+      reinforcementRequests: [],
+    });
+    expect(data.statusHistory).toHaveLength(1);
+    expect(data.statusHistory[0]).toMatchObject({
+      emergencyId,
+      previousStatus: 'PENDING',
+      newStatus: 'VALIDATED',
+      actor: 'D000007',
+    });
+  });
+
+  it('acumula el historial en orden cronológico tras varias transiciones', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    await request(createTestApp(dispatcher, repository))
+      .patch(`/api/emergencies/${emergencyId}/validate`)
+      .expect(200);
+    await request(createTestApp(citizen, repository))
+      .patch(`/api/emergencies/${emergencyId}/cancel`)
+      .send({ reason: 'Falsa alarma' })
+      .expect(200);
+
+    const response = await request(createTestApp(dispatcher, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(200);
+
+    expect(response.body.data.status).toBe('CANCELLED');
+    expect(response.body.data.statusHistory.map((entry) => entry.newStatus))
+      .toEqual(['VALIDATED', 'CANCELLED']);
+    expect(response.body.data.statusHistory[1]).toMatchObject({
+      previousStatus: 'VALIDATED',
+      actor: 'U000042',
+      reason: 'Falsa alarma',
+    });
+  });
+
+  it('un citizen obtiene el detalle de su propia emergencia (sin transiciones: statusHistory vacío)', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    const response = await request(createTestApp(citizen, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(200);
+
+    expect(response.body.data.id).toBe(emergencyId);
+    expect(response.body.data.userId).toBe('U000042');
+    expect(response.body.data.status).toBe('PENDING');
+    expect(response.body.data.statusHistory).toEqual([]);
+    expect(response.body.data.observations).toEqual([]);
+    expect(response.body.data.reinforcementRequests).toEqual([]);
+  });
+
+  it('un citizen recibe 404 (no 403) al pedir una emergencia ajena, para no revelar su existencia', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    const response = await request(createTestApp(otherCitizen, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(404);
+
+    expect(response.body.error).toBe('NotFoundError');
+    // Misma respuesta que un id inexistente: no se distingue "ajena" de "no existe".
+    const missing = await request(createTestApp(otherCitizen, repository))
+      .get('/api/emergencies/00000000-0000-0000-0000-000000000000')
+      .expect(404);
+    expect(missing.body.error).toBe(response.body.error);
+  });
+
+  it('devuelve 400 ValidationError si el id no es un UUID, sin consultar el repository', async () => {
+    const repository = createMockEmergencyRepository();
+    let findDetailCalls = 0;
+    repository.findDetailById = async () => {
+      findDetailCalls += 1;
+      return null;
+    };
+
+    const response = await request(createTestApp(dispatcher, repository))
+      .get('/api/emergencies/no-es-un-uuid')
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
+    expect(findDetailCalls).toBe(0);
+  });
+
+  it('devuelve 404 para un dispatcher si la emergencia no existe', async () => {
+    const response = await request(createTestApp(dispatcher))
+      .get('/api/emergencies/00000000-0000-0000-0000-000000000000')
+      .expect(404);
+
+    expect(response.body.error).toBe('NotFoundError');
+  });
+
+  it('devuelve 403 si el grupo no es citizen ni dispatcher', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    const response = await request(createTestApp({ sub: 'X000001', groups: ['auditor'] }, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(403);
+
+    expect(response.body.error).toBe('ForbiddenError');
+  });
+
+  it('devuelve 401 sin usuario autenticado', async () => {
+    const response = await request(createTestApp(null))
+      .get('/api/emergencies/00000000-0000-0000-0000-000000000000')
+      .expect(401);
+
+    expect(response.body.error).toBe('UnauthorizedError');
   });
 });
 

@@ -108,6 +108,9 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
    */
+  // Se mantiene por compatibilidad con clientes existentes: devuelve la
+  // emergencia sola. El detalle completo (historial de estados, observaciones,
+  // refuerzos) vive en GET /api/emergencies/:id (tarea #32).
   router.get('/:id', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
     const result = await controller.getPanicButtonEvent(req.params.id, req.user);
     res.json(result);
