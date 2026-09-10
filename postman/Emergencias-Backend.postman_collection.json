@@ -296,6 +296,74 @@
             "url": "{{baseUrl}}/api/emergencies/00000000-0000-0000-0000-000000000000/cancel",
             "description": "Esperado: 404 NotFoundError."
           }
+        },
+        {
+          "name": "PATCH Validate Emergency",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/validate",
+            "description": "Dispatcher: PENDING → VALIDATED."
+          }
+        },
+        {
+          "name": "PATCH Discard Emergency",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Falsa alarma / prueba\"\n}"
+            },
+            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/discard",
+            "description": "Dispatcher: PENDING → DISCARDED. Motivo obligatorio."
+          }
+        },
+        {
+          "name": "PATCH Assign Officer",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"officerId\": \"of-001\"\n}"
+            },
+            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/assign",
+            "description": "Dispatcher: VALIDATED → DISPATCHED. Oficial debe estar disponible."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Officers",
+      "item": [
+        {
+          "name": "GET List Officers",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/officers",
+            "description": "Catálogo de oficiales (dispatcher). Query opcional: ?status=disponible"
+          }
+        },
+        {
+          "name": "GET List Officers (disponible)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/officers?status=disponible",
+            "description": "Solo oficiales disponibles para asignar."
+          }
         }
       ]
     }

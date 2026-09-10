@@ -1,9 +1,10 @@
-const { NotFoundError } = require('../errors/app-errors');
+const { NotFoundError, ConflictError } = require('../errors/app-errors');
 const { assertTransition } = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
+const { mapOfficer } = require('./officer.repository');
 
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
@@ -48,6 +49,7 @@ function mapEmergency(row, locationCrypto) {
     severity: row.severity,
     status: row.status,
     assignedOfficerId: row.assigned_officer_id,
+    assignedOfficer: row.assigned_officer_name || null,
     emergencyType: row.emergency_type,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -147,12 +149,23 @@ class EmergencyRepository {
   }
 
   async findById(id) {
-    const result = await this.pool.query('SELECT * FROM emergencies WHERE id = $1', [id]);
+    const result = await this.pool.query(
+      `SELECT e.*, o.name AS assigned_officer_name
+       FROM emergencies e
+       LEFT JOIN officers o ON o.id = e.assigned_officer_id
+       WHERE e.id = $1`,
+      [id]
+    );
     return mapEmergency(result.rows[0], this.locationCrypto);
   }
 
   async findAll() {
-    const result = await this.pool.query('SELECT * FROM emergencies ORDER BY created_at DESC');
+    const result = await this.pool.query(
+      `SELECT e.*, o.name AS assigned_officer_name
+       FROM emergencies e
+       LEFT JOIN officers o ON o.id = e.assigned_officer_id
+       ORDER BY e.created_at DESC`
+    );
     return result.rows.map((row) => mapEmergency(row, this.locationCrypto));
   }
 
@@ -285,31 +298,34 @@ class EmergencyRepository {
       conditions.push(sql.replace('?', `$${values.length}`));
     }
 
-    if (userId) addCondition('user_id = ?', userId);
-    if (statuses.length > 0) addCondition('status = ANY(?)', statuses);
-    if (severity) addCondition('severity = ?', severity);
-    if (from) addCondition('created_at >= ?', from);
-    if (to) addCondition('created_at <= ?', to);
-    if (assignedOfficerId) addCondition('assigned_officer_id = ?', assignedOfficerId);
+    if (userId) addCondition('e.user_id = ?', userId);
+    if (statuses.length > 0) addCondition('e.status = ANY(?)', statuses);
+    if (severity) addCondition('e.severity = ?', severity);
+    if (from) addCondition('e.created_at >= ?', from);
+    if (to) addCondition('e.created_at <= ?', to);
+    if (assignedOfficerId) addCondition('e.assigned_officer_id = ?', assignedOfficerId);
     // El filtro acepta canónico o alias del front; inválido → ValidationError.
     const normalizedType = assertEmergencyType(emergencyType);
-    if (normalizedType) addCondition('emergency_type = ?', normalizedType);
+    if (normalizedType) addCondition('e.emergency_type = ?', normalizedType);
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const offset = (page - 1) * limit;
     const direction = order === 'asc' ? 'ASC' : 'DESC';
     const sortExpression = sortBy === 'priority'
-      ? "CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END"
-      : 'created_at';
+      ? "CASE e.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END"
+      : 'e.created_at';
 
     const countResult = await this.pool.query(
-      `SELECT COUNT(*)::int AS total FROM emergencies ${where}`,
+      `SELECT COUNT(*)::int AS total FROM emergencies e ${where}`,
       values
     );
     values.push(limit, offset);
     const result = await this.pool.query(
-      `SELECT * FROM emergencies ${where}
-       ORDER BY ${sortExpression} ${direction}, created_at ASC
+      `SELECT e.*, o.name AS assigned_officer_name
+       FROM emergencies e
+       LEFT JOIN officers o ON o.id = e.assigned_officer_id
+       ${where}
+       ORDER BY ${sortExpression} ${direction}, e.created_at ASC
        LIMIT $${values.length - 1} OFFSET $${values.length}`,
       values
     );
@@ -374,11 +390,15 @@ class EmergencyRepository {
     try {
       await client.query('BEGIN');
 
-      const current = await client.query('SELECT status FROM emergencies WHERE id = $1 FOR UPDATE', [id]);
+      const current = await client.query(
+        'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
+        [id]
+      );
       if (current.rows.length === 0) {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
       }
       const previousStatus = current.rows[0].status;
+      const assignedOfficerId = current.rows[0].assigned_officer_id;
       assertTransition(previousStatus, newStatus);
 
       const updated = await client.query(
@@ -391,6 +411,19 @@ class EmergencyRepository {
          VALUES ($1, $2, $3, $4, $5) RETURNING *`,
         [id, previousStatus, newStatus, actor, reason]
       );
+
+      // Al cancelar, cerrar o devolver a VALIDATED, el oficial asignado vuelve a disponible
+      // en la misma transacción (si no, se agotan en demo y reasignar el mismo da 409).
+      if (
+        assignedOfficerId
+        && (newStatus === 'CANCELLED' || newStatus === 'CLOSED' || newStatus === 'VALIDATED')
+      ) {
+        await client.query(
+          `UPDATE officers SET status = 'disponible', updated_at = now()
+           WHERE id = $1 AND status = 'ocupado'`,
+          [assignedOfficerId]
+        );
+      }
 
       if (outboxEvent) {
         await this.insertOutboxEvent(client, outboxEvent, {
@@ -405,6 +438,92 @@ class EmergencyRepository {
         emergency: mapEmergency(updated.rows[0], this.locationCrypto),
         history: mapHistoryEntry(history.rows[0]),
       };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Asigna un oficial disponible: VALIDATED → DISPATCHED + oficial ocupado.
+   * Todo en una transacción (emergencia + officers + historial + outbox).
+   */
+  async assignOfficer(id, { officerId, actor = null, outboxEvent = null }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const current = await client.query(
+        'SELECT * FROM emergencies WHERE id = $1 FOR UPDATE',
+        [id]
+      );
+      if (current.rows.length === 0) {
+        throw new NotFoundError(`Emergency with ID ${id} not found`);
+      }
+
+      const previousStatus = current.rows[0].status;
+      assertTransition(previousStatus, 'DISPATCHED');
+
+      const officerResult = await client.query(
+        'SELECT * FROM officers WHERE id = $1 FOR UPDATE',
+        [officerId]
+      );
+      if (officerResult.rows.length === 0) {
+        throw new NotFoundError(`Officer with ID ${officerId} not found`);
+      }
+      const officerRow = officerResult.rows[0];
+      if (officerRow.status !== 'disponible') {
+        throw new ConflictError(`Officer ${officerId} is not available`);
+      }
+
+      const previousOfficerId = current.rows[0].assigned_officer_id;
+      if (previousOfficerId && previousOfficerId !== officerId) {
+        await client.query(
+          `UPDATE officers SET status = 'disponible', updated_at = now()
+           WHERE id = $1 AND status = 'ocupado'`,
+          [previousOfficerId]
+        );
+      }
+
+      const updated = await client.query(
+        `UPDATE emergencies e
+         SET status = 'DISPATCHED', assigned_officer_id = $1, updated_at = now()
+         WHERE e.id = $2
+         RETURNING e.*`,
+        [officerId, id]
+      );
+
+      await client.query(
+        `UPDATE officers SET status = 'ocupado', updated_at = now() WHERE id = $1`,
+        [officerId]
+      );
+
+      const history = await client.query(
+        `INSERT INTO emergency_status_history (emergency_id, previous_status, new_status, actor, reason)
+         VALUES ($1, $2, 'DISPATCHED', $3, $4) RETURNING *`,
+        [id, previousStatus, actor, `Assigned officer ${officerId}`]
+      );
+
+      const officer = mapOfficer(officerRow);
+      officer.status = 'ocupado';
+      const emergency = mapEmergency(
+        { ...updated.rows[0], assigned_officer_name: officer.name },
+        this.locationCrypto
+      );
+      const historyEntry = mapHistoryEntry(history.rows[0]);
+
+      if (outboxEvent) {
+        await this.insertOutboxEvent(client, outboxEvent, {
+          emergency,
+          history: historyEntry,
+        });
+      }
+
+      await client.query('COMMIT');
+
+      return { emergency, history: historyEntry, officer };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

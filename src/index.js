@@ -2,6 +2,7 @@ require('dotenv').config();
 const { KafkaService } = require('./services/kafka.service');
 const { getPool } = require('./db/pool');
 const { EmergencyRepository } = require('./repositories/emergency.repository');
+const { OfficerRepository } = require('./repositories/officer.repository');
 const { createApp } = require('./app');
 const { createAuthSetup } = require('./auth/setup');
 const { createLocationCrypto } = require('./security/location-crypto');
@@ -19,6 +20,7 @@ async function start() {
   const kafkaService = new KafkaService();
   const pool = getPool();
   const emergencyRepository = new EmergencyRepository(pool, { locationCrypto });
+  const officerRepository = new OfficerRepository(pool);
   const outboxPublisher = new OutboxPublisher(pool, kafkaService);
 
   // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
@@ -33,6 +35,7 @@ async function start() {
     authenticate: auth.authenticate,
     devAuthRouter: auth.devAuthRouter,
     authMode: auth.mode,
+    officerRepository,
   });
 
   const server = app.listen(PORT, () => {

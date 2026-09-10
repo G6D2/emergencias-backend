@@ -239,6 +239,54 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
 
   /**
    * @openapi
+   * /api/emergencies/{id}/assign:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: Asigna un oficial a una emergencia validada
+   *     description: |
+   *       Requiere grupo `dispatcher`. Transición VALIDATED → DISPATCHED.
+   *       El oficial debe existir y estar `disponible`; queda `ocupado`.
+   *     security:
+   *       - bearerAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *           format: uuid
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [officerId]
+   *             properties:
+   *               officerId:
+   *                 type: string
+   *                 example: of-001
+   *     responses:
+   *       200:
+   *         description: Oficial asignado; emergencia en DISPATCHED
+   *       400:
+   *         description: officerId faltante o id inválido
+   *       401:
+   *         description: Token ausente o inválido
+   *       403:
+   *         description: Se requiere grupo dispatcher
+   *       404:
+   *         description: Emergencia u oficial no encontrado
+   *       409:
+   *         description: Estado no asignable u oficial no disponible
+   */
+  router.patch('/:id/assign', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.assignOfficer(req.params.id, req.body || {}, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
    * /api/emergencies/{id}/cancel:
    *   patch:
    *     tags: [Emergencies]

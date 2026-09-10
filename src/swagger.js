@@ -28,6 +28,7 @@ const options = {
       { name: 'Dev Auth', description: 'Login de desarrollo (solo AUTH_MODE=local)' },
       { name: 'Panic Button', description: 'Activación y consulta de botón de pánico' },
       { name: 'Emergencies', description: 'Listado, detalle y cambios de estado de emergencias' },
+      { name: 'Officers', description: 'Catálogo de oficiales para asignación (dispatcher)' },
     ],
     components: {
       securitySchemes: {

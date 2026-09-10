@@ -200,6 +200,56 @@ class EmergencyController {
 
     return { success: true, data: updated };
   }
+
+  /**
+   * Asigna un oficial disponible: VALIDATED → DISPATCHED.
+   * @param {string} id
+   * @param {{ officerId?: string }} body
+   * @param {{ sub: string }} user
+   */
+  async assignOfficer(id, { officerId } = {}, user) {
+    const actor = user.sub;
+    const normalizedOfficerId = typeof officerId === 'string' ? officerId.trim() : '';
+
+    if (!normalizedOfficerId) {
+      throw new ValidationError('officerId is required');
+    }
+
+    if (!isUuid(id)) {
+      throw new ValidationError('Emergency id must be a valid UUID');
+    }
+
+    const emergency = await this.emergencyRepository.findById(id);
+    if (!emergency) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    assertTransition(emergency.status, 'DISPATCHED');
+
+    const { emergency: updated, officer } = await this.emergencyRepository.assignOfficer(id, {
+      officerId: normalizedOfficerId,
+      actor,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            reason: `Assigned officer ${normalizedOfficerId}`,
+            eventId,
+          }),
+      },
+    });
+
+    return {
+      success: true,
+      data: {
+        ...updated,
+        assignedOfficer: officer?.name || null,
+      },
+    };
+  }
 }
 
 module.exports = { EmergencyController };
