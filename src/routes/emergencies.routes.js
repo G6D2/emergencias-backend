@@ -3,9 +3,9 @@ const { EmergencyController } = require('../controllers/emergency.controller');
 const { asyncHandler } = require('../utils/async-handler');
 const { requireCitizen, requireDispatcher, requireCitizenOrDispatcher } = require('../auth/authorize');
 
-function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate, officerRepository = null) {
+function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
   const router = express.Router();
-  const controller = new EmergencyController(kafkaService, emergencyRepository, officerRepository);
+  const controller = new EmergencyController(kafkaService, emergencyRepository);
 
   /**
    * @openapi

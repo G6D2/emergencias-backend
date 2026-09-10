@@ -78,7 +78,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   app.use('/api/panic-button', createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate));
   app.use(
     '/api/emergencies',
-    createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate, officerRepository)
+    createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate)
   );
   app.use('/api/outbox-events', createOutboxRoutes(emergencyRepository, authenticate));
   if (officerRepository) {

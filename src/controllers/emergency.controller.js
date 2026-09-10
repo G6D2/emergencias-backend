@@ -9,10 +9,9 @@ const { buildEmergencyStatusUpdatedEvent } = require('../services/emergency-even
 const { assertEmergencyType } = require('../domain/emergency-type');
 
 class EmergencyController {
-  constructor(kafkaService, emergencyRepository, officerRepository = null) {
+  constructor(kafkaService, emergencyRepository) {
     this.kafkaService = kafkaService;
     this.emergencyRepository = emergencyRepository;
-    this.officerRepository = officerRepository;
   }
 
   /**

@@ -390,11 +390,15 @@ class EmergencyRepository {
     try {
       await client.query('BEGIN');
 
-      const current = await client.query('SELECT status FROM emergencies WHERE id = $1 FOR UPDATE', [id]);
+      const current = await client.query(
+        'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
+        [id]
+      );
       if (current.rows.length === 0) {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
       }
       const previousStatus = current.rows[0].status;
+      const assignedOfficerId = current.rows[0].assigned_officer_id;
       assertTransition(previousStatus, newStatus);
 
       const updated = await client.query(
@@ -407,6 +411,19 @@ class EmergencyRepository {
          VALUES ($1, $2, $3, $4, $5) RETURNING *`,
         [id, previousStatus, newStatus, actor, reason]
       );
+
+      // Al cancelar, cerrar o devolver a VALIDATED, el oficial asignado vuelve a disponible
+      // en la misma transacción (si no, se agotan en demo y reasignar el mismo da 409).
+      if (
+        assignedOfficerId
+        && (newStatus === 'CANCELLED' || newStatus === 'CLOSED' || newStatus === 'VALIDATED')
+      ) {
+        await client.query(
+          `UPDATE officers SET status = 'disponible', updated_at = now()
+           WHERE id = $1 AND status = 'ocupado'`,
+          [assignedOfficerId]
+        );
+      }
 
       if (outboxEvent) {
         await this.insertOutboxEvent(client, outboxEvent, {

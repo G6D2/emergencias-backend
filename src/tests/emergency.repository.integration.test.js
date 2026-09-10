@@ -243,6 +243,51 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(historyList).toHaveLength(1);
   });
 
+  it('al asignar marca al oficial ocupado y al devolver a VALIDATED lo libera (misma tx)', async () => {
+    const officerId = 'of-001';
+    await getPool().query(
+      `UPDATE officers SET status = 'disponible', updated_at = now() WHERE id = $1`,
+      [officerId]
+    );
+
+    const input = buildEmergency();
+    await repository.create(input);
+    await repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' });
+
+    const { emergency: dispatched, officer } = await repository.assignOfficer(input.id, {
+      officerId,
+      actor: 'operador-1',
+    });
+
+    expect(dispatched.status).toBe('DISPATCHED');
+    expect(dispatched.assignedOfficerId).toBe(officerId);
+    expect(officer.status).toBe('ocupado');
+
+    const busy = await getPool().query('SELECT status FROM officers WHERE id = $1', [officerId]);
+    expect(busy.rows[0].status).toBe('ocupado');
+
+    const { emergency: returned } = await repository.updateStatus(input.id, {
+      newStatus: 'VALIDATED',
+      actor: 'operador-1',
+      reason: 'Devolución para reasignar',
+    });
+    expect(returned.status).toBe('VALIDATED');
+
+    const free = await getPool().query('SELECT status FROM officers WHERE id = $1', [officerId]);
+    expect(free.rows[0].status).toBe('disponible');
+
+    // El mismo oficial se puede reasignar sin 409.
+    await expect(
+      repository.assignOfficer(input.id, { officerId, actor: 'operador-1' })
+    ).resolves.toMatchObject({
+      emergency: expect.objectContaining({ status: 'DISPATCHED', assignedOfficerId: officerId }),
+      officer: expect.objectContaining({ status: 'ocupado' }),
+    });
+
+    // Dejar el seed usable para otros tests / demos locales.
+    await repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' });
+  });
+
   it('findDetailById devuelve la emergencia con su historial de estados (tarea #32)', async () => {
     const input = buildEmergency({ emergencyType: 'medical' });
     await repository.create(input);
