@@ -36,6 +36,20 @@ services:
         value: "72"
       - key: LOCATION_RETENTION_ENABLED
         value: "true"
+      # Keep-warm in-process (ver README > Deploy > Keep-warm): en horario de
+      # clase el backend se pega a sí mismo (URL pública) y al frontend cada
+      # 8 min para que Render (free) no los duerma. El cron de GitHub
+      # (.github/workflows/keep-warm.yml) solo hace el primer despertar.
+      - key: KEEP_WARM_ENABLED
+        value: "true"
+      - key: KEEP_WARM_URLS
+        value: https://emergencias-backend-34go.onrender.com/health,https://frontend-krds.onrender.com/api/warmup
+      - key: KEEP_WARM_WINDOWS
+        value: jue:17:00-23:30
+      - key: KEEP_WARM_TZ
+        value: America/Argentina/Buenos_Aires
+      - key: KEEP_WARM_INTERVAL_MS
+        value: "480000"
       # Primera entrega sin IdP (Grupo 2): descomentar o setear en el dashboard de Render
       # - key: AUTH_MODE
       #   value: local

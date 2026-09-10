@@ -7,6 +7,7 @@ const { createApp } = require('./app');
 const { createAuthSetup } = require('./auth/setup');
 const { createLocationCrypto } = require('./security/location-crypto');
 const { startLocationRetentionJob } = require('./security/location-retention');
+const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher } = require('./services/outbox-publisher');
 
@@ -30,6 +31,8 @@ async function start() {
   outboxPublisher.start();
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
+  // Mantiene despiertos backend y frontend en horario de clase (Render free).
+  const keepWarmJob = startKeepWarmJob();
 
   const app = createApp(kafkaService, emergencyRepository, {
     authenticate: auth.authenticate,
@@ -51,6 +54,7 @@ async function start() {
 
   const shutdown = async () => {
     retentionJob.stop();
+    keepWarmJob.stop();
     outboxPublisher.stop();
     server.close();
     await kafkaService.disconnect().catch(() => {});
