@@ -87,48 +87,15 @@ describe('IncidentRepository (integración contra Postgres real)', () => {
   });
 
   it('findActive() devuelve un incidente con una emergencia miembro PENDING y no uno cuyas emergencias están todas CLOSED', async () => {
-    const officerId = 'of-004';
-    await getPool().query(
-      `UPDATE officers SET status = 'disponible', updated_at = now() WHERE id = $1`,
-      [officerId]
-    );
-
     const activeIncident = await incidentRepository.create({ emergencyType: 'PANICO' });
     const pendingEmergency = buildEmergency();
     await emergencyRepository.create(pendingEmergency);
     await emergencyRepository.setIncidentId(pendingEmergency.id, activeIncident.id);
 
     const closedIncident = await incidentRepository.create({ emergencyType: 'PANICO' });
-    const closedEmergency = buildEmergency();
+    const closedEmergency = buildEmergency({ status: 'CLOSED' });
     await emergencyRepository.create(closedEmergency);
     await emergencyRepository.setIncidentId(closedEmergency.id, closedIncident.id);
-
-    // Recorre el flujo completo hasta CLOSED (no alcanza con un estado
-    // terminal cualquiera: el enunciado pide específicamente CLOSED).
-    await emergencyRepository.updateStatus(closedEmergency.id, {
-      newStatus: 'VALIDATED',
-      actor: 'operador-1',
-    });
-    await emergencyRepository.assignOfficer(closedEmergency.id, {
-      officerId,
-      actor: 'operador-1',
-    });
-    await emergencyRepository.updateStatus(closedEmergency.id, {
-      newStatus: 'EN_ROUTE',
-      actor: 'operador-1',
-    });
-    await emergencyRepository.updateStatus(closedEmergency.id, {
-      newStatus: 'ON_SCENE',
-      actor: 'operador-1',
-    });
-    await emergencyRepository.updateStatus(closedEmergency.id, {
-      newStatus: 'RESOLVED',
-      actor: 'operador-1',
-    });
-    await emergencyRepository.updateStatus(closedEmergency.id, {
-      newStatus: 'CLOSED',
-      actor: 'operador-1',
-    });
 
     const active = await incidentRepository.findActive();
 
