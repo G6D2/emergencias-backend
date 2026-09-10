@@ -153,6 +153,30 @@ ALLOW_LOCAL_AUTH=true
 El server arranca con `NODE_ENV=production` y expone `POST /auth/dev/login` para obtener tokens.  
 **Sacá `ALLOW_LOCAL_AUTH` cuando pasen a IdP real** — es solo para la primera entrega.
 
+### Keep-warm (Render plan free)
+
+Render (free) duerme backend y frontend tras 15 min sin tráfico y tardan 50-60 s en despertar. Hay dos mecanismos, pensados para el horario de clase (jueves, hora Argentina) y no todo el mes (750 h gratis):
+
+1. **Primer despertar**: el workflow `.github/workflows/keep-warm.yml` (cron de GitHub Actions, jueves 16:50 ART y luego cada 20 min hasta las 23:59 ART; también `Run workflow` manual). Los crons de GitHub son *best effort* — el 10/09 no corrió ninguna ejecución programada — así que no alcanza solo con eso.
+2. **Mantenerse despierto**: el job in-process `src/jobs/keep-warm.js`. Mientras el backend está arriba, cada `KEEP_WARM_INTERVAL_MS` hace `GET` a cada URL de `KEEP_WARM_URLS` (su propia URL pública, que pasa por el edge de Render y cuenta como tráfico, y el `/api/warmup` del frontend), solo dentro de las ventanas de `KEEP_WARM_WINDOWS`. Timeout 60 s por URL; un ping fallido solo deja un `warn`.
+
+| Variable | Rol |
+|----------|-----|
+| `KEEP_WARM_ENABLED` | `false` para desactivar el job (default: activo) |
+| `KEEP_WARM_URLS` | URLs a pegar, separadas por coma. Vacío (default, dev) = no hace nada |
+| `KEEP_WARM_WINDOWS` | Ventanas `DOW:HH:MM-HH:MM` separadas por coma (`DOW`: `lun,mar,mie,jue,vie,sab,dom` o `0`=dom … `6`=sab), o `always`. Default `jue:17:00-23:30` |
+| `KEEP_WARM_TZ` | Zona IANA en la que se evalúan las ventanas (default `America/Argentina/Buenos_Aires`) |
+| `KEEP_WARM_INTERVAL_MS` | Intervalo entre pasadas (default `480000` = 8 min) |
+
+Producción (ya en `render.yaml`; si el servicio no usa Blueprint, setearlo en el dashboard de Render):
+
+```env
+KEEP_WARM_URLS=https://emergencias-backend-34go.onrender.com/health,https://frontend-krds.onrender.com/api/warmup
+KEEP_WARM_WINDOWS=jue:17:00-23:30
+```
+
+Para una demo otro día: `KEEP_WARM_WINDOWS=mar:18:00-21:00,jue:17:00-23:30` (o `always` unos días) + `Run workflow` para el primer despertar.
+
 ### Integración con Grupo 2 — solo cambiar env
 
 ```env
