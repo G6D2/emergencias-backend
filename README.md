@@ -183,14 +183,19 @@ Grupo desconocido no otorga nada. Mapa actual del módulo:
 | Grupo | Permisos |
 |-------|----------|
 | `citizen` | Activar pánico; ver y cancelar **solo sus** emergencias |
-| `dispatcher` | Ver **cualquier** emergencia (solo lectura por ahora) |
+| `dispatcher` | Ver cualquier emergencia; validar; descartar; listar oficiales; asignar oficial |
 
 | Endpoint | Grupo requerido | Regla extra |
 |----------|-----------------|-------------|
 | `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT |
 | `POST /api/panic-button` | `citizen` | — |
 | `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo `userId === sub` |
-| `GET /api/emergencies` | `dispatcher` | listado paginado, con filtros |
+| `GET /api/emergencies` | `citizen` o `dispatcher` | citizen: solo las propias |
+| `GET /api/emergencies/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena) |
+| `PATCH /api/emergencies/:id/validate` | `dispatcher` | PENDING → VALIDATED |
+| `PATCH /api/emergencies/:id/discard` | `dispatcher` | PENDING → DISCARDED; motivo obligatorio |
+| `PATCH /api/emergencies/:id/assign` | `dispatcher` | VALIDATED → DISPATCHED; oficial disponible |
+| `GET /api/officers` | `dispatcher` | catálogo local (oficiales no se loguean acá) |
 | `PATCH /api/emergencies/:id/cancel` | `citizen` | solo dueño (`userId === sub`) |
 
 En dev login podés probar groups distintos:
@@ -321,7 +326,27 @@ Obtiene detalles de un evento de pánico. Requiere JWT.
 
 ### GET `/api/emergencies`
 
-Lista paginada de emergencias, con filtros por status, severity, rango de fechas, oficial asignado y tipo. Requiere grupo `dispatcher`.
+Lista paginada de emergencias, con filtros por status, severity, rango de fechas, oficial asignado y tipo. Requiere `citizen` o `dispatcher` (citizen solo ve las propias).
+
+### GET `/api/emergencies/:id`
+
+Detalle con `statusHistory`. Mismas reglas de acceso que el listado.
+
+### PATCH `/api/emergencies/:id/validate`
+
+Dispatcher: `PENDING` → `VALIDATED`.
+
+### PATCH `/api/emergencies/:id/discard`
+
+Dispatcher: `PENDING` → `DISCARDED`. Body: `{ "reason": "..." }` (obligatorio).
+
+### PATCH `/api/emergencies/:id/assign`
+
+Dispatcher: `VALIDATED` → `DISPATCHED`. Body: `{ "officerId": "of-001" }`. El oficial debe existir y estar `disponible`; pasa a `ocupado`.
+
+### GET `/api/officers`
+
+Catálogo de oficiales para el dispatcher (`?status=disponible` opcional). Los oficiales **no** se autentican en este módulo.
 
 ### PATCH `/api/emergencies/:id/cancel`
 
@@ -334,6 +359,13 @@ Cancela una emergencia propia en estado `PENDING` o `VALIDATED`. Requiere JWT y 
 }
 ```
 
+### Auth en deploy (demo)
+
+Con `AUTH_MODE=local` + `ALLOW_LOCAL_AUTH=true` cualquiera puede pedir un token dispatcher en `POST /auth/dev/login`. Para demo pública o con evaluadores externos: **sacar `ALLOW_LOCAL_AUTH`** o pasar a `AUTH_MODE=idp`. Demo de clase cerrada: se puede dejar.
+
+### Ops: Postgres huérfano en Render
+
+Si quedó un PostgreSQL de Render sin uso (tras migrar a Neon), borrarlo desde el dashboard de Render para no seguir pagando. No es un cambio de código.
 ### GET `/health`
 
 Estado del servicio y conectividad Kafka (público).
@@ -392,15 +424,18 @@ src/
 │   └── emergency-status.js       # Máquina de estados (transiciones válidas)
 ├── controllers/
 │   ├── panic-button.controller.js
-│   ├── emergency.controller.js
+│   ├── emergency.controller.js   # list/detail/validate/discard/assign/cancel
+│   ├── officer.controller.js
 │   └── user.controller.js
 ├── routes/
 │   ├── panic-button.routes.js
 │   ├── emergencies.routes.js
+│   ├── officer.routes.js
 │   ├── user.routes.js
 │   └── dev-auth.routes.js        # Solo AUTH_MODE=local
 ├── repositories/
-│   └── emergency.repository.js   # SQL + mapper + transacciones
+│   ├── emergency.repository.js   # SQL + mapper + transacciones
+│   └── officer.repository.js
 ├── services/
 │   └── kafka.service.js
 ├── errors/
@@ -409,6 +444,7 @@ src/
 │   └── pool.js
 └── tests/
     ├── panic-button.test.js
+    ├── officer.test.js
     ├── emergency-status.test.js
     ├── auth.test.js
     └── emergency.repository.integration.test.js
@@ -485,8 +521,10 @@ npm run test:integration
 
 - [x] Persistencia de emergencias (PostgreSQL)
 - [x] Cancelación de emergencias
-- [ ] Visualización en tiempo real (WebSockets)
 - [x] Integración con Login Federado (auth JWT CityPass+)
 - [x] Autorización por `groups` (citizen / dispatcher)
+- [x] Validar / descartar / asignar oficial + catálogo `/api/officers`
 - [x] Cifrado de ubicación + retención + logs seguros + auditoría de lecturas
 - [ ] Alinear contrato HTTP de location (`lat`/`lng` vs `latitude`/`longitude`)
+- [ ] Visualización en tiempo real (WebSockets/SSE) — hoy polling en front
+- [ ] Ops: borrar Postgres huérfano de Render si aún existe (dashboard)
