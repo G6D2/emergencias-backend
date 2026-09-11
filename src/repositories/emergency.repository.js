@@ -54,6 +54,7 @@ function mapEmergency(row, locationCrypto) {
     emergencyType: row.emergency_type,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    closedAt: row.closed_at,
   };
 }
 
@@ -403,7 +404,12 @@ class EmergencyRepository {
       assertTransition(previousStatus, newStatus);
 
       const updated = await client.query(
-        'UPDATE emergencies SET status = $1, updated_at = now() WHERE id = $2 RETURNING *',
+        `UPDATE emergencies
+         SET status = $1,
+             updated_at = now(),
+             closed_at = CASE WHEN $1 = 'CLOSED' THEN now() ELSE closed_at END
+         WHERE id = $2
+         RETURNING *`,
         [newStatus, id]
       );
 

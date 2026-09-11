@@ -52,7 +52,12 @@ function createMockEmergencyRepository() {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
       }
       const previousStatus = current.status;
-      const updated = { ...current, status: newStatus, updatedAt: new Date().toISOString() };
+      const updated = {
+        ...current,
+        status: newStatus,
+        updatedAt: new Date().toISOString(),
+        closedAt: newStatus === 'CLOSED' ? new Date().toISOString() : current.closedAt || null,
+      };
       emergencies.set(id, updated);
       // Mismo shape que mapHistoryEntry; se acumula para findHistoryByEmergencyId.
       const entries = statusHistory.get(id) || [];
@@ -778,6 +783,50 @@ describe('Emergencies API', () => {
       .expect(403);
 
     expect(response.body.error).toBe('ForbiddenError');
+  });
+
+  it('allows a dispatcher to close a resolved emergency and stores EmergenciaCerrada', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const emergencyId = '11111111-1111-4111-8111-111111111111';
+    await sharedRepo.create({
+      id: emergencyId,
+      userId: 'U000042',
+      status: 'RESOLVED',
+      severity: 'critical',
+    });
+    const dispatcherApp = createTestApp({ sub: 'D000007', groups: ['dispatcher'] }, sharedRepo);
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${emergencyId}/close`)
+      .expect(200);
+
+    expect(response.body.data.status).toBe('CLOSED');
+    expect(response.body.data.closedAt).toBeTruthy();
+    const outboxEvent = sharedRepo.updateStatusCalls.at(-1).outboxEvent;
+    expect(outboxEvent.topic).toBe('emergencias.cerrada');
+    expect(outboxEvent.payload({ emergency: response.body.data }, 'event-close-1')).toMatchObject({
+      type: 'EmergenciaCerrada',
+      eventId: 'event-close-1',
+      correlationId: emergencyId,
+      data: { id: emergencyId, actor: 'D000007', closedAt: response.body.data.closedAt },
+    });
+  });
+
+  it('forbids a citizen from closing an emergency', async () => {
+    await request(app)
+      .patch('/api/emergencies/11111111-1111-4111-8111-111111111111/close')
+      .expect(403);
+  });
+
+  it('rejects closing an emergency that is not resolved or already closed', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const emergencyId = '22222222-2222-4222-8222-222222222222';
+    await sharedRepo.create({ id: emergencyId, userId: 'U000042', status: 'RESOLVED' });
+    const dispatcherApp = createTestApp({ sub: 'D000007', groups: ['dispatcher'] }, sharedRepo);
+
+    await request(dispatcherApp).patch(`/api/emergencies/${emergencyId}/close`).expect(200);
+    await request(dispatcherApp).patch(`/api/emergencies/${emergencyId}/close`).expect(409);
+    await request(dispatcherApp).patch(`/api/emergencies/${emergencyId}/validate`).expect(409);
   });
 });
 
