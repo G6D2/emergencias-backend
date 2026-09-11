@@ -49,6 +49,7 @@ services:
       KAFKA_CLIENT_ID: emergencias-backend
       TOPIC_PANIC_BUTTON: emergencias.boton-panico
       TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO: emergencias.estado-actualizado
+      TOPIC_EMERGENCIA_CERRADA: emergencias.cerrada
     depends_on:
       postgres:
         condition: service_healthy
