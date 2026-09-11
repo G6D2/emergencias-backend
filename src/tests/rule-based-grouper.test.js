@@ -53,6 +53,41 @@ describe('rule-based-grouper', () => {
 
       expect(groups.some((group) => group.includes('e1') && group.includes('e2'))).toBe(false);
     });
+
+    it('DOCUMENTA el comportamiento actual: A-B y B-C dentro del radio arrastran a A y C al mismo grupo aunque A-C exceda el radio (transitividad de union-find)', () => {
+      // Nota: no se puede usar A-B=100m, B-C=100m, A-C=500m — es geométricamente
+      // imposible (desigualdad triangular: A-C <= A-B + B-C <= 200m siempre).
+      // Se usa 250m/250m/500m, los tres puntos colineales sobre el mismo
+      // meridiano (offset puro de latitud), para que las distancias se sumen
+      // exactas y el par extremo (A-C) quede por encima de radiusMeters=300.
+      const METERS_PER_DEGREE_LATITUDE = 111194.86; // ver haversineDistanceMeters: R * (pi/180)
+      const offsetForMeters = (meters) => meters / METERS_PER_DEGREE_LATITUDE;
+
+      const pointA = { latitude: -34.6037, longitude: -58.3816 };
+      const pointB = { latitude: -34.6037 + offsetForMeters(250), longitude: -58.3816 };
+      const pointC = { latitude: -34.6037 + offsetForMeters(500), longitude: -58.3816 };
+
+      // Confirma las distancias reales antes de agrupar (no asumidas).
+      expect(haversineDistanceMeters(pointA, pointB)).toBeCloseTo(250, 0);
+      expect(haversineDistanceMeters(pointB, pointC)).toBeCloseTo(250, 0);
+      const distanceAC = haversineDistanceMeters(pointA, pointC);
+      expect(distanceAC).toBeCloseTo(500, 0);
+      expect(distanceAC).toBeGreaterThan(300); // fuera de radiusMeters
+
+      const candidates = [
+        candidate({ emergencyId: 'A', userId: 'user-A', ...pointA }),
+        candidate({ emergencyId: 'B', userId: 'user-B', ...pointB }),
+        candidate({ emergencyId: 'C', userId: 'user-C', ...pointC }),
+      ];
+
+      const groups = groupNearbyEmergencies(candidates, { radiusMeters: 300, minUniqueCitizens: 3 });
+
+      // Comportamiento REAL de la implementación actual: un solo grupo con
+      // A, B y C juntos, pese a que A y C están a 500m (> radiusMeters=300)
+      // entre sí. Esto es lo que hace el código hoy — no un "debería".
+      expect(groups).toHaveLength(1);
+      expect(groups[0].slice().sort()).toEqual(['A', 'B', 'C']);
+    });
   });
 
   describe('haversineDistanceMeters', () => {

@@ -50,6 +50,17 @@ function union(parents, a, b) {
  * y B está cerca de C, las tres caen en el mismo grupo aunque A y C no estén
  * dentro del radio entre sí.
  *
+ * Esto es INTENCIONAL, no un descuido: agrupar por cadena (reachability
+ * transitiva) en vez de por cercanía a un punto ancla común es la misma
+ * semántica que usa DBSCAN, la estrategia de ML que va a implementar este
+ * mismo contrato (IncidentDetectionStrategy) en el Sprint 3-4 — DBSCAN
+ * también conecta puntos por "density-reachability" en cadena, no por
+ * distancia a un centro fijo. Si esta implementación agrupara por cercanía
+ * a un ancla y DBSCAN agrupara por cadena, ambas estrategias darían
+ * resultados distintos para el mismo escenario de entrada, y el fallback
+ * entre una y otra dejaría de ser predecible para quien consume el
+ * contrato. No cambiar este criterio sin coordinar con esa migración.
+ *
  * @param {Array<{ emergencyId: string, userId: string, latitude: number, longitude: number, createdAt: string|Date }>} candidates
  * @param {{ radiusMeters: number, minUniqueCitizens: number }} options
  * @returns {string[][]} grupos válidos (>= minUniqueCitizens ciudadanos distintos), cada uno un array de emergencyId

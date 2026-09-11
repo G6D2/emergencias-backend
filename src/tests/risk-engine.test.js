@@ -97,5 +97,9 @@ describe('risk-engine', () => {
     it('devuelve el más alto de los dos cuando incidentPriority es mayor', () => {
       expect(applyPriorityInvariant('low', 'critical')).toBe('critical');
     });
+
+    it('lanza una excepción si priorityIndividual no está en PRIORITY_LEVELS (p. ej. la escala vieja en español del comentario TEMPORAL)', () => {
+      expect(() => applyPriorityInvariant('BAJA', 'critical')).toThrow();
+    });
   });
 });
