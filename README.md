@@ -153,6 +153,30 @@ ALLOW_LOCAL_AUTH=true
 El server arranca con `NODE_ENV=production` y expone `POST /auth/dev/login` para obtener tokens.  
 **Sacá `ALLOW_LOCAL_AUTH` cuando pasen a IdP real** — es solo para la primera entrega.
 
+### Keep-warm (Render plan free)
+
+Render (free) duerme backend y frontend tras 15 min sin tráfico y tardan 50-60 s en despertar. Hay dos mecanismos, pensados para el horario de clase (jueves, hora Argentina) y no todo el mes (750 h gratis):
+
+1. **Primer despertar**: el workflow `.github/workflows/keep-warm.yml` (cron de GitHub Actions, jueves 16:50 ART y luego cada 20 min hasta las 23:59 ART; también `Run workflow` manual). Los crons de GitHub son *best effort* — el 10/09 no corrió ninguna ejecución programada — así que no alcanza solo con eso.
+2. **Mantenerse despierto**: el job in-process `src/jobs/keep-warm.js`. Mientras el backend está arriba, cada `KEEP_WARM_INTERVAL_MS` hace `GET` a cada URL de `KEEP_WARM_URLS` (su propia URL pública, que pasa por el edge de Render y cuenta como tráfico, y el `/api/warmup` del frontend), solo dentro de las ventanas de `KEEP_WARM_WINDOWS`. Timeout 60 s por URL; un ping fallido solo deja un `warn`.
+
+| Variable | Rol |
+|----------|-----|
+| `KEEP_WARM_ENABLED` | `false` para desactivar el job (default: activo) |
+| `KEEP_WARM_URLS` | URLs a pegar, separadas por coma. Vacío (default, dev) = no hace nada |
+| `KEEP_WARM_WINDOWS` | Ventanas `DOW:HH:MM-HH:MM` separadas por coma (`DOW`: `lun,mar,mie,jue,vie,sab,dom` o `0`=dom … `6`=sab), o `always`. Default `jue:17:00-23:30` |
+| `KEEP_WARM_TZ` | Zona IANA en la que se evalúan las ventanas (default `America/Argentina/Buenos_Aires`) |
+| `KEEP_WARM_INTERVAL_MS` | Intervalo entre pasadas (default `480000` = 8 min) |
+
+Producción (ya en `render.yaml`; si el servicio no usa Blueprint, setearlo en el dashboard de Render):
+
+```env
+KEEP_WARM_URLS=https://emergencias-backend-34go.onrender.com/health,https://frontend-krds.onrender.com/api/warmup
+KEEP_WARM_WINDOWS=jue:17:00-23:30
+```
+
+Para una demo otro día: `KEEP_WARM_WINDOWS=mar:18:00-21:00,jue:17:00-23:30` (o `always` unos días) + `Run workflow` para el primer despertar.
+
 ### Integración con Grupo 2 — solo cambiar env
 
 ```env
@@ -183,14 +207,19 @@ Grupo desconocido no otorga nada. Mapa actual del módulo:
 | Grupo | Permisos |
 |-------|----------|
 | `citizen` | Activar pánico; ver y cancelar **solo sus** emergencias |
-| `dispatcher` | Ver **cualquier** emergencia (solo lectura por ahora) |
+| `dispatcher` | Ver cualquier emergencia; validar; descartar; listar oficiales; asignar oficial |
 
 | Endpoint | Grupo requerido | Regla extra |
 |----------|-----------------|-------------|
 | `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT |
 | `POST /api/panic-button` | `citizen` | — |
 | `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo `userId === sub` |
-| `GET /api/emergencies` | `dispatcher` | listado paginado, con filtros |
+| `GET /api/emergencies` | `citizen` o `dispatcher` | citizen: solo las propias |
+| `GET /api/emergencies/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena) |
+| `PATCH /api/emergencies/:id/validate` | `dispatcher` | PENDING → VALIDATED |
+| `PATCH /api/emergencies/:id/discard` | `dispatcher` | PENDING → DISCARDED; motivo obligatorio |
+| `PATCH /api/emergencies/:id/assign` | `dispatcher` | VALIDATED → DISPATCHED; oficial disponible |
+| `GET /api/officers` | `dispatcher` | catálogo local (oficiales no se loguean acá) |
 | `PATCH /api/emergencies/:id/cancel` | `citizen` | solo dueño (`userId === sub`) |
 
 En dev login podés probar groups distintos:
@@ -230,6 +259,8 @@ probando las claves del keyring, así que la migración no requiere backfill.
 
 ### Retención / minimización
 Job en background (y `npm run security:anonymize-locations`) borra el ciphertext después de `LOCATION_RETENTION_HOURS` (default 72). La emergencia sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
+
+Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
 ### Logs seguros
 No se loguean JWT ni coordenadas. Kafka loguea solo un resumen (`emergencyId`, `status`, `hasLocation`).
@@ -319,7 +350,27 @@ Obtiene detalles de un evento de pánico. Requiere JWT.
 
 ### GET `/api/emergencies`
 
-Lista paginada de emergencias, con filtros por status, severity, rango de fechas, oficial asignado y tipo. Requiere grupo `dispatcher`.
+Lista paginada de emergencias, con filtros por status, severity, rango de fechas, oficial asignado y tipo. Requiere `citizen` o `dispatcher` (citizen solo ve las propias).
+
+### GET `/api/emergencies/:id`
+
+Detalle con `statusHistory`. Mismas reglas de acceso que el listado.
+
+### PATCH `/api/emergencies/:id/validate`
+
+Dispatcher: `PENDING` → `VALIDATED`.
+
+### PATCH `/api/emergencies/:id/discard`
+
+Dispatcher: `PENDING` → `DISCARDED`. Body: `{ "reason": "..." }` (obligatorio).
+
+### PATCH `/api/emergencies/:id/assign`
+
+Dispatcher: `VALIDATED` → `DISPATCHED`. Body: `{ "officerId": "of-001" }`. El oficial debe existir y estar `disponible`; pasa a `ocupado`.
+
+### GET `/api/officers`
+
+Catálogo de oficiales para el dispatcher (`?status=disponible` opcional). Los oficiales **no** se autentican en este módulo.
 
 ### PATCH `/api/emergencies/:id/cancel`
 
@@ -332,9 +383,43 @@ Cancela una emergencia propia en estado `PENDING` o `VALIDATED`. Requiere JWT y 
 }
 ```
 
+### Auth en deploy (demo)
+
+Con `AUTH_MODE=local` + `ALLOW_LOCAL_AUTH=true` cualquiera puede pedir un token dispatcher en `POST /auth/dev/login`. Para demo pública o con evaluadores externos: **sacar `ALLOW_LOCAL_AUTH`** o pasar a `AUTH_MODE=idp`. Demo de clase cerrada: se puede dejar.
+
+### Ops: Postgres huérfano en Render
+
+Si quedó un PostgreSQL de Render sin uso (tras migrar a Neon), borrarlo desde el dashboard de Render para no seguir pagando. No es un cambio de código.
 ### GET `/health`
 
 Estado del servicio y conectividad Kafka (público).
+
+---
+
+## Máquina de estados
+
+El ciclo de vida de una emergencia está centralizado en [`src/domain/emergency-status.js`](src/domain/emergency-status.js) (única fuente de verdad: la usan los controllers, el repository y el enum de Swagger).
+
+```
+              ┌────────────────┐
+              ▼                │   (DISPATCHED → VALIDATED: devolución para reasignar)
+PENDING ──► VALIDATED ──► DISPATCHED ──► EN_ROUTE ──► ON_SCENE ──► RESOLVED ──► CLOSED
+   │                │
+   ├──► CANCELLED ◄─┘   (desde PENDING o VALIDATED)
+   └──► DISCARDED       (solo desde PENDING)
+```
+
+| Desde | Hacia |
+|-------|-------|
+| `PENDING` | `VALIDATED`, `CANCELLED`, `DISCARDED` |
+| `VALIDATED` | `DISPATCHED`, `CANCELLED` |
+| `DISPATCHED` | `EN_ROUTE`, `VALIDATED` |
+| `EN_ROUTE` | `ON_SCENE` |
+| `ON_SCENE` | `RESOLVED` |
+| `RESOLVED` | `CLOSED` |
+| `CANCELLED`, `DISCARDED`, `CLOSED` | — (terminales) |
+
+Una transición no listada devuelve **409 Conflict** (`ConflictError`, p. ej. `Invalid transition PENDING → RESOLVED`). La validación corre en el controller y, como defensa en profundidad, en `EmergencyRepository.updateStatus` con la fila bloqueada (`FOR UPDATE`), así ningún endpoint puede saltarse el flujo.
 
 ---
 
@@ -359,17 +444,22 @@ src/
 │   ├── location-retention.js     # Job de anonimización
 │   ├── secure-log.js             # Redacción de logs
 │   └── security-headers.js       # HTTPS/HSTS + headers
+├── domain/
+│   └── emergency-status.js       # Máquina de estados (transiciones válidas)
 ├── controllers/
 │   ├── panic-button.controller.js
-│   ├── emergency.controller.js
+│   ├── emergency.controller.js   # list/detail/validate/discard/assign/cancel
+│   ├── officer.controller.js
 │   └── user.controller.js
 ├── routes/
 │   ├── panic-button.routes.js
 │   ├── emergencies.routes.js
+│   ├── officer.routes.js
 │   ├── user.routes.js
 │   └── dev-auth.routes.js        # Solo AUTH_MODE=local
 ├── repositories/
-│   └── emergency.repository.js   # SQL + mapper + transacciones
+│   ├── emergency.repository.js   # SQL + mapper + transacciones
+│   └── officer.repository.js
 ├── services/
 │   └── kafka.service.js
 ├── errors/
@@ -378,6 +468,8 @@ src/
 │   └── pool.js
 └── tests/
     ├── panic-button.test.js
+    ├── officer.test.js
+    ├── emergency-status.test.js
     ├── auth.test.js
     └── emergency.repository.integration.test.js
 
@@ -453,8 +545,10 @@ npm run test:integration
 
 - [x] Persistencia de emergencias (PostgreSQL)
 - [x] Cancelación de emergencias
-- [ ] Visualización en tiempo real (WebSockets)
 - [x] Integración con Login Federado (auth JWT CityPass+)
 - [x] Autorización por `groups` (citizen / dispatcher)
+- [x] Validar / descartar / asignar oficial + catálogo `/api/officers`
 - [x] Cifrado de ubicación + retención + logs seguros + auditoría de lecturas
 - [ ] Alinear contrato HTTP de location (`lat`/`lng` vs `latitude`/`longitude`)
+- [ ] Visualización en tiempo real (WebSockets/SSE) — hoy polling en front
+- [ ] Ops: borrar Postgres huérfano de Render si aún existe (dashboard)

@@ -1,4 +1,5 @@
 const { generateKeyPair, exportJWK, importPKCS8 } = require('jose');
+const { createPublicKey } = require('crypto');
 
 const LOCAL_KEY_ID = 'emergencias-local-dev';
 
@@ -12,7 +13,10 @@ async function createLocalKeySet(privateKeyPem = null) {
 
   if (privateKeyPem) {
     privateKey = await importPKCS8(privateKeyPem, 'RS256');
-    publicKey = privateKey;
+    // Derivar la pública: exportJWK(privateKey) incluye los componentes
+    // privados (d, p, q...) y el JWKS de verificación rechaza esas claves,
+    // con lo que TODOS los tokens daban 401 al fijar la PEM (10/09).
+    publicKey = createPublicKey(privateKey);
   } else {
     ({ privateKey, publicKey } = await generateKeyPair('RS256'));
   }

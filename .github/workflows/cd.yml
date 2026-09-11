@@ -51,11 +51,11 @@ jobs:
           server_port: 587
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "Deploy falló — ${{ github.repository }}"
+          subject: "Deploy falló — Backend ${{ github.repository }}"
           to: ${{ secrets.MAIL_TO }}
           from: CityPass+ CD <${{ secrets.MAIL_USERNAME }}>
           body: |
-            El pipeline de deploy a producción falló en ${{ github.repository }}.
+            El pipeline de deploy del Backend falló en ${{ github.repository }}.
 
             Branch:   ${{ github.ref_name }}
             Commit:   ${{ github.sha }}

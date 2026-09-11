@@ -12,14 +12,22 @@ const mockKafkaService = {
 
 function createMockEmergencyRepository() {
   const emergencies = new Map();
+  const statusHistory = new Map();
   const accessAudit = [];
   const updateStatusCalls = [];
+  const findPageCalls = [];
 
   return {
     updateStatusCalls,
-    create: async (emergency) => {
+    findPageCalls,
+    // Refleja lo que devuelve mapEmergency: sin el outboxEvent y con
+    // emergencyType/correlationId tal como los recibe del controller.
+    create: async ({ outboxEvent, ...emergency }) => {
+      void outboxEvent;
       const saved = {
         ...emergency,
+        correlationId: emergency.correlationId || emergency.id,
+        emergencyType: emergency.emergencyType || null,
         locationAnonymized: false,
       };
       emergencies.set(saved.id, saved);
@@ -37,8 +45,8 @@ function createMockEmergencyRepository() {
       accessAudit.push(entry);
       return entry;
     },
-    updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
-      updateStatusCalls.push({ id, newStatus, actor, reason });
+    updateStatus: async (id, { newStatus, actor = null, reason = null, outboxEvent = null }) => {
+      updateStatusCalls.push({ id, newStatus, actor, reason, outboxEvent });
       const current = emergencies.get(id);
       if (!current) {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
@@ -46,17 +54,45 @@ function createMockEmergencyRepository() {
       const previousStatus = current.status;
       const updated = { ...current, status: newStatus, updatedAt: new Date().toISOString() };
       emergencies.set(id, updated);
-      return {
-        emergency: updated,
-        history: {
-          previousStatus,
-          newStatus,
-          actor,
-          reason,
-        },
+      // Mismo shape que mapHistoryEntry; se acumula para findHistoryByEmergencyId.
+      const entries = statusHistory.get(id) || [];
+      const history = {
+        id: entries.length + 1,
+        emergencyId: id,
+        previousStatus,
+        newStatus,
+        actor,
+        reason,
+        createdAt: new Date().toISOString(),
       };
+      entries.push(history);
+      statusHistory.set(id, entries);
+      return { emergency: updated, history };
     },
-    findPage: async () => ({ emergencies: [...emergencies.values()], total: emergencies.size }),
+    findHistoryByEmergencyId: async (id) => [...(statusHistory.get(id) || [])],
+    findDetailById: async (id) => {
+      const emergency = emergencies.get(id);
+      if (!emergency) return null;
+      return { ...emergency, statusHistory: [...(statusHistory.get(id) || [])] };
+    },
+    findPage: async (filters) => {
+      findPageCalls.push(filters);
+      const matching = [...emergencies.values()]
+        .filter((emergency) => !filters.emergencyType || emergency.emergencyType === filters.emergencyType);
+      return { emergencies: matching, total: matching.length };
+    },
+    findOutboxPage: async ({ page, limit }) => ({
+      events: [{
+        id: 'outbox-event-1',
+        topic: 'emergencias.boton-panico',
+        status: 'PENDING',
+        attempts: 0,
+        createdAt: new Date().toISOString(),
+      }],
+      total: 1,
+      page,
+      limit,
+    }),
   };
 }
 
@@ -118,6 +154,14 @@ describe('Panic Button API', () => {
     expect(response.body.success).toBe(true);
     expect(outboxEvents).toHaveLength(1);
     expect(outboxEvents[0].topic).toBe('emergencias.boton-panico');
+    const event = outboxEvents[0].payload(savedEmergency, 'event-1');
+    expect(event).toMatchObject({
+      type: 'EmergenciaCreada',
+      eventId: 'event-1',
+      correlationId: savedEmergency.id,
+    });
+    expect(event.data.latitude).toBeUndefined();
+    expect(event.data.longitude).toBeUndefined();
   });
 
   describe('POST /api/panic-button', () => {
@@ -169,6 +213,98 @@ describe('Panic Button API', () => {
       expect(response.body.emergencyId).toBeDefined();
       expect(response.body.data.userId).toBe('U000042');
       expect(response.body.data.status).toBe('PENDING');
+    });
+
+    it('persiste el emergencyType normalizado al catálogo (alias del front fire → INCENDIO)', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          emergencyType: 'fire',
+        })
+        .expect(201);
+
+      expect(response.body.data.emergencyType).toBe('INCENDIO');
+    });
+
+    it('acepta el canónico en cualquier casing', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          emergencyType: ' medica ',
+        })
+        .expect(201);
+
+      expect(response.body.data.emergencyType).toBe('MEDICA');
+    });
+
+    it('sin emergencyType asume PANICO (es el endpoint del botón SOS)', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
+
+      expect(response.body.data.emergencyType).toBe('PANICO');
+    });
+
+    it('rechaza con 400 un emergencyType fuera del catálogo y no crea nada', async () => {
+      const repo = createMockEmergencyRepository();
+      const isolatedApp = createTestApp(undefined, repo);
+
+      const response = await request(isolatedApp)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          emergencyType: 'flood',
+        })
+        .expect(400);
+
+      expect(response.body.error).toBe('ValidationError');
+      expect(response.body.message).toContain('MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO');
+      const { total } = await repo.findPage({});
+      expect(total).toBe(0);
+    });
+
+    it('devuelve correlationId igual al id de la emergencia', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
+
+      expect(response.body.data.correlationId).toBe(response.body.emergencyId);
+      expect(response.body.data.correlationId).toBe(response.body.data.id);
+    });
+
+    it('el evento EmergenciaCreada lleva el tipo canónico y correlationId = id en data', async () => {
+      const outboxEvents = [];
+      const repo = createMockEmergencyRepository();
+      const originalCreate = repo.create;
+      repo.create = async (emergency) => {
+        outboxEvents.push(emergency.outboxEvent);
+        return originalCreate(emergency);
+      };
+      const eventApp = createTestApp(undefined, repo);
+
+      const response = await request(eventApp)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          emergencyType: 'disturbance',
+        })
+        .expect(201);
+
+      const saved = await repo.findById(response.body.emergencyId);
+      const event = outboxEvents[0].payload(saved, 'event-1');
+      expect(event).toMatchObject({
+        type: 'EmergenciaCreada',
+        correlationId: saved.id,
+        data: {
+          id: saved.id,
+          correlationId: saved.id,
+          emergencyType: 'DISTURBIO_EVENTO_MASIVO',
+        },
+      });
     });
 
     it('ignores client-supplied userId and uses token sub', async () => {
@@ -327,6 +463,50 @@ describe('Panic Button API', () => {
 });
 
 describe('Emergencies API', () => {
+  it('un citizen lista solo sus propias emergencias (filtro forzado por sub del JWT)', async () => {
+    const calls = [];
+    const repository = {
+      ...createMockEmergencyRepository(),
+      findPage: async (filters) => {
+        calls.push(filters);
+        return { emergencies: [], total: 0 };
+      },
+    };
+    const citizenApp = createApp(mockKafkaService, repository, {
+      authenticate: stubAuthenticate({ sub: 'CIT-jperez', groups: ['citizen'] }),
+    });
+
+    await request(citizenApp)
+      .get('/api/emergencies?limit=100&userId=OTRO')
+      .expect(200);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].userId).toBe('CIT-jperez');
+  });
+
+  it('un dispatcher lista sin filtro de usuario', async () => {
+    const calls = [];
+    const repository = {
+      ...createMockEmergencyRepository(),
+      findPage: async (filters) => {
+        calls.push(filters);
+        return { emergencies: [], total: 0 };
+      },
+    };
+    const dispatcherApp = createApp(mockKafkaService, repository, {
+      authenticate: stubAuthenticate({ sub: 'U000999', groups: ['dispatcher'] }),
+    });
+
+    await request(dispatcherApp).get('/api/emergencies').expect(200);
+
+    expect(calls[0].userId).toBeUndefined();
+  });
+
+  it('un usuario sin grupo citizen ni dispatcher recibe 403 al listar', async () => {
+    const otherApp = createTestApp({ sub: 'X1', groups: ['officer'] });
+    await request(otherApp).get('/api/emergencies').expect(403);
+  });
+
   it('rejects an invalid severity filter', async () => {
     const dispatcherApp = createTestApp({
       sub: 'U000999',
@@ -370,10 +550,9 @@ describe('Emergencies API', () => {
       .expect(403);
   });
 
-  it('allows a dispatcher to validate a pending emergency and publishes the status event', async () => {
-    const publishedEvents = [];
+  it('allows a dispatcher to validate a pending emergency and stores a status outbox event', async () => {
     const validationKafka = {
-      publishEvent: async (topic, event) => publishedEvents.push({ topic, event }),
+      publishEvent: async () => {},
       isConnected: () => true,
       checkHealth: async () => false,
     };
@@ -398,10 +577,16 @@ describe('Emergencies API', () => {
       success: true,
       data: { status: 'VALIDATED' },
     });
-    expect(publishedEvents.at(-1)).toMatchObject({
-      topic: 'emergencias.estado-actualizado',
-      event: {
-        type: 'EmergencyStatusUpdated',
+    const statusEvent = sharedRepo.updateStatusCalls.at(-1).outboxEvent;
+    expect(statusEvent.topic).toBe('emergencias.estado-actualizado');
+    expect(statusEvent.payload({
+      emergency: response.body.data,
+      history: { previousStatus: 'PENDING', newStatus: 'VALIDATED' },
+    }, 'event-1')).toMatchObject({
+      type: 'EmergenciaEstadoActualizado',
+      eventId: 'event-1',
+      correlationId: response.body.data.id,
+      data: {
         previousStatus: 'PENDING',
         newStatus: 'VALIDATED',
         actor: 'U000999',
@@ -444,10 +629,9 @@ describe('Emergencies API', () => {
     expect(response.body.error).toBe('ConflictError');
   });
 
-  it('allows a dispatcher to discard a pending emergency with a reason and publishes the status event', async () => {
-    const publishedEvents = [];
+  it('allows a dispatcher to discard a pending emergency with a reason and stores the status outbox event', async () => {
     const discardKafka = {
-      publishEvent: async (topic, event) => publishedEvents.push({ topic, event }),
+      publishEvent: async () => {},
       isConnected: () => true,
       checkHealth: async () => false,
     };
@@ -478,10 +662,16 @@ describe('Emergencies API', () => {
       actor: 'U000999',
       reason: 'Reporte invalido',
     });
-    expect(publishedEvents.at(-1)).toMatchObject({
-      topic: 'emergencias.estado-actualizado',
-      event: {
-        type: 'EmergencyStatusUpdated',
+    const statusEvent = sharedRepo.updateStatusCalls.at(-1).outboxEvent;
+    expect(statusEvent.topic).toBe('emergencias.estado-actualizado');
+    expect(statusEvent.payload({
+      emergency: response.body.data,
+      history: { previousStatus: 'PENDING', newStatus: 'DISCARDED' },
+    }, 'event-2')).toMatchObject({
+      type: 'EmergenciaEstadoActualizado',
+      eventId: 'event-2',
+      correlationId: response.body.data.id,
+      data: {
         previousStatus: 'PENDING',
         newStatus: 'DISCARDED',
         actor: 'U000999',
@@ -634,6 +824,155 @@ describe('Emergencies API', () => {
   });
 });
 
+describe('GET /api/emergencies/:id (detalle, tarea #32)', () => {
+  const citizen = { sub: 'U000042', groups: ['citizen'] };
+  const otherCitizen = { sub: 'U000099', groups: ['citizen'] };
+  const dispatcher = { sub: 'D000007', groups: ['dispatcher'] };
+
+  async function createEmergencyAs(user, repository) {
+    const response = await request(createTestApp(user, repository))
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'fire' })
+      .expect(201);
+    return response.body.emergencyId;
+  }
+
+  it('un dispatcher obtiene el detalle con statusHistory cronológico y placeholders vacíos', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+    const dispatcherApp = createTestApp(dispatcher, repository);
+
+    await request(dispatcherApp).patch(`/api/emergencies/${emergencyId}/validate`).expect(200);
+
+    const response = await request(dispatcherApp)
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    const { data } = response.body;
+    expect(data).toMatchObject({
+      id: emergencyId,
+      correlationId: emergencyId,
+      userId: 'U000042',
+      emergencyType: 'INCENDIO',
+      severity: 'critical',
+      status: 'VALIDATED',
+      latitude: -34.6037,
+      longitude: -58.3816,
+      observations: [],
+      reinforcementRequests: [],
+    });
+    expect(data.statusHistory).toHaveLength(1);
+    expect(data.statusHistory[0]).toMatchObject({
+      emergencyId,
+      previousStatus: 'PENDING',
+      newStatus: 'VALIDATED',
+      actor: 'D000007',
+    });
+  });
+
+  it('acumula el historial en orden cronológico tras varias transiciones', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    await request(createTestApp(dispatcher, repository))
+      .patch(`/api/emergencies/${emergencyId}/validate`)
+      .expect(200);
+    await request(createTestApp(citizen, repository))
+      .patch(`/api/emergencies/${emergencyId}/cancel`)
+      .send({ reason: 'Falsa alarma' })
+      .expect(200);
+
+    const response = await request(createTestApp(dispatcher, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(200);
+
+    expect(response.body.data.status).toBe('CANCELLED');
+    expect(response.body.data.statusHistory.map((entry) => entry.newStatus))
+      .toEqual(['VALIDATED', 'CANCELLED']);
+    expect(response.body.data.statusHistory[1]).toMatchObject({
+      previousStatus: 'VALIDATED',
+      actor: 'U000042',
+      reason: 'Falsa alarma',
+    });
+  });
+
+  it('un citizen obtiene el detalle de su propia emergencia (sin transiciones: statusHistory vacío)', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    const response = await request(createTestApp(citizen, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(200);
+
+    expect(response.body.data.id).toBe(emergencyId);
+    expect(response.body.data.userId).toBe('U000042');
+    expect(response.body.data.status).toBe('PENDING');
+    expect(response.body.data.statusHistory).toEqual([]);
+    expect(response.body.data.observations).toEqual([]);
+    expect(response.body.data.reinforcementRequests).toEqual([]);
+  });
+
+  it('un citizen recibe 404 (no 403) al pedir una emergencia ajena, para no revelar su existencia', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    const response = await request(createTestApp(otherCitizen, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(404);
+
+    expect(response.body.error).toBe('NotFoundError');
+    // Misma respuesta que un id inexistente: no se distingue "ajena" de "no existe".
+    const missing = await request(createTestApp(otherCitizen, repository))
+      .get('/api/emergencies/00000000-0000-0000-0000-000000000000')
+      .expect(404);
+    expect(missing.body.error).toBe(response.body.error);
+  });
+
+  it('devuelve 400 ValidationError si el id no es un UUID, sin consultar el repository', async () => {
+    const repository = createMockEmergencyRepository();
+    let findDetailCalls = 0;
+    repository.findDetailById = async () => {
+      findDetailCalls += 1;
+      return null;
+    };
+
+    const response = await request(createTestApp(dispatcher, repository))
+      .get('/api/emergencies/no-es-un-uuid')
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
+    expect(findDetailCalls).toBe(0);
+  });
+
+  it('devuelve 404 para un dispatcher si la emergencia no existe', async () => {
+    const response = await request(createTestApp(dispatcher))
+      .get('/api/emergencies/00000000-0000-0000-0000-000000000000')
+      .expect(404);
+
+    expect(response.body.error).toBe('NotFoundError');
+  });
+
+  it('devuelve 403 si el grupo no es citizen ni dispatcher', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    const response = await request(createTestApp({ sub: 'X000001', groups: ['auditor'] }, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(403);
+
+    expect(response.body.error).toBe('ForbiddenError');
+  });
+
+  it('devuelve 401 sin usuario autenticado', async () => {
+    const response = await request(createTestApp(null))
+      .get('/api/emergencies/00000000-0000-0000-0000-000000000000')
+      .expect(401);
+
+    expect(response.body.error).toBe('UnauthorizedError');
+  });
+});
+
 describe('KafkaService', () => {
   it('throws 503 when publishing while enabled but disconnected', async () => {
     const service = new KafkaService({ enabled: true });
@@ -702,11 +1041,150 @@ describe('GET /api/emergencies', () => {
     expect(response.body.pagination).toMatchObject({ page: 1, limit: 20 });
   });
 
-  it('forbids a citizen from using the dispatcher listing endpoint', async () => {
+  it('a citizen can use the listing endpoint but only sees its own emergencies', async () => {
+    // El mock repository devuelve todo; lo que se verifica acá es que el
+    // endpoint ya no es exclusivo del dispatcher (el scoping se prueba arriba).
     const response = await request(app)
       .get('/api/emergencies')
-      .expect(403);
+      .expect(200);
 
-    expect(response.body.error).toBe('ForbiddenError');
+    expect(Array.isArray(response.body.data)).toBe(true);
+  });
+
+  it('filtra por emergencyType pasando el alias del front normalizado al repository', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+
+    const medical = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'medical' })
+      .expect(201);
+    await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'fire' })
+      .expect(201);
+
+    const response = await request(dispatcherApp)
+      .get('/api/emergencies?emergencyType=medical')
+      .expect(200);
+
+    expect(sharedRepo.findPageCalls.at(-1)).toMatchObject({ emergencyType: 'MEDICA' });
+    expect(response.body.data).toHaveLength(1);
+    expect(response.body.data[0]).toMatchObject({ id: medical.body.emergencyId, emergencyType: 'MEDICA' });
+  });
+
+  it('mantiene el query param type como alias de emergencyType', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+
+    await request(dispatcherApp)
+      .get('/api/emergencies?type=INCENDIO')
+      .expect(200);
+
+    expect(sharedRepo.findPageCalls.at(-1)).toMatchObject({ emergencyType: 'INCENDIO' });
+  });
+
+  it('rechaza con 400 un filtro emergencyType fuera del catálogo sin consultar el repository', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+
+    const response = await request(dispatcherApp)
+      .get('/api/emergencies?emergencyType=flood')
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
+    expect(sharedRepo.findPageCalls).toHaveLength(0);
+  });
+});
+
+describe('Emergencies API - máquina de estados', () => {
+  // Deja una emergencia creada por el citizen en el estado pedido, forzando
+  // el estado en el mock (sin pasar por el controller).
+  async function createEmergencyInStatus(sharedRepo, citizenApp, status) {
+    const createResponse = await request(citizenApp)
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+    const emergencyId = createResponse.body.emergencyId;
+    const current = await sharedRepo.findById(emergencyId);
+    current.status = status;
+    sharedRepo.updateStatusCalls.length = 0;
+    return emergencyId;
+  }
+
+  it('returns 409 when validating a terminal (CANCELLED) emergency and does not touch the repository', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+    const emergencyId = await createEmergencyInStatus(sharedRepo, citizenApp, 'CANCELLED');
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${emergencyId}/validate`)
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: 'ConflictError',
+      message: 'Emergency in terminal status CANCELLED cannot transition to VALIDATED',
+    });
+    expect(sharedRepo.updateStatusCalls).toHaveLength(0);
+  });
+
+  it('returns 409 when discarding a VALIDATED emergency (only PENDING can be discarded)', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, sharedRepo);
+    const emergencyId = await createEmergencyInStatus(sharedRepo, citizenApp, 'VALIDATED');
+
+    const response = await request(dispatcherApp)
+      .patch(`/api/emergencies/${emergencyId}/discard`)
+      .send({ reason: 'Ya fue validada' })
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: 'ConflictError',
+      message: 'Invalid transition VALIDATED → DISCARDED',
+    });
+    expect(sharedRepo.updateStatusCalls).toHaveLength(0);
+  });
+
+  it('allows a citizen to cancel a VALIDATED emergency but not a DISPATCHED one', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+
+    const validatedId = await createEmergencyInStatus(sharedRepo, citizenApp, 'VALIDATED');
+    const okResponse = await request(citizenApp)
+      .patch(`/api/emergencies/${validatedId}/cancel`)
+      .send({ reason: 'Ya no hace falta' })
+      .expect(200);
+    expect(okResponse.body.data.status).toBe('CANCELLED');
+
+    const dispatchedId = await createEmergencyInStatus(sharedRepo, citizenApp, 'DISPATCHED');
+    const response = await request(citizenApp)
+      .patch(`/api/emergencies/${dispatchedId}/cancel`)
+      .send({ reason: 'Tarde' })
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: 'ConflictError',
+      message: 'Invalid transition DISPATCHED → CANCELLED',
+    });
+    expect(sharedRepo.updateStatusCalls).toHaveLength(0);
+  });
+
+  it('returns 409 when cancelling a terminal (DISCARDED) emergency', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+    const emergencyId = await createEmergencyInStatus(sharedRepo, citizenApp, 'DISCARDED');
+
+    const response = await request(citizenApp)
+      .patch(`/api/emergencies/${emergencyId}/cancel`)
+      .send({})
+      .expect(409);
+
+    expect(response.body).toEqual({
+      error: 'ConflictError',
+      message: 'Emergency in terminal status DISCARDED cannot transition to CANCELLED',
+    });
   });
 });

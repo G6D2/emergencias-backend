@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   validate-pr:
@@ -59,6 +60,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -91,6 +94,20 @@ jobs:
           DATABASE_SSL: 'false'
         run: npm run test:integration
 
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-backend
+          path: coverage/
+          retention-days: 7
+
+      - name: SonarCloud analysis
+        uses: SonarSource/sonarcloud-github-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   notify-failure:
     name: Notify CI failure
     runs-on: ubuntu-latest
@@ -104,11 +121,11 @@ jobs:
           server_port: 587
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
-          subject: "CI falló — ${{ github.ref_name }} (${{ github.actor }})"
+          subject: "CI falló — Backend ${{ github.ref_name }} (${{ github.actor }})"
           to: ${{ secrets.MAIL_TO }}
           from: CityPass+ CI <${{ secrets.MAIL_USERNAME }}>
           body: |
-            El pipeline de CI falló en ${{ github.repository }}.
+            El pipeline de CI del Backend falló en ${{ github.repository }}.
 
             Branch:   ${{ github.ref_name }}
             Commit:   ${{ github.sha }}

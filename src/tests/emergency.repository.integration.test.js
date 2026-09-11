@@ -42,6 +42,146 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(created.createdAt).toBeDefined();
   });
 
+  it('persiste emergency_type normalizado al catálogo y correlation_id = id (#44, #58)', async () => {
+    const input = buildEmergency({ emergencyType: 'fire' });
+
+    const created = await repository.create(input);
+
+    expect(created.emergencyType).toBe('INCENDIO');
+    expect(created.correlationId).toBe(input.id);
+
+    const raw = await getPool().query(
+      'SELECT emergency_type, correlation_id FROM emergencies WHERE id = $1',
+      [input.id]
+    );
+    expect(raw.rows[0].emergency_type).toBe('INCENDIO');
+    expect(raw.rows[0].correlation_id).toBe(input.id);
+
+    const found = await repository.findById(input.id);
+    expect(found.emergencyType).toBe('INCENDIO');
+    expect(found.correlationId).toBe(input.id);
+  });
+
+  it('persiste emergency_type y correlation_id también en la rama con outbox', async () => {
+    const input = buildEmergency({ emergencyType: 'MEDICA' });
+
+    const created = await repository.create({
+      ...input,
+      outboxEvent: {
+        topic: 'emergencias.boton-panico',
+        payload: (emergency, eventId) => ({
+          type: 'EmergenciaCreada',
+          eventId,
+          correlationId: emergency.correlationId,
+          data: { id: emergency.id, emergencyType: emergency.emergencyType },
+        }),
+      },
+    });
+
+    expect(created.emergencyType).toBe('MEDICA');
+    expect(created.correlationId).toBe(input.id);
+
+    const outbox = await getPool().query(
+      `SELECT payload FROM outbox_events WHERE payload->'data'->>'id' = $1 LIMIT 1`,
+      [input.id]
+    );
+    expect(outbox.rows[0].payload.correlationId).toBe(input.id);
+    expect(outbox.rows[0].payload.data.emergencyType).toBe('MEDICA');
+  });
+
+  it('el CHECK de V10 rechaza un emergency_type fuera del catálogo insertado directo', async () => {
+    await expect(getPool().query(
+      `INSERT INTO emergencies (id, user_id, description, severity, status, emergency_type)
+       VALUES ($1, 'user-check', 'tipo inválido', 'high', 'PENDING', 'fire')`,
+      [randomUUID()]
+    )).rejects.toMatchObject({ code: '23514' }); // check_violation
+
+    await expect(getPool().query(
+      `INSERT INTO emergencies (id, user_id, description, severity, status, emergency_type)
+       VALUES ($1, 'user-check', 'tipo inválido', 'high', 'PENDING', 'FLOOD')`,
+      [randomUUID()]
+    )).rejects.toMatchObject({ code: '23514' });
+  });
+
+  it('el repository rechaza con ValidationError un emergencyType inválido antes de tocar la base', async () => {
+    const input = buildEmergency({ emergencyType: 'flood' });
+
+    await expect(repository.create(input))
+      .rejects.toMatchObject({ name: 'ValidationError', statusCode: 400 });
+
+    const found = await repository.findById(input.id);
+    expect(found).toBeNull();
+  });
+
+  it('findPage filtra por emergencyType aceptando el alias del front', async () => {
+    const medical = buildEmergency({ emergencyType: 'medical' });
+    const fire = buildEmergency({ emergencyType: 'INCENDIO' });
+    await repository.create(medical);
+    await repository.create(fire);
+
+    const { emergencies } = await repository.findPage({
+      statuses: [],
+      emergencyType: 'medical',
+      page: 1,
+      limit: 100,
+      sortBy: 'createdAt',
+      order: 'desc',
+    });
+
+    expect(emergencies.some((emergency) => emergency.id === medical.id)).toBe(true);
+    expect(emergencies.some((emergency) => emergency.id === fire.id)).toBe(false);
+    expect(emergencies.every((emergency) => emergency.emergencyType === 'MEDICA')).toBe(true);
+
+    await expect(repository.findPage({
+      statuses: [], emergencyType: 'flood', page: 1, limit: 10, sortBy: 'createdAt', order: 'desc',
+    })).rejects.toMatchObject({ name: 'ValidationError' });
+  });
+
+  it('crea la emergencia y su evento outbox en la misma transacción', async () => {
+    const input = buildEmergency();
+    const created = await repository.create({
+      ...input,
+      outboxEvent: {
+        topic: 'emergencias.boton-panico',
+        payload: (emergency, eventId) => ({
+          type: 'EmergenciaCreada',
+          eventId,
+          correlationId: emergency.id,
+          data: { id: emergency.id, severity: emergency.severity },
+        }),
+      },
+    });
+
+    const outbox = await getPool().query(
+      `SELECT topic, status, payload
+       FROM outbox_events
+       WHERE payload->'data'->>'id' = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [input.id]
+    );
+
+    expect(created.id).toBe(input.id);
+    expect(outbox.rows).toHaveLength(1);
+    expect(outbox.rows[0].status).toBe('PENDING');
+    expect(outbox.rows[0].payload.data.id).toBe(input.id);
+  });
+
+  it('rolls back the emergency if the outbox insert fails', async () => {
+    const input = buildEmergency();
+
+    await expect(repository.create({
+      ...input,
+      outboxEvent: {
+        topic: null,
+        payload: { type: 'InvalidEvent' },
+      },
+    })).rejects.toThrow();
+
+    const emergency = await repository.findById(input.id);
+    expect(emergency).toBeNull();
+  });
+
   it('persiste ubicación cifrada (sin lat/lng en claro en la fila)', async () => {
     const input = buildEmergency();
     await repository.create(input);
@@ -103,6 +243,86 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(historyList).toHaveLength(1);
   });
 
+  it('al asignar marca al oficial ocupado y al devolver a VALIDATED lo libera (misma tx)', async () => {
+    const officerId = 'of-001';
+    await getPool().query(
+      `UPDATE officers SET status = 'disponible', updated_at = now() WHERE id = $1`,
+      [officerId]
+    );
+
+    const input = buildEmergency();
+    await repository.create(input);
+    await repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' });
+
+    const { emergency: dispatched, officer } = await repository.assignOfficer(input.id, {
+      officerId,
+      actor: 'operador-1',
+    });
+
+    expect(dispatched.status).toBe('DISPATCHED');
+    expect(dispatched.assignedOfficerId).toBe(officerId);
+    expect(officer.status).toBe('ocupado');
+
+    const busy = await getPool().query('SELECT status FROM officers WHERE id = $1', [officerId]);
+    expect(busy.rows[0].status).toBe('ocupado');
+
+    const { emergency: returned } = await repository.updateStatus(input.id, {
+      newStatus: 'VALIDATED',
+      actor: 'operador-1',
+      reason: 'Devolución para reasignar',
+    });
+    expect(returned.status).toBe('VALIDATED');
+
+    const free = await getPool().query('SELECT status FROM officers WHERE id = $1', [officerId]);
+    expect(free.rows[0].status).toBe('disponible');
+
+    // El mismo oficial se puede reasignar sin 409.
+    await expect(
+      repository.assignOfficer(input.id, { officerId, actor: 'operador-1' })
+    ).resolves.toMatchObject({
+      emergency: expect.objectContaining({ status: 'DISPATCHED', assignedOfficerId: officerId }),
+      officer: expect.objectContaining({ status: 'ocupado' }),
+    });
+
+    // Dejar el seed usable para otros tests / demos locales.
+    await repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' });
+  });
+
+  it('findDetailById devuelve la emergencia con su historial de estados (tarea #32)', async () => {
+    const input = buildEmergency({ emergencyType: 'medical' });
+    await repository.create(input);
+
+    await repository.updateStatus(input.id, {
+      newStatus: 'VALIDATED',
+      actor: 'D000007',
+    });
+
+    const detail = await repository.findDetailById(input.id);
+
+    expect(detail).toMatchObject({
+      id: input.id,
+      correlationId: input.id,
+      userId: input.userId,
+      emergencyType: 'MEDICA',
+      status: 'VALIDATED',
+      assignedOfficerId: null,
+    });
+    expect(Number(detail.latitude)).toBeCloseTo(input.latitude);
+    expect(detail.statusHistory).toHaveLength(1);
+    expect(detail.statusHistory[0]).toMatchObject({
+      emergencyId: input.id,
+      previousStatus: 'PENDING',
+      newStatus: 'VALIDATED',
+      actor: 'D000007',
+      reason: null,
+    });
+    expect(detail.statusHistory[0].createdAt).toBeDefined();
+  });
+
+  it('findDetailById devuelve null si la emergencia no existe', async () => {
+    expect(await repository.findDetailById(randomUUID())).toBeNull();
+  });
+
   it('propaga el error y no deja rastros si la emergencia no existe', async () => {
     const missingId = randomUUID();
 
@@ -161,7 +381,73 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(Number(found.longitude)).toBeCloseTo(input.longitude);
   });
 
-  it('hace ROLLBACK si el cambio de estado viola una restricción de la base', async () => {
+  it('una fila con ciphertext indescifrable no tumba el listado y se puede sanear', async () => {
+    const good = buildEmergency();
+    await repository.create(good);
+    const badId = randomUUID();
+    await getPool().query(
+      `INSERT INTO emergencies (id, user_id, latitude, longitude, location_encrypted, description, severity, status)
+       VALUES ($1, 'user-bad', NULL, NULL, $2, 'cifrada con otra clave', 'high', 'PENDING')`,
+      [badId, Buffer.from('not-a-valid-ciphertext-at-all-0123456789').toString('base64')]
+    );
+
+    const { emergencies } = await repository.findPage({
+      statuses: [],
+      page: 1,
+      limit: 100,
+      sortBy: 'createdAt',
+      order: 'desc',
+    });
+    const bad = emergencies.find((emergency) => emergency.id === badId);
+    const ok = emergencies.find((emergency) => emergency.id === good.id);
+    expect(bad).toBeDefined();
+    expect(bad.latitude).toBeNull();
+    expect(bad.longitude).toBeNull();
+    expect(bad.locationUnavailable).toBe(true);
+    expect(ok.locationUnavailable).toBe(false);
+    expect(Number(ok.latitude)).toBeCloseTo(good.latitude);
+
+    const result = await repository.anonymizeUndecryptableLocations();
+    expect(result.ids).toContain(badId);
+    expect(result.ids).not.toContain(good.id);
+
+    const after = await repository.findById(badId);
+    expect(after.locationAnonymized).toBe(true);
+    expect(after.locationUnavailable).toBe(false);
+  });
+
+  it('rechaza con ConflictError una transición inválida y no deja rastros (defensa en profundidad)', async () => {
+    const input = buildEmergency();
+    await repository.create(input);
+
+    // PENDING → RESOLVED se salta el flujo: el repository lo frena aunque
+    // ningún controller lo haya validado antes.
+    await expect(repository.updateStatus(input.id, { newStatus: 'RESOLVED', actor: 'operador-1' }))
+      .rejects.toMatchObject({ name: 'ConflictError', statusCode: 409 });
+
+    const found = await repository.findById(input.id);
+    expect(found.status).toBe('PENDING');
+
+    const historyList = await repository.findHistoryByEmergencyId(input.id);
+    expect(historyList).toHaveLength(0);
+  });
+
+  it('rechaza una transición desde un estado terminal', async () => {
+    const input = buildEmergency();
+    await repository.create(input);
+    await repository.updateStatus(input.id, { newStatus: 'CANCELLED', actor: 'user-123' });
+
+    await expect(repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' }))
+      .rejects.toMatchObject({ name: 'ConflictError' });
+
+    const found = await repository.findById(input.id);
+    expect(found.status).toBe('CANCELLED');
+
+    const historyList = await repository.findHistoryByEmergencyId(input.id);
+    expect(historyList).toHaveLength(1);
+  });
+
+  it('hace ROLLBACK y no toca la fila si el estado destino no existe', async () => {
     const input = buildEmergency();
     await repository.create(input);
 

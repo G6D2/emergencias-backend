@@ -1,21 +1,34 @@
 name: Keep warm
 
 # Render (plan free) duerme el servicio tras 15 minutos sin tráfico y tarda
-# entre 30 y 90 segundos en despertar. Este workflow lo mantiene despierto
-# SOLO en la ventana de clase (jueves 17:30 a 23:00 hora Argentina, UTC-3),
-# para no consumir las 750 horas gratis mensuales de Render manteniéndolo
-# siempre prendido. Para una demo fuera de ese horario: Actions → Keep warm
-# → Run workflow (o ampliar el cron por unos días).
+# entre 50 y 60 segundos en despertar. Este workflow hace el PRIMER despertar
+# del jueves (horario de clase, hora Argentina, UTC-3): a partir de ahí el
+# backend se mantiene solo con el job in-process `src/jobs/keep-warm.js`, que
+# cada KEEP_WARM_INTERVAL_MS (8 min) pega a su propia URL pública y al
+# /api/warmup del frontend, únicamente dentro de KEEP_WARM_WINDOWS
+# (default jueves 17:00–23:30 ART). Así no se consumen las 750 horas gratis
+# mensuales de Render manteniéndolo siempre prendido.
 #
-# Nota: GitHub puede demorar o saltear ejecuciones programadas en momentos
-# de alta carga; no es un reloj exacto.
+# Los crons de GitHub Actions son "best effort": pueden demorarse o saltearse
+# (el jueves 10/09 no corrió ninguna ejecución programada). Por eso:
+#   - los minutos son 7,27,47 y no 0/20/40 (los minutos "redondos" son los
+#     de mayor cola en GitHub);
+#   - hay un cron extra de despertar a las 16:50 ART (19:50 UTC) antes de que
+#     empiece la clase;
+#   - los pings periódicos siguen como respaldo por si el backend se durmió
+#     igual (por ejemplo, tras un deploy o un reinicio de Render).
+#
+# Para una demo fuera de ese horario: Actions → Keep warm → Run workflow (y,
+# si hace falta, ampliar KEEP_WARM_WINDOWS en Render).
 
 on:
   schedule:
-    # Jueves 20:00–23:59 UTC (17:00–20:59 ART) y viernes 00:00–02:59 UTC
-    # (21:00–23:59 ART del jueves), cada 10 minutos.
-    - cron: '*/10 20-23 * * 4'
-    - cron: '*/10 0-2 * * 5'
+    # Despertar inicial: jueves 19:50 UTC (16:50 ART).
+    - cron: '50 19 * * 4'
+    # Respaldo: jueves 20:00–23:59 UTC (17:00–20:59 ART) y viernes
+    # 00:00–02:59 UTC (21:00–23:59 ART del jueves), cada 20 minutos.
+    - cron: '7,27,47 20-23 * * 4'
+    - cron: '7,27,47 0-2 * * 5'
   workflow_dispatch:
 
 permissions: {}

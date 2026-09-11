@@ -7,6 +7,31 @@ apunta al mismo flujo; no hay un segundo runner por ahí.
 Cualquier cambio de schema entra como un archivo nuevo `V{n}__descripcion.sql`
 en `db/migrations/`.
 
+### Outbox de eventos
+
+Las operaciones que crean una emergencia o cambian su estado guardan el evento
+en `outbox_events` dentro de la misma transacción que modifica la emergencia.
+Un worker del backend publica los eventos pendientes en Kafka y los reintenta
+si el broker está temporalmente caído. Por eso Kafka no forma parte de la
+transacción HTTP y una caída del broker no deja la base en un estado sin evento
+recuperable.
+
+Después de incorporar `V6__create_outbox_events.sql`, ejecutar:
+
+```bash
+npm run migrate
+```
+
+Los eventos se marcan como `PUBLISHED` solo después de que Kafka confirma el
+envío. El outbox proporciona entrega al menos una vez; los consumidores deben
+usar `event.id` o `emergencyId` para hacer sus operaciones idempotentes.
+
+Los eventos fallidos usan backoff exponencial hasta `OUTBOX_MAX_ATTEMPTS`
+(default: 10); después pasan a `FAILED` para evitar reintentos infinitos.
+Las filas `PUBLISHED` se purgan después de `OUTBOX_PUBLISHED_RETENTION_HOURS`
+(default: 168 horas). Con `KAFKA_ENABLED=false`, los eventos permanecen
+`PENDING` hasta que exista un broker y se habilite el publisher.
+
 ## Decisiones de diseño
 
 - **`user_id` sin FK**: el panic button solo manda `payload.userId` (todavía no hay Auth).
