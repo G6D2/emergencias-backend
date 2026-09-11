@@ -243,6 +243,63 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(historyList).toHaveLength(1);
   });
 
+  it('persiste closed_at y lo propaga al outbox al cerrar una emergencia resuelta', async () => {
+    const officerId = 'of-001';
+    await getPool().query(
+      `UPDATE officers SET status = 'disponible', updated_at = now() WHERE id = $1`,
+      [officerId]
+    );
+
+    const input = buildEmergency();
+    await repository.create(input);
+    await repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' });
+    await repository.assignOfficer(input.id, { officerId, actor: 'operador-1' });
+    await repository.updateStatus(input.id, { newStatus: 'EN_ROUTE', actor: 'operador-1' });
+    await repository.updateStatus(input.id, { newStatus: 'ON_SCENE', actor: 'operador-1' });
+    await repository.updateStatus(input.id, { newStatus: 'RESOLVED', actor: 'operador-1' });
+
+    const { emergency, history } = await repository.updateStatus(input.id, {
+      newStatus: 'CLOSED',
+      actor: 'operador-1',
+      outboxEvent: {
+        topic: 'emergencias.cerrada',
+        payload: ({ emergency: savedEmergency }, eventId) => ({
+          type: 'EmergenciaCerrada',
+          eventId,
+          correlationId: savedEmergency.correlationId,
+          data: {
+            id: savedEmergency.id,
+            closedAt: savedEmergency.closedAt,
+          },
+        }),
+      },
+    });
+
+    expect(emergency.status).toBe('CLOSED');
+    expect(emergency.closedAt).toBeDefined();
+    expect(history.previousStatus).toBe('RESOLVED');
+    expect(history.newStatus).toBe('CLOSED');
+
+    const raw = await getPool().query(
+      'SELECT closed_at FROM emergencies WHERE id = $1',
+      [input.id]
+    );
+    expect(raw.rows[0].closed_at).toBeDefined();
+    expect(raw.rows[0].closed_at.getTime()).toBe(emergency.closedAt.getTime());
+
+    const outbox = await getPool().query(
+      `SELECT payload
+       FROM outbox_events
+       WHERE topic = 'emergencias.cerrada'
+         AND payload->'data'->>'id' = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [input.id]
+    );
+    expect(outbox.rows[0].payload.correlationId).toBe(input.id);
+    expect(outbox.rows[0].payload.data.closedAt).toBe(emergency.closedAt.toISOString());
+  });
+
   it('al asignar marca al oficial ocupado y al devolver a VALIDATED lo libera (misma tx)', async () => {
     const officerId = 'of-001';
     await getPool().query(
