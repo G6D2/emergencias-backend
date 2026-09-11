@@ -341,6 +341,15 @@
             "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/assign",
             "description": "Dispatcher: VALIDATED → DISPATCHED. Oficial debe estar disponible."
           }
+        },
+        {
+          "name": "PATCH Close Emergency",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/close",
+            "description": "Dispatcher: RESOLVED → CLOSED. Registra closedAt y publica EmergenciaCerrada."
+          }
         }
       ]
     },
