@@ -459,4 +459,54 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     const historyList = await repository.findHistoryByEmergencyId(input.id);
     expect(historyList).toHaveLength(0);
   });
+
+  describe('findRecentByType (candidatos para el job de deteccion de incidentes, #60)', () => {
+    it('devuelve solo emergencias del emergencyType pedido, dentro de la ventana, con lat/lng descifrados como numeros', async () => {
+      const since = new Date(Date.now() - 60 * 60 * 1000);
+      const input = buildEmergency({ emergencyType: 'INCENDIO' });
+      await repository.create(input);
+
+      const candidates = await repository.findRecentByType({
+        emergencyType: 'INCENDIO',
+        since,
+      });
+
+      const found = candidates.find((candidate) => candidate.id === input.id);
+      expect(found).toBeDefined();
+      expect(typeof found.latitude).toBe('number');
+      expect(typeof found.longitude).toBe('number');
+      expect(found.latitude).toBeCloseTo(input.latitude);
+      expect(found.longitude).toBeCloseTo(input.longitude);
+    });
+
+    it('no devuelve emergencias de otro emergencyType aunque esten en la ventana', async () => {
+      const since = new Date(Date.now() - 60 * 60 * 1000);
+      const other = buildEmergency({ emergencyType: 'MEDICA' });
+      await repository.create(other);
+
+      const candidates = await repository.findRecentByType({
+        emergencyType: 'INCENDIO',
+        since,
+      });
+
+      expect(candidates.some((candidate) => candidate.id === other.id)).toBe(false);
+    });
+
+    it('no devuelve emergencias fuera de la ventana temporal aunque sean del tipo correcto', async () => {
+      const input = buildEmergency({ emergencyType: 'INCENDIO' });
+      await repository.create(input);
+      await getPool().query(
+        `UPDATE emergencies SET created_at = now() - interval '10 hours' WHERE id = $1`,
+        [input.id]
+      );
+
+      const since = new Date(Date.now() - 60 * 60 * 1000);
+      const candidates = await repository.findRecentByType({
+        emergencyType: 'INCENDIO',
+        since,
+      });
+
+      expect(candidates.some((candidate) => candidate.id === input.id)).toBe(false);
+    });
+  });
 });

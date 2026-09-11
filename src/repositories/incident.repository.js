@@ -1,3 +1,5 @@
+const { NotFoundError } = require('../errors/app-errors');
+
 function mapIncident(row) {
   if (!row) return null;
   return {
@@ -6,6 +8,7 @@ function mapIncident(row) {
     priority: row.priority,
     score: row.score,
     reasonCodes: row.reason_codes,
+    factors: row.factors,
     algorithmVersion: row.algorithm_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -49,6 +52,28 @@ class IncidentRepository {
 
   async addMember(incidentId, emergencyId) {
     return this.emergencyRepository.setIncidentId(emergencyId, incidentId);
+  }
+
+  async updateScoring(incidentId, { priority, score, reasonCodes, factors, algorithmVersion }) {
+    const result = await this.pool.query(
+      `UPDATE incidents
+       SET priority = $1, score = $2, reason_codes = $3::jsonb, factors = $4::jsonb,
+           algorithm_version = $5, updated_at = now()
+       WHERE id = $6
+       RETURNING *`,
+      [
+        priority || null,
+        score != null ? score : null,
+        JSON.stringify(reasonCodes != null ? reasonCodes : null),
+        JSON.stringify(factors != null ? factors : null),
+        algorithmVersion || null,
+        incidentId,
+      ]
+    );
+    if (result.rows.length === 0) {
+      throw new NotFoundError(`Incident with ID ${incidentId} not found`);
+    }
+    return mapIncident(result.rows[0]);
   }
 }
 
