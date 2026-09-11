@@ -50,6 +50,7 @@ function mapEmergency(row, locationCrypto) {
     status: row.status,
     assignedOfficerId: row.assigned_officer_id,
     assignedOfficer: row.assigned_officer_name || null,
+    incidentId: row.incident_id,
     emergencyType: row.emergency_type,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -444,6 +445,17 @@ class EmergencyRepository {
     } finally {
       client.release();
     }
+  }
+
+  async setIncidentId(emergencyId, incidentId) {
+    const result = await this.pool.query(
+      'UPDATE emergencies SET incident_id = $1, updated_at = now() WHERE id = $2 RETURNING *',
+      [incidentId, emergencyId]
+    );
+    if (result.rows.length === 0) {
+      throw new NotFoundError(`Emergency with ID ${emergencyId} not found`);
+    }
+    return mapEmergency(result.rows[0], this.locationCrypto);
   }
 
   /**
