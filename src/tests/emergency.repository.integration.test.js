@@ -243,6 +243,50 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(historyList).toHaveLength(1);
   });
 
+  it('cierra una emergencia RESOLVED y persiste closed_at con su evento outbox', async () => {
+    const input = buildEmergency({ status: 'RESOLVED' });
+    await repository.create(input);
+
+    const { emergency, history } = await repository.updateStatus(input.id, {
+      newStatus: 'CLOSED',
+      actor: 'operador-1',
+      outboxEvent: {
+        topic: 'emergencias.cerrada',
+        payload: ({ emergency: savedEmergency }, eventId) => ({
+          type: 'EmergenciaCerrada',
+          eventId,
+          correlationId: savedEmergency.id,
+          data: {
+            id: savedEmergency.id,
+            closedAt: savedEmergency.closedAt,
+          },
+        }),
+      },
+    });
+
+    expect(emergency.status).toBe('CLOSED');
+    expect(emergency.closedAt).toBeDefined();
+    expect(history.previousStatus).toBe('RESOLVED');
+    expect(history.newStatus).toBe('CLOSED');
+
+    const raw = await getPool().query('SELECT closed_at FROM emergencies WHERE id = $1', [input.id]);
+    expect(raw.rows[0].closed_at).toBeTruthy();
+    expect(new Date(raw.rows[0].closed_at).getTime()).toBe(new Date(emergency.closedAt).getTime());
+
+    const outbox = await getPool().query(
+      `SELECT topic, payload
+       FROM outbox_events
+       WHERE payload->>'type' = 'EmergenciaCerrada'
+         AND payload->'data'->>'id' = $1
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [input.id]
+    );
+    expect(outbox.rows).toHaveLength(1);
+    expect(outbox.rows[0].topic).toBe('emergencias.cerrada');
+    expect(outbox.rows[0].payload.data.closedAt).toBe(new Date(emergency.closedAt).toISOString());
+  });
+
   it('al asignar marca al oficial ocupado y al devolver a VALIDATED lo libera (misma tx)', async () => {
     const officerId = 'of-001';
     await getPool().query(
