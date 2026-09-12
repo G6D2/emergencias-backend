@@ -53,7 +53,7 @@
       "!src/swagger.js",
       "!src/db/migrate.js"
     ],
-    "coverageReporters": ["text", "lcov", "html"],
+    "coverageReporters": ["text", "lcov", "html", "json-summary"],
     "coverageThreshold": {
       "global": {
         "lines": 80,
