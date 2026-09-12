@@ -179,6 +179,46 @@ describe('startKeepWarmJob', () => {
     badTz.stop();
   });
 
+  it('disables itself when fetch is not available', async () => {
+    const job = startKeepWarmJob({ env: baseEnv, fetchImpl: {}, now: () => INSIDE });
+    const result = await job.runOnce();
+    expect(result).toEqual({ skipped: true });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('fetch is not available'));
+    job.stop();
+  });
+
+  it('disables itself when the interval is too small', async () => {
+    const fetchImpl = okFetch();
+    const job = startKeepWarmJob({
+      env: { ...baseEnv, KEEP_WARM_INTERVAL_MS: '500' }, fetchImpl, now: () => INSIDE,
+    });
+    const result = await job.runOnce();
+    expect(result).toEqual({ skipped: true });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('KEEP_WARM_INTERVAL_MS must be >= 1000'));
+    job.stop();
+  });
+
+  it('runOnce catches unexpected errors instead of throwing', async () => {
+    let calls = 0;
+    const now = () => {
+      calls += 1;
+      if (calls > 1) throw new Error('clock error');
+      return INSIDE;
+    };
+    const fetchImpl = okFetch();
+    const job = startKeepWarmJob({ env: baseEnv, fetchImpl, now });
+    try {
+      const result = await job.runOnce();
+      expect(result).toEqual({ skipped: false, results: [], error: 'clock error' });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringMatching(/Keep-warm job failed.*clock error/)
+      );
+    } finally {
+      job.stop();
+    }
+  });
+
   it('logs a warning on non-2xx and on failure, without bodies', async () => {
     const fetchImpl = jest.fn()
       .mockResolvedValueOnce({ ok: false, status: 503, text: async () => 'SECRET_BODY' })

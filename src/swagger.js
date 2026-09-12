@@ -66,7 +66,11 @@ const options = {
               description: 'true si la ubicación fue borrada por política de retención',
             },
             description: { type: 'string' },
-            severity: { type: 'string', example: 'critical' },
+            severity: {
+              type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
+              example: 'critical',
+            },
             emergencyType: {
               type: 'string',
               enum: [...EMERGENCY_TYPES],
@@ -91,6 +95,7 @@ const options = {
             },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
+            closedAt: { type: 'string', format: 'date-time', nullable: true },
           },
         },
         StatusHistoryEntry: {
@@ -157,6 +162,7 @@ const options = {
             },
             severity: {
               type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
               example: 'critical',
               default: 'critical',
             },

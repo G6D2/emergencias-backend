@@ -5,8 +5,9 @@ const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
 const { assertTransition } = require('../domain/emergency-status');
-const { buildEmergencyStatusUpdatedEvent } = require('../services/emergency-events');
+const { buildEmergencyStatusUpdatedEvent, buildEmergencyClosedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
+const { isValidSeverity } = require('../domain/severity');
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
@@ -23,6 +24,9 @@ class EmergencyController {
     // usa el sub del token. Dispatcher (y futuros roles operativos) ven todo.
     const restrictToOwn = Boolean(user) && !userHasGroup(user, GROUPS.DISPATCHER);
     const userId = restrictToOwn ? user.sub : undefined;
+    if (query.severity && !isValidSeverity(query.severity)) {
+      throw new ValidationError('severity must be one of: low, medium, high, critical');
+    }
     const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
     const statuses = String(query.status || query.statuses || '')
@@ -249,6 +253,35 @@ class EmergencyController {
         assignedOfficer: officer?.name || null,
       },
     };
+  }
+
+  async closeEmergency(id, user) {
+    if (!isUuid(id)) {
+      throw new ValidationError('Emergency id must be a valid UUID');
+    }
+
+    const actor = user.sub;
+    const emergency = await this.emergencyRepository.findById(id);
+    if (!emergency) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    assertTransition(emergency.status, 'CLOSED');
+
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
+      newStatus: 'CLOSED',
+      actor,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_CERRADA || 'emergencias.cerrada',
+        payload: ({ emergency: savedEmergency }, eventId) => buildEmergencyClosedEvent({
+          emergency: savedEmergency,
+          actor,
+          eventId,
+        }),
+      },
+    });
+
+    return { success: true, data: updated };
   }
 }
 

@@ -23,6 +23,8 @@ services:
         value: emergencias-backend
       - key: TOPIC_PANIC_BUTTON
         value: emergencias.boton-panico
+      - key: TOPIC_EMERGENCIA_CERRADA
+        value: emergencias.cerrada
       # Setear en el dashboard de Render (openssl rand -base64 32).
       # Sin esto el servicio no arranca.
       - key: LOCATION_ENCRYPTION_KEY

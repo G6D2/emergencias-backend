@@ -287,6 +287,37 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
 
   /**
    * @openapi
+   * /api/emergencies/{id}/close:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: Cierra una emergencia resuelta
+   *     description: Requiere grupo `dispatcher`. Solo permite RESOLVED -> CLOSED y registra closedAt.
+   *     security:
+   *       - bearerAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *           format: uuid
+   *     responses:
+   *       200:
+   *         description: Emergencia cerrada
+   *       403:
+   *         description: Se requiere grupo dispatcher
+   *       404:
+   *         description: Emergencia no encontrada
+   *       409:
+   *         description: La emergencia no está resuelta
+   */
+  router.patch('/:id/close', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.closeEmergency(req.params.id, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
    * /api/emergencies/{id}/cancel:
    *   patch:
    *     tags: [Emergencies]

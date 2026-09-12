@@ -50,9 +50,10 @@
       "src/**/*.js",
       "!src/index.js",
       "!src/tests/**",
-      "!src/swagger.js"
+      "!src/swagger.js",
+      "!src/db/migrate.js"
     ],
-    "coverageReporters": ["text", "lcov", "html"],
+    "coverageReporters": ["text", "lcov", "html", "json-summary"],
     "coverageThreshold": {
       "global": {
         "lines": 80,

@@ -54,4 +54,22 @@ function buildEmergencyStatusUpdatedEvent({ emergency, history, actor, reason, e
   };
 }
 
-module.exports = { buildEmergencyCreatedEvent, buildEmergencyStatusUpdatedEvent };
+function buildEmergencyClosedEvent({ emergency, actor, eventId }) {
+  return {
+    type: 'EmergenciaCerrada',
+    eventId,
+    correlationId: emergency.correlationId || emergency.id,
+    data: {
+      id: emergency.id,
+      correlationId: emergency.correlationId || emergency.id,
+      actor,
+      closedAt: emergency.closedAt,
+    },
+  };
+}
+
+module.exports = {
+  buildEmergencyCreatedEvent,
+  buildEmergencyStatusUpdatedEvent,
+  buildEmergencyClosedEvent,
+};

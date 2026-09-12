@@ -21,7 +21,7 @@ Backend para el módulo de Emergencias y Seguridad de CityPass+. Gestiona botone
 ## Inicio Rápido
 
 ### Requisitos
-- Node.js 18+
+- Node.js 20+
 - Docker & Docker Compose (para **Kafka**; Postgres puede ser Neon o Docker)
 
 ### 1. Variables de entorno
