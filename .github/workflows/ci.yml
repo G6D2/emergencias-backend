@@ -1,10 +1,20 @@
 name: CI
+# Prefijo del run: distingue PR vs push a main en la lista de Actions.
+run-name: "CI · ${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('push {0}', github.ref_name) }} · ${{ github.actor }}"
 
 on:
   pull_request:
     branches: [main]
     types: [opened, edited, synchronize, reopened]
+  # push solo en main: en las branches de feature ya corre por el PR.
+  # Asi cada push a un PR dispara UNA corrida, no dos.
   push:
+    branches: [main]
+
+# Si llega otro push del mismo PR/branch, cancela la corrida anterior.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
