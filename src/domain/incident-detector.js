@@ -103,8 +103,10 @@ function processEmergencyTypeCandidates(candidates, { radiusMeters, minUniqueCit
       finalPriority: applyPriorityInvariant(member.severity, incidentPriority),
       // Campo extra (no pedido en el contrato original de 4 campos): el job
       // lo usa para no llamar addMember sobre miembros que ya estaban
-      // vinculados a este mismo incidentId.
-      alreadyLinked: member.incidentId === incidentId,
+      // vinculados a este mismo incidentId. member.incidentId != null es
+      // necesario: si ambos son null (incidente nuevo), == daria un falso
+      // "ya vinculado" y el job nunca llamaria addMember.
+      alreadyLinked: member.incidentId != null && member.incidentId === incidentId,
     }));
 
     decisions.push({
