@@ -5,7 +5,7 @@ const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
 const { assertTransition } = require('../domain/emergency-status');
-const { buildEmergencyStatusUpdatedEvent } = require('../services/emergency-events');
+const { buildEmergencyStatusUpdatedEvent, buildEmergencyClosedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { isValidSeverity } = require('../domain/severity');
 
@@ -253,6 +253,35 @@ class EmergencyController {
         assignedOfficer: officer?.name || null,
       },
     };
+  }
+
+  async closeEmergency(id, user) {
+    if (!isUuid(id)) {
+      throw new ValidationError('Emergency id must be a valid UUID');
+    }
+
+    const actor = user.sub;
+    const emergency = await this.emergencyRepository.findById(id);
+    if (!emergency) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    assertTransition(emergency.status, 'CLOSED');
+
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
+      newStatus: 'CLOSED',
+      actor,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_CERRADA || 'emergencias.cerrada',
+        payload: ({ emergency: savedEmergency }, eventId) => buildEmergencyClosedEvent({
+          emergency: savedEmergency,
+          actor,
+          eventId,
+        }),
+      },
+    });
+
+    return { success: true, data: updated };
   }
 }
 

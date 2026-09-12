@@ -95,6 +95,7 @@ const options = {
             },
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
+            closedAt: { type: 'string', format: 'date-time', nullable: true },
           },
         },
         StatusHistoryEntry: {
