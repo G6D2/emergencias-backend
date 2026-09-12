@@ -464,7 +464,7 @@ class EmergencyRepository {
    */
   async findRecentByType({ emergencyType, since }) {
     const result = await this.pool.query(
-      `SELECT id, user_id, latitude, longitude, location_encrypted,
+      `SELECT id, correlation_id, user_id, latitude, longitude, location_encrypted,
               severity, incident_id, created_at
        FROM emergencies
        WHERE emergency_type = $1 AND created_at >= $2`,
@@ -476,6 +476,7 @@ class EmergencyRepository {
       if (!row.location_encrypted) {
         candidates.push({
           id: row.id,
+          correlationId: row.correlation_id,
           userId: row.user_id,
           latitude: null,
           longitude: null,
@@ -490,6 +491,7 @@ class EmergencyRepository {
         const location = this.locationCrypto.decryptLocation(row.location_encrypted);
         candidates.push({
           id: row.id,
+          correlationId: row.correlation_id,
           userId: row.user_id,
           latitude: location.latitude,
           longitude: location.longitude,

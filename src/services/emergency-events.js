@@ -68,8 +68,39 @@ function buildEmergencyClosedEvent({ emergency, actor, eventId }) {
   };
 }
 
+function buildEmergencyPrioritizedEvent({
+  emergencyId,
+  correlationId,
+  incidentId,
+  priorityIndividual,
+  incidentPriority,
+  priority,
+  score,
+  reasonCodes,
+  algorithmVersion,
+  eventId,
+}) {
+  return {
+    type: 'EmergenciaPriorizada',
+    eventId,
+    correlationId: correlationId || emergencyId,
+    data: {
+      id: emergencyId,
+      correlationId: correlationId || emergencyId,
+      incidentId,
+      priorityIndividual,
+      incidentPriority,
+      priority,
+      score,
+      reasonCodes,
+      algorithmVersion,
+    },
+  };
+}
+
 module.exports = {
   buildEmergencyCreatedEvent,
   buildEmergencyStatusUpdatedEvent,
   buildEmergencyClosedEvent,
+  buildEmergencyPrioritizedEvent,
 };

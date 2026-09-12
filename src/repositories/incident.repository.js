@@ -1,4 +1,5 @@
 const { NotFoundError } = require('../errors/app-errors');
+const { buildEmergencyPrioritizedEvent } = require('../services/emergency-events');
 
 function mapIncident(row) {
   if (!row) return null;
@@ -74,6 +75,77 @@ class IncidentRepository {
       throw new NotFoundError(`Incident with ID ${incidentId} not found`);
     }
     return mapIncident(result.rows[0]);
+  }
+
+  /**
+   * Persiste la decisión de scoring del rule-based grouper (tarea #60, parte
+   * 2/2) y notifica EmergenciaPriorizada por cada miembro, pero solo si la
+   * prioridad del incidente efectivamente cambió (NULL cuenta como "distinto
+   * de cualquier valor", así que la primera vez siempre notifica).
+   */
+  async applyScoringDecision(incidentId, { priority, score, reasonCodes, factors, algorithmVersion, members }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const current = await client.query(
+        'SELECT priority FROM incidents WHERE id = $1 FOR UPDATE',
+        [incidentId]
+      );
+      if (current.rows.length === 0) {
+        throw new NotFoundError(`Incident with ID ${incidentId} not found`);
+      }
+      const previousPriority = current.rows[0].priority;
+
+      const updated = await client.query(
+        `UPDATE incidents
+         SET priority = $1, score = $2, reason_codes = $3::jsonb, factors = $4::jsonb,
+             algorithm_version = $5, updated_at = now()
+         WHERE id = $6
+         RETURNING *`,
+        [
+          priority || null,
+          score != null ? score : null,
+          JSON.stringify(reasonCodes != null ? reasonCodes : null),
+          JSON.stringify(factors != null ? factors : null),
+          algorithmVersion || null,
+          incidentId,
+        ]
+      );
+
+      if (previousPriority !== priority) {
+        for (const member of members) {
+          await this.emergencyRepository.insertOutboxEvent(
+            client,
+            {
+              topic: process.env.TOPIC_EMERGENCIA_PRIORIZADA || 'emergencias.priorizada',
+              payload: (entity, eventId) => buildEmergencyPrioritizedEvent({
+                emergencyId: entity.emergencyId,
+                correlationId: entity.correlationId,
+                incidentId,
+                priorityIndividual: entity.priorityIndividual,
+                incidentPriority: priority,
+                priority: entity.finalPriority,
+                score,
+                reasonCodes,
+                algorithmVersion,
+                eventId,
+              }),
+            },
+            member
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+
+      return mapIncident(updated.rows[0]);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }
 

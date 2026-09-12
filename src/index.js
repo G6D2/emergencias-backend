@@ -3,10 +3,12 @@ const { KafkaService } = require('./services/kafka.service');
 const { getPool } = require('./db/pool');
 const { EmergencyRepository } = require('./repositories/emergency.repository');
 const { OfficerRepository } = require('./repositories/officer.repository');
+const { IncidentRepository } = require('./repositories/incident.repository');
 const { createApp } = require('./app');
 const { createAuthSetup } = require('./auth/setup');
 const { createLocationCrypto } = require('./security/location-crypto');
 const { startLocationRetentionJob } = require('./security/location-retention');
+const { startIncidentDetectionJob } = require('./services/incident-detection-job');
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher } = require('./services/outbox-publisher');
@@ -22,6 +24,7 @@ async function start() {
   const pool = getPool();
   const emergencyRepository = new EmergencyRepository(pool, { locationCrypto });
   const officerRepository = new OfficerRepository(pool);
+  const incidentRepository = new IncidentRepository(pool, emergencyRepository);
   const outboxPublisher = new OutboxPublisher(pool, kafkaService);
 
   // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
@@ -31,6 +34,7 @@ async function start() {
   outboxPublisher.start();
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
+  const incidentDetectionJob = startIncidentDetectionJob(emergencyRepository, incidentRepository);
   // Mantiene despiertos backend y frontend en horario de clase (Render free).
   const keepWarmJob = startKeepWarmJob();
 
@@ -54,6 +58,7 @@ async function start() {
 
   const shutdown = async () => {
     retentionJob.stop();
+    incidentDetectionJob.stop();
     keepWarmJob.stop();
     outboxPublisher.stop();
     server.close();
