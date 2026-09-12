@@ -38,6 +38,18 @@ services:
         value: "72"
       - key: LOCATION_RETENTION_ENABLED
         value: "true"
+      # Sin esta variable el server igual arranca: cae al frontend de Render
+      # (https://frontend-krds.onrender.com) y deja un warn en el log. Se
+      # recomienda setearla explícita para no depender del fallback.
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://frontend-krds.onrender.com
+      # Máximo de conexiones del pool de pg (ver README > Pool de conexiones).
+      - key: DB_POOL_MAX
+        value: "10"
+      # Rate limit de /auth/dev/login (10 req/min) y POST /api/panic-button
+      # (5 req/min) por IP. 'false' lo apaga.
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
       # Keep-warm in-process (ver README > Deploy > Keep-warm): en horario de
       # clase el backend se pega a sí mismo (URL pública) y al frontend cada
       # 8 min para que Render (free) no los duerma. El cron de GitHub
