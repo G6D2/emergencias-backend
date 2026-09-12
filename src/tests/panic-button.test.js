@@ -165,6 +165,36 @@ describe('Panic Button API', () => {
   });
 
   describe('POST /api/panic-button', () => {
+    it.each(['low', 'medium', 'high', 'critical'])(
+      'accepts severity %s',
+      async (severity) => {
+        const response = await request(app)
+          .post('/api/panic-button')
+          .send({
+            location: { latitude: -34.6037, longitude: -58.3816 },
+            severity,
+          })
+          .expect(201);
+
+        expect(response.body.data.severity).toBe(severity);
+      }
+    );
+
+    it('rejects a severity outside the server-side enum', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          severity: 'urgent-now',
+        })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        error: 'ValidationError',
+        message: 'severity must be one of: low, medium, high, critical',
+      });
+    });
+
     it('should trigger panic button successfully using JWT sub as userId', async () => {
       const payload = {
         location: {
@@ -475,6 +505,19 @@ describe('Emergencies API', () => {
   it('un usuario sin grupo citizen ni dispatcher recibe 403 al listar', async () => {
     const otherApp = createTestApp({ sub: 'X1', groups: ['officer'] });
     await request(otherApp).get('/api/emergencies').expect(403);
+  });
+
+  it('rejects an invalid severity filter', async () => {
+    const dispatcherApp = createTestApp({
+      sub: 'U000999',
+      groups: ['dispatcher'],
+    });
+
+    const response = await request(dispatcherApp)
+      .get('/api/emergencies?severity=urgent-now')
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
   });
 
   it('allows a dispatcher to inspect outbox status without exposing payload', async () => {

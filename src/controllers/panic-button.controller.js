@@ -4,6 +4,7 @@ const { canViewEmergency } = require('../auth/authorize');
 const { secureLog } = require('../security/secure-log');
 const { buildEmergencyCreatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
+const { normalizeSeverity } = require('../domain/severity');
 
 class PanicButtonController {
   constructor(kafkaService, emergencyRepository) {
@@ -30,6 +31,11 @@ class PanicButtonController {
     // cliente no manda tipo, es el botón SOS: PANICO.
     const emergencyType = assertEmergencyType(payload.emergencyType) || 'PANICO';
 
+    const severity = normalizeSeverity(payload.severity);
+    if (!severity) {
+      throw new ValidationError('severity must be one of: low, medium, high, critical');
+    }
+
     const emergencyId = uuidv4();
 
     const emergency = await this.emergencyRepository.create({
@@ -41,7 +47,7 @@ class PanicButtonController {
       latitude,
       longitude,
       description: payload.description || 'Botón de pánico activado',
-      severity: payload.severity || 'critical',
+      severity,
       emergencyType,
       status: 'PENDING',
       outboxEvent: {

@@ -7,6 +7,7 @@ const { GROUPS } = require('../auth/groups');
 const { assertTransition } = require('../domain/emergency-status');
 const { buildEmergencyStatusUpdatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
+const { isValidSeverity } = require('../domain/severity');
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
@@ -23,6 +24,9 @@ class EmergencyController {
     // usa el sub del token. Dispatcher (y futuros roles operativos) ven todo.
     const restrictToOwn = Boolean(user) && !userHasGroup(user, GROUPS.DISPATCHER);
     const userId = restrictToOwn ? user.sub : undefined;
+    if (query.severity && !isValidSeverity(query.severity)) {
+      throw new ValidationError('severity must be one of: low, medium, high, critical');
+    }
     const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
     const statuses = String(query.status || query.statuses || '')

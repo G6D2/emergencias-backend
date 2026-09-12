@@ -66,7 +66,11 @@ const options = {
               description: 'true si la ubicación fue borrada por política de retención',
             },
             description: { type: 'string' },
-            severity: { type: 'string', example: 'critical' },
+            severity: {
+              type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
+              example: 'critical',
+            },
             emergencyType: {
               type: 'string',
               enum: [...EMERGENCY_TYPES],
@@ -157,6 +161,7 @@ const options = {
             },
             severity: {
               type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
               example: 'critical',
               default: 'critical',
             },
