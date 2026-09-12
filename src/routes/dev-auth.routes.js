@@ -1,5 +1,6 @@
 const express = require('express');
 const { asyncHandler } = require('../utils/async-handler');
+const { createDevLoginRateLimiter } = require('../security/rate-limit');
 
 function createDevAuthRoutes(tokenIssuer) {
   const router = express.Router();
@@ -32,8 +33,14 @@ function createDevAuthRoutes(tokenIssuer) {
    *           application/json:
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
+   *       429:
+   *         description: Demasiados intentos desde la misma IP (rate limit, 10 req/min)
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    */
-  router.post('/login', asyncHandler(async (req, res) => {
+  router.post('/login', createDevLoginRateLimiter(), asyncHandler(async (req, res) => {
     const { sub, preferred_username: preferredUsername, groups } = req.body || {};
     const tokens = await tokenIssuer.issueAccessToken({
       sub,

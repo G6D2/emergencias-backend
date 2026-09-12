@@ -1,4 +1,3 @@
-const { validate: isUuid } = require('uuid');
 const { NotFoundError, ForbiddenError, ValidationError } = require('../errors/app-errors');
 const { canCancelEmergency, canViewEmergency, userHasGroup } = require('../auth/authorize');
 const { GROUPS } = require('../auth/groups');
@@ -8,6 +7,7 @@ const { assertTransition } = require('../domain/emergency-status');
 const { buildEmergencyStatusUpdatedEvent, buildEmergencyClosedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { isValidSeverity } = require('../domain/severity');
+const { assertUuid } = require('../utils/uuid');
 
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
@@ -81,9 +81,7 @@ class EmergencyController {
   async getEmergencyDetail(id, user) {
     // Se valida el formato antes de ir a la base: Postgres tiraría un error
     // de sintaxis de uuid (22P02) que terminaría en 500 en vez de 400.
-    if (!isUuid(id)) {
-      throw new ValidationError('Emergency id must be a valid UUID');
-    }
+    assertUuid(id);
 
     const detail = await this.emergencyRepository.findDetailById(id);
 
@@ -103,6 +101,8 @@ class EmergencyController {
   }
 
   async validateEmergency(id, user) {
+    assertUuid(id);
+
     const actor = user.sub;
     const emergency = await this.emergencyRepository.findById(id);
 
@@ -131,6 +131,8 @@ class EmergencyController {
   }
 
   async discardEmergency(id, { reason } = {}, user) {
+    assertUuid(id);
+
     const actor = user.sub;
     const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
 
@@ -172,6 +174,8 @@ class EmergencyController {
    * @param {{ sub: string }} user - identidad autenticada (req.user)
    */
   async cancelEmergency(id, { reason = null } = {}, user) {
+    assertUuid(id);
+
     const actor = user.sub;
     const emergency = await this.emergencyRepository.findById(id);
 
@@ -212,15 +216,13 @@ class EmergencyController {
    * @param {{ sub: string }} user
    */
   async assignOfficer(id, { officerId } = {}, user) {
+    assertUuid(id);
+
     const actor = user.sub;
     const normalizedOfficerId = typeof officerId === 'string' ? officerId.trim() : '';
 
     if (!normalizedOfficerId) {
       throw new ValidationError('officerId is required');
-    }
-
-    if (!isUuid(id)) {
-      throw new ValidationError('Emergency id must be a valid UUID');
     }
 
     const emergency = await this.emergencyRepository.findById(id);
@@ -256,9 +258,7 @@ class EmergencyController {
   }
 
   async closeEmergency(id, user) {
-    if (!isUuid(id)) {
-      throw new ValidationError('Emergency id must be a valid UUID');
-    }
+    assertUuid(id);
 
     const actor = user.sub;
     const emergency = await this.emergencyRepository.findById(id);

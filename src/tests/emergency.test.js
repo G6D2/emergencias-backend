@@ -253,6 +253,15 @@ describe('PATCH /api/emergencies/:id/validate', () => {
     const app = createTestApp(DISPATCHER);
     await request(app).patch(`/api/emergencies/${FAKE_UUID}/validate`).expect(404);
   });
+
+  // Hallazgo de auditoría A1: sin validar el formato, un id mal formado
+  // llegaba a Postgres y volvía un 500 con el mensaje crudo del driver.
+  it('returns 400 (not 500) when the id is not a valid UUID', async () => {
+    const app = createTestApp(DISPATCHER);
+    const res = await request(app).patch('/api/emergencies/not-a-uuid/validate').expect(400);
+
+    expect(res.body.error).toBe('ValidationError');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -338,5 +347,17 @@ describe('PATCH /api/emergencies/:id/discard', () => {
       .patch(`/api/emergencies/${FAKE_UUID}/discard`)
       .send({ reason: 'test' })
       .expect(404);
+  });
+
+  // Hallazgo de auditoría A1: sin validar el formato, un id mal formado
+  // llegaba a Postgres y volvía un 500 con el mensaje crudo del driver.
+  it('returns 400 (not 500) when the id is not a valid UUID', async () => {
+    const app = createTestApp(DISPATCHER);
+    const res = await request(app)
+      .patch('/api/emergencies/not-a-uuid/discard')
+      .send({ reason: 'test' })
+      .expect(400);
+
+    expect(res.body.error).toBe('ValidationError');
   });
 });

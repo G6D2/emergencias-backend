@@ -170,34 +170,38 @@ describe('Panic Button API', () => {
   });
 
   describe('POST /api/panic-button', () => {
-    it.each(['low', 'medium', 'high', 'critical'])(
-      'accepts severity %s',
-      async (severity) => {
+    // Decisión de producto: la severidad no la elige quien reporta. El
+    // backend la deriva del emergencyType (src/domain/severity.js); cualquier
+    // severity que mande el body se ignora (no rompe, no valida, no manda).
+    it.each([
+      ['low', 'urgent-now'],
+      ['low', 'critical'],
+      ['high', 'high'],
+    ])(
+      'ignores client-supplied severity and derives %s from emergencyType regardless of the body value (%s)',
+      async (expectedSeverity, suppliedSeverity) => {
+        const emergencyType = expectedSeverity === 'high' ? 'fire' : 'other';
         const response = await request(app)
           .post('/api/panic-button')
           .send({
             location: { latitude: -34.6037, longitude: -58.3816 },
-            severity,
+            emergencyType,
+            severity: suppliedSeverity,
           })
           .expect(201);
 
-        expect(response.body.data.severity).toBe(severity);
+        expect(response.body.data.severity).toBe(expectedSeverity);
       }
     );
 
-    it('rejects a severity outside the server-side enum', async () => {
+    it('derives severity from emergencyType per the severity table (PANICO → critical)', async () => {
       const response = await request(app)
         .post('/api/panic-button')
-        .send({
-          location: { latitude: -34.6037, longitude: -58.3816 },
-          severity: 'urgent-now',
-        })
-        .expect(400);
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
 
-      expect(response.body).toMatchObject({
-        error: 'ValidationError',
-        message: 'severity must be one of: low, medium, high, critical',
-      });
+      expect(response.body.data.emergencyType).toBe('PANICO');
+      expect(response.body.data.severity).toBe('critical');
     });
 
     it('should trigger panic button successfully using JWT sub as userId', async () => {
@@ -337,6 +341,43 @@ describe('Panic Button API', () => {
       expect(response.body.error).toBe('ValidationError');
     });
 
+    it('rejects a non-numeric latitude/longitude', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({ location: { latitude: 'not-a-number', longitude: -58.3816 } })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        error: 'ValidationError',
+        message: 'location.latitude and location.longitude must be numbers',
+      });
+    });
+
+    it.each([
+      [{ latitude: 90.0001, longitude: -58.3816 }],
+      [{ latitude: -90.0001, longitude: -58.3816 }],
+      [{ latitude: -34.6037, longitude: 180.0001 }],
+      [{ latitude: -34.6037, longitude: -180.0001 }],
+    ])('rejects a location out of range %j', async (location) => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({ location })
+        .expect(400);
+
+      expect(response.body.error).toBe('ValidationError');
+    });
+
+    it.each([
+      [{ latitude: 90, longitude: 180 }],
+      [{ latitude: -90, longitude: -180 }],
+      [{ latitude: 0, longitude: 0 }],
+    ])('accepts latitude/longitude at the boundary %j', async (location) => {
+      await request(app)
+        .post('/api/panic-button')
+        .send({ location })
+        .expect(201);
+    });
+
     it('returns 401 when Authorization is missing', async () => {
       const unauthApp = createApp(mockKafkaService, createMockEmergencyRepository(), {
         authenticate: createAuthenticateMiddleware({
@@ -419,7 +460,10 @@ describe('Panic Button API', () => {
       expect(response.body.error).toBe('NotFoundError');
     });
 
-    it('returns 403 when citizen tries to view another user emergency', async () => {
+    // 403 vs 404 unificado: una emergencia ajena responde 404 (no revela que
+    // el id existe), igual que GET /api/emergencies/:id. Este endpoint
+    // delega en el mismo método de detalle (ver panic-button.controller.js).
+    it('returns 404 (not 403) when citizen tries to view another user emergency', async () => {
       const sharedRepo = createMockEmergencyRepository();
       const ownerApp = createTestApp({
         sub: 'U000042',
@@ -437,9 +481,9 @@ describe('Panic Button API', () => {
 
       const response = await request(otherApp)
         .get(`/api/panic-button/${createResponse.body.emergencyId}`)
-        .expect(403);
+        .expect(404);
 
-      expect(response.body.error).toBe('ForbiddenError');
+      expect(response.body.error).toBe('NotFoundError');
     });
 
     it('allows dispatcher to view any emergency', async () => {
@@ -463,6 +507,31 @@ describe('Panic Button API', () => {
         .expect(200);
 
       expect(getResponse.body.data.userId).toBe('U000042');
+    });
+
+    it('still returns the emergency when the access-audit write fails', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const sharedRepo = {
+        ...createMockEmergencyRepository(),
+        recordAccess: async () => {
+          throw new Error('audit table unavailable');
+        },
+      };
+      const ownerApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+
+      const createResponse = await request(ownerApp)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
+
+      const getResponse = await request(ownerApp)
+        .get(`/api/panic-button/${createResponse.body.emergencyId}`)
+        .expect(200);
+
+      expect(getResponse.body.success).toBe(true);
+      expect(errorSpy).toHaveBeenCalled();
+
+      errorSpy.mockRestore();
     });
   });
 });
@@ -781,6 +850,17 @@ describe('Emergencies API', () => {
     expect(response.body.error).toBe('NotFoundError');
   });
 
+  // Sin esto, un id mal formado llegaba tal cual a Postgres y volvía un 500
+  // con el mensaje crudo del driver en vez de un 400 (hallazgo de auditoría A1).
+  it('returns 400 (not 500) when cancelling with a malformed id', async () => {
+    const response = await request(app)
+      .patch('/api/emergencies/not-a-uuid/cancel')
+      .send({})
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
+  });
+
   it('returns 409 when emergency is not cancellable', async () => {
     const createResponse = await request(app)
       .post('/api/panic-button')
@@ -904,7 +984,7 @@ describe('GET /api/emergencies/:id (detalle, tarea #32)', () => {
       correlationId: emergencyId,
       userId: 'U000042',
       emergencyType: 'INCENDIO',
-      severity: 'critical',
+      severity: 'high',
       status: 'VALIDATED',
       latitude: -34.6037,
       longitude: -58.3816,

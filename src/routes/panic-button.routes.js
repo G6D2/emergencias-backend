@@ -2,6 +2,7 @@ const express = require('express');
 const { PanicButtonController } = require('../controllers/panic-button.controller');
 const { asyncHandler } = require('../utils/async-handler');
 const { requireCitizen, requireCitizenOrDispatcher } = require('../auth/authorize');
+const { createPanicButtonRateLimiter } = require('../security/rate-limit');
 
 function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate) {
   const router = express.Router();
@@ -49,6 +50,12 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate
    *           application/json:
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
+   *       429:
+   *         description: Demasiadas activaciones desde la misma IP (rate limit)
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    *       503:
    *         description: Kafka no disponible
    *         content:
@@ -56,10 +63,16 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
    */
-  router.post('/', authenticate, requireCitizen, asyncHandler(async (req, res) => {
-    const result = await controller.triggerPanicButton(req.body, req.user);
-    res.status(201).json(result);
-  }));
+  router.post(
+    '/',
+    createPanicButtonRateLimiter(),
+    authenticate,
+    requireCitizen,
+    asyncHandler(async (req, res) => {
+      const result = await controller.triggerPanicButton(req.body, req.user);
+      res.status(201).json(result);
+    })
+  );
 
   /**
    * @openapi
@@ -67,7 +80,11 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate
    *   get:
    *     tags: [Panic Button]
    *     summary: Obtiene un evento de botón de pánico
-   *     description: Requiere `citizen` (solo propias) o `dispatcher` (todas).
+   *     description: |
+   *       Requiere `citizen` (solo propias) o `dispatcher` (todas).
+   *       Delega en el mismo método que GET /api/emergencies/{id}: una
+   *       emergencia ajena responde **404** y no 403, para no revelar que el
+   *       id existe.
    *     security:
    *       - bearerAuth: []
    *     parameters:
@@ -88,21 +105,21 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate
    *                 success:
    *                   type: boolean
    *                 data:
-   *                   $ref: '#/components/schemas/Emergency'
+   *                   $ref: '#/components/schemas/EmergencyDetail'
+   *       400:
+   *         description: El id no tiene formato UUID
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    *       401:
    *         description: Token ausente o inválido
    *         content:
    *           application/json:
    *             schema:
    *               $ref: '#/components/schemas/ErrorResponse'
-   *       403:
-   *         description: Sin permiso para esta emergencia
-   *         content:
-   *           application/json:
-   *             schema:
-   *               $ref: '#/components/schemas/ErrorResponse'
    *       404:
-   *         description: Emergencia no encontrada
+   *         description: Emergencia inexistente, o ajena para un citizen
    *         content:
    *           application/json:
    *             schema:

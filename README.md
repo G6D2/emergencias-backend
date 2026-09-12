@@ -148,10 +148,13 @@ Sí podés deployar y probar la API antes del IdP. En el dashboard de Render (o 
 ```env
 AUTH_MODE=local
 ALLOW_LOCAL_AUTH=true
+CORS_ALLOWED_ORIGINS=https://frontend-krds.onrender.com
 ```
 
 El server arranca con `NODE_ENV=production` y expone `POST /auth/dev/login` para obtener tokens.  
 **Sacá `ALLOW_LOCAL_AUTH` cuando pasen a IdP real** — es solo para la primera entrega.
+
+En producción, si `CORS_ALLOWED_ORIGINS` no está seteada, el server igual arranca: cae al frontend de Render (`https://frontend-krds.onrender.com`) y deja un `warn` en el log. Configurarla explícitamente evita depender de ese fallback.
 
 ### Keep-warm (Render plan free)
 
@@ -212,8 +215,8 @@ Grupo desconocido no otorga nada. Mapa actual del módulo:
 | Endpoint | Grupo requerido | Regla extra |
 |----------|-----------------|-------------|
 | `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT |
-| `POST /api/panic-button` | `citizen` | — |
-| `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo `userId === sub` |
+| `POST /api/panic-button` | `citizen` | rate limit 5 req/min por IP |
+| `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo `userId === sub` (404 si ajena) |
 | `GET /api/emergencies` | `citizen` o `dispatcher` | citizen: solo las propias |
 | `GET /api/emergencies/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena) |
 | `PATCH /api/emergencies/:id/validate` | `dispatcher` | PENDING → VALIDATED |
@@ -279,9 +282,28 @@ Cada `GET /api/panic-button/:id` autorizado deja un registro en `emergency_acces
 | `LOCATION_RETENTION_HOURS` | Horas antes de anonimizar (default 72) |
 | `LOCATION_RETENTION_ENABLED` | `false` para desactivar el job |
 | `FORCE_HTTPS` | Forzar HTTPS aunque no sea production |
-| `CORS_ORIGIN` | Origins permitidos (coma-separados) en prod |
+| `CORS_ALLOWED_ORIGINS` | Origins permitidos (coma-separados). Sin ella: `http://localhost:3001` fuera de producción; en producción exige la variable y si falta cae a `https://frontend-krds.onrender.com` con un warn en el log (nunca refleja el origin del request) |
+| `DB_POOL_MAX` | Máximo de conexiones del pool de `pg` (default 10) |
+| `RATE_LIMIT_ENABLED` | `false` apaga el rate limiting (default: activo) |
 
 El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `connected` solo indica que el producer se conectó — ver la sección de Kafka para una trampa conocida al publicar desde el host.
+
+### Rate limiting
+
+`express-rate-limit`, activo por default (`RATE_LIMIT_ENABLED=false` lo apaga; útil en tests, que reusan la misma app/IP para muchos requests seguidos):
+
+| Endpoint | Límite | Respuesta al exceder |
+|----------|--------|-----------------------|
+| `POST /auth/dev/login` | 10 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
+| `POST /api/panic-button` | 5 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
+
+### Pool de conexiones (`pg`)
+
+`src/db/pool.js`: `max` = `DB_POOL_MAX` (default 10), `idleTimeoutMillis` 30000, `connectionTimeoutMillis` 5000. Sin límites explícitos el pool crece sin cota y agota las conexiones del Postgres compartido ante un pico de tráfico.
+
+### Errores 5xx sanitizados
+
+Un 4xx tipado (`ValidationError`, `NotFoundError`, etc.) sigue devolviendo su `message` tal cual. Un 5xx (error no controlado, típicamente de la base) **nunca** devuelve `err.message` crudo al cliente — responde `{ "error": "InternalServerError", "message": "Error interno" }` y el detalle real (stack, mensaje del driver) queda solo en el log (`secureLog`).
 
 ---
 
@@ -310,7 +332,11 @@ Emite un access token de desarrollo. Ver ejemplo arriba.
 
 ### POST `/api/panic-button`
 
-Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`.
+Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`. Rate limit: **5 req/min por IP** (ver más abajo).
+
+`latitude`/`longitude` se validan contra rango geográfico (`-90..90` / `-180..180`); fuera de rango → 400.
+
+**`severity` ya no es un input:** el backend la deriva de `emergencyType` (ver tabla abajo). Si el body manda `severity`, se **ignora** (se loguea a nivel debug, no rompe con 400, para no romper clientes viejos hasta que se actualicen).
 
 **Request:**
 ```json
@@ -320,7 +346,7 @@ Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`.
     "longitude": -58.3816
   },
   "description": "Necesito ayuda inmediata",
-  "severity": "critical"
+  "emergencyType": "INCENDIO"
 }
 ```
 
@@ -336,7 +362,8 @@ Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`.
     "latitude": -34.6037,
     "longitude": -58.3816,
     "description": "Necesito ayuda inmediata",
-    "severity": "critical",
+    "emergencyType": "INCENDIO",
+    "severity": "high",
     "status": "PENDING",
     "createdAt": "2026-08-25T10:00:00.000Z",
     "updatedAt": "2026-08-25T10:00:00.000Z"
@@ -344,9 +371,24 @@ Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`.
 }
 ```
 
+#### Severidad derivada por `emergencyType`
+
+Decisión de producto: "la severidad no la elige quien reporta". Tabla en `src/domain/severity.js` (`severityForType`):
+
+| `emergencyType` | `severity` |
+|------------------|------------|
+| `PANICO` | `critical` |
+| `MEDICA` | `high` |
+| `INCENDIO` | `high` |
+| `DISTURBIO_EVENTO_MASIVO` | `medium` |
+| `INFRAESTRUCTURA` | `medium` |
+| `OTRO` | `low` |
+
+Es la base sobre la que el Risk Engine (branch `feature/incident-detection-rule-based`) solo puede **subir** la prioridad, nunca bajarla.
+
 ### GET `/api/panic-button/:id`
 
-Obtiene detalles de un evento de pánico. Requiere JWT.
+Obtiene detalles de un evento de pánico. Requiere JWT. Delega en el mismo método que `GET /api/emergencies/:id`: una emergencia ajena responde **404** (no 403), para no revelar que el id existe.
 
 ### GET `/api/emergencies`
 
@@ -443,9 +485,13 @@ src/
 │   ├── location-crypto.js        # AES-256-GCM ubicación
 │   ├── location-retention.js     # Job de anonimización
 │   ├── secure-log.js             # Redacción de logs
-│   └── security-headers.js       # HTTPS/HSTS + headers
+│   ├── security-headers.js       # HTTPS/HSTS + headers
+│   ├── cors.js                   # CORS_ALLOWED_ORIGINS + defaults dev/prod
+│   └── rate-limit.js             # express-rate-limit (login, panic-button)
 ├── domain/
-│   └── emergency-status.js       # Máquina de estados (transiciones válidas)
+│   ├── emergency-status.js       # Máquina de estados (transiciones válidas)
+│   ├── emergency-type.js         # Catálogo cerrado de emergencyType
+│   └── severity.js               # severityForType: severidad derivada del tipo
 ├── controllers/
 │   ├── panic-button.controller.js
 │   ├── emergency.controller.js   # list/detail/validate/discard/assign/cancel
@@ -464,8 +510,10 @@ src/
 │   └── kafka.service.js
 ├── errors/
 │   └── app-errors.js
+├── utils/
+│   └── uuid.js                   # assertUuid: 400 antes de tocar Postgres
 ├── db/
-│   └── pool.js
+│   └── pool.js                   # max/idleTimeout/connectionTimeout configurables
 └── tests/
     ├── panic-button.test.js
     ├── officer.test.js
