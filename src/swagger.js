@@ -70,6 +70,7 @@ const options = {
               type: 'string',
               enum: ['low', 'medium', 'high', 'critical'],
               example: 'critical',
+              description: 'Derivada de emergencyType por el backend (severityForType), no la elige quien reporta.',
             },
             emergencyType: {
               type: 'string',
@@ -155,16 +156,13 @@ const options = {
           type: 'object',
           required: ['location'],
           properties: {
-            location: { $ref: '#/components/schemas/Location' },
+            location: {
+              allOf: [{ $ref: '#/components/schemas/Location' }],
+              description: 'latitude debe estar en [-90, 90] y longitude en [-180, 180]; fuera de rango → 400.',
+            },
             description: {
               type: 'string',
               example: 'Necesito ayuda inmediata',
-            },
-            severity: {
-              type: 'string',
-              enum: ['low', 'medium', 'high', 'critical'],
-              example: 'critical',
-              default: 'critical',
             },
             emergencyType: {
               type: 'string',
@@ -174,6 +172,13 @@ const options = {
               description: 'Tipo de emergencia. Si se omite, PANICO (botón SOS). '
                 + 'Se aceptan también los alias en inglés en minúscula por compatibilidad '
                 + '(panic, medical, fire, infrastructure, disturbance, other), que se normalizan al canónico.',
+            },
+            severity: {
+              type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
+              deprecated: true,
+              description: 'Ignorado. La severidad no la elige quien reporta: el backend la deriva '
+                + 'de emergencyType (ver Emergency.severity). Un valor acá se loguea a nivel debug y no rompe con 400.',
             },
           },
         },

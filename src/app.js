@@ -10,6 +10,7 @@ const { createOfficerRoutes } = require('./routes/officer.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
 const { secureLog } = require('./security/secure-log');
+const { resolveCorsOrigins } = require('./security/cors');
 
 /**
  * @param {object} kafkaService
@@ -29,9 +30,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   app.set('trust proxy', 1);
   app.use(createSecurityMiddleware());
   app.use(cors({
-    origin: process.env.CORS_ORIGIN
-      ? process.env.CORS_ORIGIN.split(',').map((value) => value.trim())
-      : true,
+    origin: resolveCorsOrigins(),
   }));
   app.use(express.json({ limit: '32kb' }));
 
@@ -87,19 +86,24 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
 
   app.use((err, req, res, next) => {
     const statusCode = err.statusCode || 500;
+
     if (statusCode >= 500) {
+      // El detalle (stack, mensaje crudo de Postgres, etc.) solo va al log,
+      // nunca a la respuesta: podría filtrar detalles internos al cliente.
       secureLog('error', err.name || 'InternalServerError', {
         message: err.message,
         path: req.path,
         method: req.method,
       });
-    } else {
-      secureLog('warn', `${err.name}: ${err.message}`, {
-        path: req.path,
-        method: req.method,
-        statusCode,
-      });
+      res.status(statusCode).json({ error: 'InternalServerError', message: 'Error interno' });
+      return;
     }
+
+    secureLog('warn', `${err.name}: ${err.message}`, {
+      path: req.path,
+      method: req.method,
+      statusCode,
+    });
     res.status(statusCode).json({ error: err.name || 'Internal Server Error', message: err.message });
   });
 

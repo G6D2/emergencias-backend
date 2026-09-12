@@ -1,15 +1,24 @@
 const { v4: uuidv4 } = require('uuid');
-const { NotFoundError, ValidationError, ForbiddenError } = require('../errors/app-errors');
-const { canViewEmergency } = require('../auth/authorize');
+const { ValidationError } = require('../errors/app-errors');
 const { secureLog } = require('../security/secure-log');
 const { buildEmergencyCreatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
-const { normalizeSeverity } = require('../domain/severity');
+const { severityForType } = require('../domain/severity');
+const { EmergencyController } = require('./emergency.controller');
+
+const MIN_LATITUDE = -90;
+const MAX_LATITUDE = 90;
+const MIN_LONGITUDE = -180;
+const MAX_LONGITUDE = 180;
 
 class PanicButtonController {
   constructor(kafkaService, emergencyRepository) {
     this.kafkaService = kafkaService;
     this.emergencyRepository = emergencyRepository;
+    // GET /api/panic-button/:id delega en el mismo método de detalle que usa
+    // GET /api/emergencies/:id: misma regla de acceso, mismo 404 unificado
+    // para una emergencia ajena (ver EmergencyController#getEmergencyDetail).
+    this.emergencyController = new EmergencyController(kafkaService, emergencyRepository);
   }
 
   /**
@@ -27,14 +36,27 @@ class PanicButtonController {
       throw new ValidationError('location.latitude and location.longitude must be numbers');
     }
 
+    if (latitude < MIN_LATITUDE || latitude > MAX_LATITUDE) {
+      throw new ValidationError(`location.latitude must be between ${MIN_LATITUDE} and ${MAX_LATITUDE}`);
+    }
+    if (longitude < MIN_LONGITUDE || longitude > MAX_LONGITUDE) {
+      throw new ValidationError(`location.longitude must be between ${MIN_LONGITUDE} and ${MAX_LONGITUDE}`);
+    }
+
     // Catálogo cerrado (tarea #44): un valor inválido corta con 400. Si el
     // cliente no manda tipo, es el botón SOS: PANICO.
     const emergencyType = assertEmergencyType(payload.emergencyType) || 'PANICO';
 
-    const severity = normalizeSeverity(payload.severity);
-    if (!severity) {
-      throw new ValidationError('severity must be one of: low, medium, high, critical');
+    // Decisión de producto: la severidad no la elige quien reporta. Se
+    // deriva del emergencyType (src/domain/severity.js); un `severity` en el
+    // body se ignora (no 400, para no romper al front hasta que se actualice).
+    if (payload.severity !== undefined) {
+      secureLog('debug', 'severity del body ignorada: se deriva del emergencyType', {
+        emergencyType,
+        suppliedSeverity: payload.severity,
+      });
     }
+    const severity = severityForType(emergencyType);
 
     const emergencyId = uuidv4();
 
@@ -64,16 +86,15 @@ class PanicButtonController {
     };
   }
 
+  /**
+   * Se mantiene por compatibilidad con clientes existentes (el detalle
+   * completo vive en GET /api/emergencies/:id). Reglas de acceso y el 404
+   * unificado (una emergencia ajena no revela su existencia) son las mismas
+   * que en el detalle: delega ahí y solo agrega la auditoría de acceso propia
+   * de este endpoint.
+   */
   async getPanicButtonEvent(emergencyId, user) {
-    const emergency = await this.emergencyRepository.findById(emergencyId);
-
-    if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${emergencyId} not found`);
-    }
-
-    if (!canViewEmergency(user, emergency)) {
-      throw new ForbiddenError('You cannot access this emergency');
-    }
+    const detail = await this.emergencyController.getEmergencyDetail(emergencyId, user);
 
     if (typeof this.emergencyRepository.recordAccess === 'function') {
       try {
@@ -92,10 +113,7 @@ class PanicButtonController {
       }
     }
 
-    return {
-      success: true,
-      data: emergency,
-    };
+    return detail;
   }
 }
 
