@@ -49,7 +49,7 @@ jobs:
           echo "✓ Descripción presente"
 
   lint-and-test:
-    name: Lint & Test
+    name: Lint, Build & Test
     runs-on: ubuntu-latest
 
     services:
