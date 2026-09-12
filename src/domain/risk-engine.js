@@ -2,12 +2,7 @@
 // Postgres ni Kafka. Calcula el score/prioridad de un incidente a partir de
 // features ya calculadas por quien lo llama (conteos, distancias, recencia).
 
-// TEMPORAL: escala duplicada de severity (ver V7__add_severity_enum_check.sql).
-// Reemplazar por domain/severity.js cuando el PR de nomenclatura (#45,
-// actualmente PR #17) se mergee. No renombrar sin coordinar: max() entre
-// priorityIndividual e incidentPriority depende de que ambas compartan
-// exactamente esta escala.
-const PRIORITY_LEVELS = Object.freeze(['low', 'medium', 'high', 'critical']);
+const { SEVERITY_LEVELS: PRIORITY_LEVELS } = require('./severity');
 
 // Umbrales y pesos de scoring: son un punto de partida razonable para
 // iterar con datos reales, NO están fijados por el issue #60 — calibrables.
