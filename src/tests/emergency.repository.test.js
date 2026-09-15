@@ -1,5 +1,6 @@
 const { EmergencyRepository, mapEmergency } = require('../repositories/emergency.repository');
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
+const { createLocationCrypto } = require('../security/location-crypto');
 
 const fakeCrypto = {
   encryptLocation: () => 'encrypted-blob',
@@ -62,6 +63,24 @@ describe('EmergencyRepository.create', () => {
 
     expect(created.id).toBe('e-1');
     expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it('pasa el address a encryptLocation junto con latitude/longitude', async () => {
+    const encryptLocation = jest.fn(() => 'encrypted-blob-con-address');
+    const crypto = { encryptLocation, decryptLocation: fakeCrypto.decryptLocation };
+    const pool = createPool({
+      query: async (sql, params) => {
+        expect(params[3]).toBe('encrypted-blob-con-address');
+        return { rows: [{ id: 'e-1', correlation_id: 'e-1' }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: crypto });
+
+    await repo.create({
+      id: 'e-1', userId: 'u-1', latitude: -34, longitude: -58, address: 'Av. Corrientes 1234', emergencyType: 'PANICO',
+    });
+
+    expect(encryptLocation).toHaveBeenCalledWith({ latitude: -34, longitude: -58, address: 'Av. Corrientes 1234' });
   });
 
   it('inserta con outbox en una transacción y hace COMMIT', async () => {
@@ -478,5 +497,88 @@ describe('EmergencyRepository.assignOfficer', () => {
     expect(result.emergency.assignedOfficer).toBe('Ana');
     expect(client.calls.some((c) => c.sql.includes('INSERT INTO outbox_events'))).toBe(true);
     expect(client.calls.some((c) => c.sql === 'COMMIT')).toBe(true);
+  });
+});
+
+// Round-trip con el cifrado real (no un stub): cubre que create() persiste
+// address dentro de location_encrypted y que mapEmergency la recupera igual
+// que lat/lng, sin columna nueva.
+describe('EmergencyRepository dirección legible persistida junto con la ubicación cifrada', () => {
+  const realCrypto = createLocationCrypto(Buffer.alloc(32, 5).toString('base64'));
+
+  function poolEchoingInsert() {
+    return createPool({
+      // Simula el INSERT ... RETURNING *: devuelve la fila con el
+      // location_encrypted real que armó encryptLocation.
+      query: async (sql, params) => ({ rows: [{ id: params[0], location_encrypted: params[3] }] }),
+    });
+  }
+
+  it('guarda y recupera la dirección junto a lat/lng cifrados', async () => {
+    const repo = new EmergencyRepository(poolEchoingInsert(), { locationCrypto: realCrypto });
+
+    const created = await repo.create({
+      id: 'e-addr-1',
+      userId: 'u-1',
+      latitude: -34.6037,
+      longitude: -58.3816,
+      address: 'Av. Corrientes 1234, CABA',
+      emergencyType: 'PANICO',
+    });
+
+    expect(created.address).toBe('Av. Corrientes 1234, CABA');
+    expect(created.latitude).toBeCloseTo(-34.6037);
+    expect(created.longitude).toBeCloseTo(-58.3816);
+  });
+
+  it('sin address, se persiste y se lee como null', async () => {
+    const repo = new EmergencyRepository(poolEchoingInsert(), { locationCrypto: realCrypto });
+
+    const created = await repo.create({
+      id: 'e-addr-2', userId: 'u-1', latitude: -34.6037, longitude: -58.3816, emergencyType: 'PANICO',
+    });
+
+    expect(created.address).toBeNull();
+  });
+
+  it('trunca a 200 caracteres una dirección más larga (comportamiento delegado, no revalidado acá)', () => {
+    // La validación/truncado de longitud vive en el controller (input del
+    // usuario); acá solo se confirma que el crypto no trunca por su cuenta:
+    // si al repository ya le llega truncada, la persiste y lee tal cual.
+    const truncated = 'A'.repeat(200);
+    const ciphertext = realCrypto.encryptLocation({ latitude: -1, longitude: -1, address: truncated });
+    const mapped = mapEmergency({ id: 'e-addr-3', location_encrypted: ciphertext, location_anonymized_at: null }, realCrypto);
+    expect(mapped.address).toHaveLength(200);
+    expect(mapped.address).toBe(truncated);
+  });
+
+  it('fila anonimizada no expone la dirección aunque el ciphertext la tenga', () => {
+    const ciphertext = realCrypto.encryptLocation({
+      latitude: -34.6, longitude: -58.4, address: 'Calle Falsa 123',
+    });
+
+    const mapped = mapEmergency(
+      { id: 'e-addr-4', location_encrypted: ciphertext, location_anonymized_at: '2024-01-01' },
+      realCrypto
+    );
+
+    expect(mapped.locationAnonymized).toBe(true);
+    expect(mapped.address).toBeNull();
+    expect(mapped.latitude).toBeNull();
+  });
+
+  it('fila indescifrable (otra clave) devuelve address null igual que lat/lng', () => {
+    const otherKeyCrypto = createLocationCrypto(Buffer.alloc(32, 9).toString('base64'));
+    const ciphertext = otherKeyCrypto.encryptLocation({
+      latitude: -34.6, longitude: -58.4, address: 'Calle Falsa 123',
+    });
+
+    const mapped = mapEmergency(
+      { id: 'e-addr-5', location_encrypted: ciphertext, location_anonymized_at: null },
+      realCrypto
+    );
+
+    expect(mapped.locationUnavailable).toBe(true);
+    expect(mapped.address).toBeNull();
   });
 });

@@ -10,6 +10,22 @@ const MIN_LATITUDE = -90;
 const MAX_LATITUDE = 90;
 const MIN_LONGITUDE = -180;
 const MAX_LONGITUDE = 180;
+const MAX_ADDRESS_LENGTH = 200;
+
+/**
+ * Sanitiza la dirección legible opcional del body: nunca lanza (un dato mal
+ * formado se ignora, no corta el reporte con 400). Reglas: debe ser string,
+ * se le quitan saltos de línea (reemplazados por espacio), se recorta a los
+ * extremos y se trunca a MAX_ADDRESS_LENGTH caracteres. Vacía o no-string → null.
+ */
+function normalizeAddress(rawAddress) {
+  if (typeof rawAddress !== 'string') return null;
+
+  const withoutLineBreaks = rawAddress.replace(/[\r\n]+/g, ' ');
+  const trimmed = withoutLineBreaks.trim();
+
+  return trimmed ? trimmed.slice(0, MAX_ADDRESS_LENGTH) : null;
+}
 
 class PanicButtonController {
   constructor(kafkaService, emergencyRepository) {
@@ -59,6 +75,9 @@ class PanicButtonController {
     const severity = severityForType(emergencyType);
 
     const emergencyId = uuidv4();
+    // Dirección legible opcional (para que el dispatcher no dependa de
+    // geocodificación inversa en vivo): nunca rompe el alta, se sanea o se ignora.
+    const address = normalizeAddress(payload.address);
 
     const emergency = await this.emergencyRepository.create({
       id: emergencyId,
@@ -68,6 +87,7 @@ class PanicButtonController {
       userId: user.sub,
       latitude,
       longitude,
+      address,
       description: payload.description || 'Botón de pánico activado',
       severity,
       emergencyType,
