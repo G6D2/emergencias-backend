@@ -101,6 +101,36 @@ describe('location-crypto', () => {
     expect(() => createLocationCrypto({ keys: { v1: TEST_KEY }, activeKeyId: 'v9' }))
       .toThrow(/not in the keyring/);
   });
+
+  // address viaja en el mismo plaintext JSON que lat/lng (sin migración ni
+  // columna nueva): estos tests cubren el round-trip y la compatibilidad con
+  // filas escritas antes de este cambio.
+  it('round-trips an optional address alongside latitude/longitude', () => {
+    const ciphertext = cryptoApi.encryptLocation({
+      latitude: -34.6037,
+      longitude: -58.3816,
+      address: 'Av. Corrientes 1234, CABA',
+    });
+
+    expect(ciphertext).not.toContain('Corrientes');
+
+    const plain = cryptoApi.decryptLocation(ciphertext);
+    expect(plain.address).toBe('Av. Corrientes 1234, CABA');
+  });
+
+  it('devuelve address null cuando no se proveyó al cifrar', () => {
+    const ciphertext = cryptoApi.encryptLocation({ latitude: -34.6, longitude: -58.4 });
+    const plain = cryptoApi.decryptLocation(ciphertext);
+    expect(plain.address).toBeNull();
+  });
+
+  it('sigue leyendo como address null las filas cifradas antes de este cambio', () => {
+    // Ciphertext legacy (sin cabecera de versión, plaintext solo con lat/lng):
+    // decryptLocation no debe romper por la ausencia del campo address.
+    const legacy = encryptLegacy(TEST_KEY, { latitude: -34.6037, longitude: -58.3816 });
+    const plain = cryptoApi.decryptLocation(legacy);
+    expect(plain.address).toBeNull();
+  });
 });
 
 describe('secure-log', () => {

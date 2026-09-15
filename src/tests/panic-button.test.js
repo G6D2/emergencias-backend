@@ -257,6 +257,113 @@ describe('Panic Button API', () => {
       expect(response.body.data.emergencyType).toBe('PANICO');
     });
 
+    // Tarea: persistir la dirección legible junto con la ubicación cifrada,
+    // para que el dispatcher no dependa de geocodificación inversa en vivo.
+    it('guarda la dirección legible cuando viene en el body', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          address: 'Av. Corrientes 1234, CABA',
+        })
+        .expect(201);
+
+      expect(response.body.data.address).toBe('Av. Corrientes 1234, CABA');
+    });
+
+    it('sin address en el body, la emergencia queda con address null', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+        .expect(201);
+
+      expect(response.body.data.address).toBeNull();
+    });
+
+    it('recorta los espacios de los extremos de la dirección', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          address: '   Av. Corrientes 1234   ',
+        })
+        .expect(201);
+
+      expect(response.body.data.address).toBe('Av. Corrientes 1234');
+    });
+
+    it('trunca una dirección de más de 200 caracteres en vez de rechazarla', async () => {
+      const longAddress = `${'A'.repeat(210)}`;
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          address: longAddress,
+        })
+        .expect(201);
+
+      expect(response.body.data.address).toHaveLength(200);
+      expect(response.body.data.address).toBe(longAddress.slice(0, 200));
+    });
+
+    it('quita saltos de línea de la dirección en vez de rechazarla', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          address: 'Calle 123\nPiso 4\r\nDepto B',
+        })
+        .expect(201);
+
+      expect(response.body.data.address).not.toMatch(/[\r\n]/);
+      expect(response.body.data.address).toBe('Calle 123 Piso 4 Depto B');
+    });
+
+    it.each([
+      [12345],
+      [true],
+      [{ street: 'Corrientes' }],
+      [['Corrientes 1234']],
+      [null],
+      ['   '],
+      [''],
+    ])('ignora silenciosamente un address inválido (%p) y no responde 400', async (invalidAddress) => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          address: invalidAddress,
+        })
+        .expect(201);
+
+      expect(response.body.data.address).toBeNull();
+    });
+
+    it('el evento EmergenciaCreada no incluye la dirección en claro', async () => {
+      const outboxEvents = [];
+      const repo = createMockEmergencyRepository();
+      const originalCreate = repo.create;
+      repo.create = async (emergency) => {
+        outboxEvents.push(emergency.outboxEvent);
+        return originalCreate(emergency);
+      };
+      const eventApp = createTestApp(undefined, repo);
+
+      const response = await request(eventApp)
+        .post('/api/panic-button')
+        .send({
+          location: { latitude: -34.6037, longitude: -58.3816 },
+          address: 'Av. Corrientes 1234, CABA',
+        })
+        .expect(201);
+
+      const saved = await repo.findById(response.body.emergencyId);
+      const event = outboxEvents[0].payload(saved, 'event-address-1');
+      expect(event.data.address).toBeUndefined();
+      expect(event.data.latitude).toBeUndefined();
+      expect(event.data.longitude).toBeUndefined();
+    });
+
     it('rechaza con 400 un emergencyType fuera del catálogo y no crea nada', async () => {
       const repo = createMockEmergencyRepository();
       const isolatedApp = createTestApp(undefined, repo);
@@ -958,10 +1065,10 @@ describe('GET /api/emergencies/:id (detalle, tarea #32)', () => {
   const otherCitizen = { sub: 'U000099', groups: ['citizen'] };
   const dispatcher = { sub: 'D000007', groups: ['dispatcher'] };
 
-  async function createEmergencyAs(user, repository) {
+  async function createEmergencyAs(user, repository, extra = {}) {
     const response = await request(createTestApp(user, repository))
       .post('/api/panic-button')
-      .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'fire' })
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'fire', ...extra })
       .expect(201);
     return response.body.emergencyId;
   }
@@ -1040,6 +1147,28 @@ describe('GET /api/emergencies/:id (detalle, tarea #32)', () => {
     expect(response.body.data.statusHistory).toEqual([]);
     expect(response.body.data.observations).toEqual([]);
     expect(response.body.data.reinforcementRequests).toEqual([]);
+  });
+
+  it('el detalle incluye la dirección legible cuando se proveyó al crear', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository, { address: 'Av. Corrientes 1234' });
+
+    const response = await request(createTestApp(citizen, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(200);
+
+    expect(response.body.data.address).toBe('Av. Corrientes 1234');
+  });
+
+  it('el detalle tiene address null cuando no se proveyó al crear', async () => {
+    const repository = createMockEmergencyRepository();
+    const emergencyId = await createEmergencyAs(citizen, repository);
+
+    const response = await request(createTestApp(citizen, repository))
+      .get(`/api/emergencies/${emergencyId}`)
+      .expect(200);
+
+    expect(response.body.data.address).toBeNull();
   });
 
   it('un citizen recibe 404 (no 403) al pedir una emergencia ajena, para no revelar su existencia', async () => {
@@ -1178,6 +1307,24 @@ describe('GET /api/emergencies', () => {
       .expect(200);
 
     expect(Array.isArray(response.body.data)).toBe(true);
+  });
+
+  it('el listado del citizen incluye la dirección legible de sus propias emergencias', async () => {
+    const sharedRepo = createMockEmergencyRepository();
+    const citizenApp = createTestApp({ sub: 'U000042', groups: ['citizen'] }, sharedRepo);
+
+    await request(citizenApp)
+      .post('/api/panic-button')
+      .send({
+        location: { latitude: -34.6037, longitude: -58.3816 },
+        address: 'Av. Corrientes 1234',
+      })
+      .expect(201);
+
+    const response = await request(citizenApp).get('/api/emergencies').expect(200);
+
+    expect(response.body.data).toHaveLength(1);
+    expect(response.body.data[0].address).toBe('Av. Corrientes 1234');
   });
 
   it('filtra por emergencyType pasando el alias del front normalizado al repository', async () => {

@@ -60,6 +60,14 @@ const options = {
             userId: { type: 'string', example: 'U000042', description: 'Claim sub del JWT' },
             latitude: { type: 'number', nullable: true, example: -34.6037 },
             longitude: { type: 'number', nullable: true, example: -58.3816 },
+            address: {
+              type: 'string',
+              nullable: true,
+              example: 'Av. Corrientes 1234, CABA',
+              description: 'Dirección legible provista al reportar (opcional). null si no se '
+                + 'proveyó, o cuando la ubicación está anonimizada o no pudo descifrarse '
+                + '(mismo criterio que latitude/longitude).',
+            },
             locationAnonymized: {
               type: 'boolean',
               example: false,
@@ -159,6 +167,15 @@ const options = {
             location: {
               allOf: [{ $ref: '#/components/schemas/Location' }],
               description: 'latitude debe estar en [-90, 90] y longitude en [-180, 180]; fuera de rango → 400.',
+            },
+            address: {
+              type: 'string',
+              maxLength: 200,
+              example: 'Av. Corrientes 1234, CABA',
+              description: 'Dirección legible opcional correspondiente a location, para que el '
+                + 'dispatcher no dependa de geocodificación inversa en vivo. Se recorta a los '
+                + 'extremos, se le quitan saltos de línea y se trunca a 200 caracteres. Si no '
+                + 'viene, viene vacía, o no es un string, se ignora silenciosamente (nunca 400).',
             },
             description: {
               type: 'string',

@@ -226,6 +226,11 @@ function decodeLegacyPayload(payload) {
  * Formato: base64("ELC" || version || keyIdLen || keyId || iv || authTag || ct)
  * Las filas escritas antes del versionado (base64(iv || authTag || ct)) se
  * siguen leyendo probando las keys del keyring.
+ *
+ * El plaintext cifrado es JSON: { latitude, longitude } y, si se proveyó,
+ * `address` (dirección legible). No hay columna ni migración nueva para
+ * address: viaja dentro del mismo ciphertext para heredar retención de 72h,
+ * anonimización y saneo de filas indescifrables sin tocar el schema.
  */
 function createLocationCrypto(config) {
   const { keys, activeKeyId } = resolveKeyring(config);
@@ -240,10 +245,13 @@ function createLocationCrypto(config) {
     return {
       latitude: Number(parsed.latitude),
       longitude: Number(parsed.longitude),
+      // Campo opcional agregado al mismo plaintext cifrado (sin migración):
+      // ausente en filas escritas antes de esto, o si no vino en el request.
+      address: typeof parsed.address === 'string' ? parsed.address : null,
     };
   }
 
-  function encryptLocation({ latitude, longitude }) {
+  function encryptLocation({ latitude, longitude, address }) {
     if (typeof latitude !== 'number' || typeof longitude !== 'number'
       || Number.isNaN(latitude) || Number.isNaN(longitude)) {
       throw new Error('latitude and longitude must be numbers');
@@ -253,7 +261,12 @@ function createLocationCrypto(config) {
     const cipher = crypto.createCipheriv(ALGORITHM, activeKey, iv, {
       authTagLength: AUTH_TAG_LENGTH,
     });
-    const plaintext = Buffer.from(JSON.stringify({ latitude, longitude }), 'utf8');
+    // address es opcional: solo se agrega al JSON cifrado si vino un string
+    // no vacío, para no ensuciar el plaintext de las emergencias sin dirección.
+    const payload = typeof address === 'string' && address.length > 0
+      ? { latitude, longitude, address }
+      : { latitude, longitude };
+    const plaintext = Buffer.from(JSON.stringify(payload), 'utf8');
     const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
 
     return encodePayload({
