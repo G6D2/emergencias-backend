@@ -55,28 +55,6 @@ class IncidentRepository {
     return this.emergencyRepository.setIncidentId(emergencyId, incidentId);
   }
 
-  async updateScoring(incidentId, { priority, score, reasonCodes, factors, algorithmVersion }) {
-    const result = await this.pool.query(
-      `UPDATE incidents
-       SET priority = $1, score = $2, reason_codes = $3::jsonb, factors = $4::jsonb,
-           algorithm_version = $5, updated_at = now()
-       WHERE id = $6
-       RETURNING *`,
-      [
-        priority || null,
-        score != null ? score : null,
-        JSON.stringify(reasonCodes != null ? reasonCodes : null),
-        JSON.stringify(factors != null ? factors : null),
-        algorithmVersion || null,
-        incidentId,
-      ]
-    );
-    if (result.rows.length === 0) {
-      throw new NotFoundError(`Incident with ID ${incidentId} not found`);
-    }
-    return mapIncident(result.rows[0]);
-  }
-
   /**
    * Persiste la decisión de scoring del rule-based grouper (tarea #60, parte
    * 2/2) y notifica EmergenciaPriorizada por cada miembro, pero solo si la

@@ -56,38 +56,46 @@ function startIncidentDetectionJob(emergencyRepository, incidentRepository, opti
     });
   }
 
+  let running = false;
+
   async function runOnce() {
+    if (running) return;
+    running = true;
     try {
-      const since = new Date(Date.now() - windowMinutes * 60000);
+      try {
+        const since = new Date(Date.now() - windowMinutes * 60000);
 
-      // PANICO entra al loop sin excepcion: a diferencia de un tipo de uso
-      // general/anonimo, el boton de panico lo activa gente puntual que ya
-      // lo solicito, asi que varias activaciones agrupadas en el tiempo y el
-      // espacio son una senal MAS fuerte de incidente real, no ruido a
-      // filtrar.
-      for (const emergencyType of EMERGENCY_TYPES) {
-        const candidates = await emergencyRepository.findRecentByType({ emergencyType, since });
-        const decisions = processEmergencyTypeCandidates(candidates, {
-          radiusMeters,
-          minUniqueCitizens,
-          emergencyType,
-        });
+        // PANICO entra al loop sin excepcion: a diferencia de un tipo de uso
+        // general/anonimo, el boton de panico lo activa gente puntual que ya
+        // lo solicito, asi que varias activaciones agrupadas en el tiempo y el
+        // espacio son una senal MAS fuerte de incidente real, no ruido a
+        // filtrar.
+        for (const emergencyType of EMERGENCY_TYPES) {
+          const candidates = await emergencyRepository.findRecentByType({ emergencyType, since });
+          const decisions = processEmergencyTypeCandidates(candidates, {
+            radiusMeters,
+            minUniqueCitizens,
+            emergencyType,
+          });
 
-        for (const decision of decisions) {
-          if (decision.skippedReason) {
-            secureLog('warn', 'Incident detection skipped a group', {
-              emergencyType,
-              skippedReason: decision.skippedReason,
-              conflictingIncidentIds: decision.conflictingIncidentIds,
-            });
-            continue;
+          for (const decision of decisions) {
+            if (decision.skippedReason) {
+              secureLog('warn', 'Incident detection skipped a group', {
+                emergencyType,
+                skippedReason: decision.skippedReason,
+                conflictingIncidentIds: decision.conflictingIncidentIds,
+              });
+              continue;
+            }
+
+            await processDecision(decision);
           }
-
-          await processDecision(decision);
         }
+      } catch (error) {
+        secureLog('error', 'Incident detection job failed', { message: error.message });
       }
-    } catch (error) {
-      secureLog('error', 'Incident detection job failed', { message: error.message });
+    } finally {
+      running = false;
     }
   }
 

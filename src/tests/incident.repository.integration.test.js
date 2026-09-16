@@ -103,48 +103,6 @@ describe('IncidentRepository (integración contra Postgres real)', () => {
     expect(active.some((row) => row.id === closedIncident.id)).toBe(false);
   });
 
-  describe('updateScoring', () => {
-    it('actualiza priority/score/reasonCodes/factors/algorithmVersion y son recuperables despues', async () => {
-      const incident = await incidentRepository.create({ emergencyType: 'INCENDIO' });
-
-      const updated = await incidentRepository.updateScoring(incident.id, {
-        priority: 'alta',
-        score: 0.93,
-        reasonCodes: ['multiple-callers', 'high-density'],
-        factors: { proximityScore: 0.8, timeWindowMinutes: 15 },
-        algorithmVersion: 'rule-based-v1',
-      });
-
-      expect(updated.priority).toBe('alta');
-      expect(Number(updated.score)).toBeCloseTo(0.93);
-      expect(updated.reasonCodes).toEqual(['multiple-callers', 'high-density']);
-      expect(updated.factors).toEqual({ proximityScore: 0.8, timeWindowMinutes: 15 });
-      expect(updated.algorithmVersion).toBe('rule-based-v1');
-
-      const raw = await getPool().query(
-        'SELECT priority, score, reason_codes, factors, algorithm_version FROM incidents WHERE id = $1',
-        [incident.id]
-      );
-      expect(raw.rows[0].priority).toBe('alta');
-      expect(Number(raw.rows[0].score)).toBeCloseTo(0.93);
-      expect(raw.rows[0].reason_codes).toEqual(['multiple-callers', 'high-density']);
-      expect(raw.rows[0].factors).toEqual({ proximityScore: 0.8, timeWindowMinutes: 15 });
-      expect(raw.rows[0].algorithm_version).toBe('rule-based-v1');
-    });
-
-    it('lanza NotFoundError si el incidentId no existe', async () => {
-      const missingId = randomUUID();
-
-      await expect(incidentRepository.updateScoring(missingId, {
-        priority: 'alta',
-        score: 0.5,
-        reasonCodes: [],
-        factors: {},
-        algorithmVersion: 'rule-based-v1',
-      })).rejects.toMatchObject({ name: 'NotFoundError', statusCode: 404 });
-    });
-  });
-
   describe('applyScoringDecision', () => {
     async function buildLinkedPair(incidentId) {
       const first = buildEmergency();

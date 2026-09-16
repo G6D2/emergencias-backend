@@ -101,5 +101,9 @@ describe('risk-engine', () => {
     it('lanza una excepción si priorityIndividual no está en PRIORITY_LEVELS (p. ej. la escala vieja en español del comentario TEMPORAL)', () => {
       expect(() => applyPriorityInvariant('BAJA', 'critical')).toThrow();
     });
+
+    it('lanza una excepción si incidentPriority no está en PRIORITY_LEVELS, con priorityIndividual válido', () => {
+      expect(() => applyPriorityInvariant('high', 'BOGUS')).toThrow();
+    });
   });
 });
