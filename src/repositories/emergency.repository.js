@@ -13,6 +13,10 @@ function mapEmergency(row, locationCrypto) {
 
   let latitude = null;
   let longitude = null;
+  // Dirección legible (opcional): viaja dentro del mismo plaintext cifrado
+  // que lat/lng (ver security/location-crypto.js), así hereda retención de
+  // 72h, anonimización y saneo de filas indescifrables sin columna nueva.
+  let address = null;
   let locationUnavailable = false;
   const locationAnonymized = Boolean(row.location_anonymized_at);
 
@@ -21,6 +25,7 @@ function mapEmergency(row, locationCrypto) {
       const location = locationCrypto.decryptLocation(row.location_encrypted);
       latitude = location.latitude;
       longitude = location.longitude;
+      address = location.address ?? null;
     } catch (error) {
       // Una fila cifrada con otra clave (p. ej. insertada desde un entorno
       // local contra la base compartida) no puede tumbar todo el listado:
@@ -43,6 +48,7 @@ function mapEmergency(row, locationCrypto) {
     userId: row.user_id,
     latitude,
     longitude,
+    address,
     locationAnonymized,
     locationUnavailable,
     description: row.description,
@@ -100,10 +106,10 @@ class EmergencyRepository {
   }
 
   async create({
-    id, correlationId, userId, latitude, longitude, description, severity, emergencyType, status,
+    id, correlationId, userId, latitude, longitude, address, description, severity, emergencyType, status,
     outboxEvent = null,
   }) {
-    const locationEncrypted = this.locationCrypto.encryptLocation({ latitude, longitude });
+    const locationEncrypted = this.locationCrypto.encryptLocation({ latitude, longitude, address });
     const insertValues = [
       id,
       correlationId || id,
