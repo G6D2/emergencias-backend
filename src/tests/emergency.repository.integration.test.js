@@ -1,6 +1,7 @@
 const { randomUUID } = require('crypto');
 const { getPool, closePool } = require('../db/pool');
 const { EmergencyRepository } = require('../repositories/emergency.repository');
+const { IncidentRepository } = require('../repositories/incident.repository');
 
 describe('EmergencyRepository (integración contra Postgres real)', () => {
   let repository;
@@ -135,6 +136,96 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     await expect(repository.findPage({
       statuses: [], emergencyType: 'flood', page: 1, limit: 10, sortBy: 'createdAt', order: 'desc',
     })).rejects.toMatchObject({ name: 'ValidationError' });
+  });
+
+  describe('incident embebido y effectivePriority (visibilidad del motor de incidentes, apilado sobre #36)', () => {
+    let incidentRepository;
+
+    beforeAll(() => {
+      incidentRepository = new IncidentRepository(getPool(), repository);
+    });
+
+    it('findPage: una emergencia sin incidente tiene incident null y effectivePriority = su propia severity', async () => {
+      const input = buildEmergency({ severity: 'medium' });
+      await repository.create(input);
+
+      const { emergencies } = await repository.findPage({
+        statuses: [], page: 1, limit: 200, sortBy: 'createdAt', order: 'desc',
+      });
+
+      const found = emergencies.find((e) => e.id === input.id);
+      expect(found.incident).toBeNull();
+      expect(found.effectivePriority).toBe('medium');
+    });
+
+    it('findPage y findDetailById: con incidente vinculado, incident trae reportCount/uniqueCitizens y effectivePriority nunca baja de la severity individual', async () => {
+      const incident = await incidentRepository.create({ emergencyType: 'INCENDIO' });
+      const memberA = buildEmergency({ severity: 'low', userId: 'user-A', emergencyType: 'INCENDIO' });
+      const memberB = buildEmergency({ severity: 'low', userId: 'user-B', emergencyType: 'INCENDIO' });
+      await repository.create(memberA);
+      await repository.create(memberB);
+      await repository.setIncidentId(memberA.id, incident.id);
+      await repository.setIncidentId(memberB.id, incident.id);
+
+      await incidentRepository.applyScoringDecision(incident.id, {
+        priority: 'critical',
+        score: 91,
+        reasonCodes: ['MULTI_REPORT_THRESHOLD', 'UNIQUE_CITIZENS_THRESHOLD'],
+        factors: { reportCount: 2 },
+        algorithmVersion: 'rule-based-v1',
+        members: [
+          { emergencyId: memberA.id, correlationId: memberA.id, priorityIndividual: 'low', finalPriority: 'critical' },
+          { emergencyId: memberB.id, correlationId: memberB.id, priorityIndividual: 'low', finalPriority: 'critical' },
+        ],
+      });
+
+      const { emergencies } = await repository.findPage({
+        statuses: [], page: 1, limit: 200, sortBy: 'createdAt', order: 'desc',
+      });
+      const foundA = emergencies.find((e) => e.id === memberA.id);
+
+      expect(foundA.incident).toMatchObject({
+        id: incident.id,
+        priority: 'critical',
+        score: 91,
+        reportCount: 2,
+        uniqueCitizens: 2,
+        reasonCodes: ['MULTI_REPORT_THRESHOLD', 'UNIQUE_CITIZENS_THRESHOLD'],
+      });
+      // severity individual 'low' + incident 'critical' -> la efectiva es 'critical' (nunca baja)
+      expect(foundA.effectivePriority).toBe('critical');
+
+      const detail = await repository.findDetailById(memberA.id);
+      expect(detail.incident.id).toBe(incident.id);
+      expect(detail.effectivePriority).toBe('critical');
+    });
+
+    it('sortBy=priority ordena por la prioridad EFECTIVA: una emergencia low agrupada en un incidente critical queda antes que una high sin incidente', async () => {
+      const incident = await incidentRepository.create({ emergencyType: 'DISTURBIO_EVENTO_MASIVO' });
+      const grouped = buildEmergency({ severity: 'low', emergencyType: 'DISTURBIO_EVENTO_MASIVO' });
+      const lonelyHigh = buildEmergency({ severity: 'high', emergencyType: 'DISTURBIO_EVENTO_MASIVO' });
+      await repository.create(grouped);
+      await repository.create(lonelyHigh);
+      await repository.setIncidentId(grouped.id, incident.id);
+      await incidentRepository.applyScoringDecision(incident.id, {
+        priority: 'critical',
+        score: 95,
+        reasonCodes: [],
+        factors: {},
+        algorithmVersion: 'rule-based-v1',
+        members: [{ emergencyId: grouped.id, correlationId: grouped.id, priorityIndividual: 'low', finalPriority: 'critical' }],
+      });
+
+      const { emergencies } = await repository.findPage({
+        statuses: [], emergencyType: 'DISTURBIO_EVENTO_MASIVO', page: 1, limit: 200, sortBy: 'priority', order: 'desc',
+      });
+
+      const groupedIndex = emergencies.findIndex((e) => e.id === grouped.id);
+      const lonelyIndex = emergencies.findIndex((e) => e.id === lonelyHigh.id);
+      expect(groupedIndex).toBeGreaterThanOrEqual(0);
+      expect(lonelyIndex).toBeGreaterThanOrEqual(0);
+      expect(groupedIndex).toBeLessThan(lonelyIndex);
+    });
   });
 
   it('crea la emergencia y su evento outbox en la misma transacción', async () => {

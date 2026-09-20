@@ -24,6 +24,11 @@ class EmergencyController {
     // usa el sub del token. Dispatcher (y futuros roles operativos) ven todo.
     const restrictToOwn = Boolean(user) && !userHasGroup(user, GROUPS.DISPATCHER);
     const userId = restrictToOwn ? user.sub : undefined;
+    // incident/effectivePriority son información operativa (a qué incidente
+    // fue agrupada la emergencia, con qué prioridad): un citizen NO la ve en
+    // su listado, aunque sean sus propias emergencias. El repository las
+    // calcula igual para todos (un solo JOIN), se recortan acá.
+    const isDispatcher = userHasGroup(user, GROUPS.DISPATCHER);
     if (query.severity && !isValidSeverity(query.severity)) {
       throw new ValidationError('severity must be one of: low, medium, high, critical');
     }
@@ -51,8 +56,13 @@ class EmergencyController {
       order,
     });
 
+    const data = isDispatcher
+      ? emergencies
+      // eslint-disable-next-line no-unused-vars
+      : emergencies.map(({ incident, effectivePriority, ...rest }) => rest);
+
     return {
-      data: emergencies,
+      data,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }
