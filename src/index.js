@@ -34,7 +34,7 @@ async function start() {
   outboxPublisher.start();
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
-  const incidentDetectionJob = startIncidentDetectionJob(emergencyRepository, incidentRepository);
+  const incidentDetectionJob = startIncidentDetectionJob(emergencyRepository, incidentRepository, { pool });
   // Mantiene despiertos backend y frontend en horario de clase (Render free).
   const keepWarmJob = startKeepWarmJob();
 

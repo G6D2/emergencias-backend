@@ -1,4 +1,4 @@
-const { startIncidentDetectionJob } = require('../services/incident-detection-job');
+const { startIncidentDetectionJob, withDetectionLock, DETECTION_LOCK_KEY } = require('../services/incident-detection-job');
 
 const BASE_LATITUDE = -34.6037;
 const BASE_LONGITUDE = -58.3816;
@@ -151,5 +151,96 @@ describe('incident-detection-job', () => {
     // reentrada libero `running` en el finally tras el error).
     await expect(job.runOnce()).resolves.toBeUndefined();
     expect(emergencyRepository.findRecentByType.mock.calls.length).toBeGreaterThan(callsAfterFirstRun);
+  });
+
+  describe('withDetectionLock (lock entre instancias, pg_try_advisory_lock)', () => {
+    function createLockClient(locked) {
+      return {
+        query: jest.fn(async (sql) => {
+          if (/pg_try_advisory_lock/.test(sql)) return { rows: [{ locked }] };
+          if (/pg_advisory_unlock/.test(sql)) return { rows: [{}] };
+          throw new Error(`query inesperada: ${sql}`);
+        }),
+        release: jest.fn(),
+      };
+    }
+
+    it('sin pool, corre fn() directo (compatibilidad con callers que no pasan pool)', async () => {
+      const fn = jest.fn().mockResolvedValue('resultado');
+
+      const result = await withDetectionLock(null, fn);
+
+      expect(result).toBe('resultado');
+      expect(fn).toHaveBeenCalledTimes(1);
+    });
+
+    it('lock libre: toma el advisory lock, corre fn() y lo libera en el finally', async () => {
+      const client = createLockClient(true);
+      const pool = { connect: jest.fn(async () => client) };
+      const fn = jest.fn().mockResolvedValue('ok');
+
+      const result = await withDetectionLock(pool, fn);
+
+      expect(result).toBe('ok');
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(client.query).toHaveBeenCalledWith('SELECT pg_try_advisory_lock($1) AS locked', [DETECTION_LOCK_KEY]);
+      expect(client.query).toHaveBeenCalledWith('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('lock ocupado: no corre fn(), no intenta liberar el lock, y libera igual la conexión dedicada', async () => {
+      const client = createLockClient(false);
+      const pool = { connect: jest.fn(async () => client) };
+      const fn = jest.fn();
+
+      const result = await withDetectionLock(pool, fn);
+
+      expect(result).toBeUndefined();
+      expect(fn).not.toHaveBeenCalled();
+      expect(client.query).toHaveBeenCalledWith('SELECT pg_try_advisory_lock($1) AS locked', [DETECTION_LOCK_KEY]);
+      expect(client.query).not.toHaveBeenCalledWith('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('libera el lock y la conexión aunque fn() lance', async () => {
+      const client = createLockClient(true);
+      const pool = { connect: jest.fn(async () => client) };
+      const fn = jest.fn().mockRejectedValue(new Error('boom'));
+
+      await expect(withDetectionLock(pool, fn)).rejects.toThrow('boom');
+
+      expect(client.query).toHaveBeenCalledWith('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('runOnce() con lock ocupado no llama a findRecentByType ni a ningun metodo de los repositories', async () => {
+      const { emergencyRepository, incidentRepository } = buildRepos();
+      const client = createLockClient(false);
+      const pool = { connect: jest.fn(async () => client) };
+
+      const job = startIncidentDetectionJob(emergencyRepository, incidentRepository, { env: {}, pool });
+      job.stop();
+
+      await job.runOnce();
+
+      expect(emergencyRepository.findRecentByType).not.toHaveBeenCalled();
+      expect(incidentRepository.create).not.toHaveBeenCalled();
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('runOnce() con lock libre corre normalmente y libera el lock al terminar', async () => {
+      const { emergencyRepository, incidentRepository } = buildRepos();
+      const client = createLockClient(true);
+      const pool = { connect: jest.fn(async () => client) };
+
+      const job = startIncidentDetectionJob(emergencyRepository, incidentRepository, { env: {}, pool });
+      job.stop();
+
+      await job.runOnce();
+
+      expect(emergencyRepository.findRecentByType).toHaveBeenCalled();
+      expect(client.query).toHaveBeenCalledWith('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
   });
 });
