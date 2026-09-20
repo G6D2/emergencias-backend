@@ -81,14 +81,77 @@ describe('IncidentRepository', () => {
     expect(pool.queries[0].params).toEqual(['PANICO', 'high', 0.5, JSON.stringify(['x']), 'v2']);
   });
 
-  it('findActive devuelve incidentes activos mapeados', async () => {
-    const pool = createPool([{ id: 'i-4', emergency_type: 'PANICO' }]);
-    const repo = new IncidentRepository(pool);
+  describe('findActivePage', () => {
+    it('devuelve incidentes activos paginados con la cantidad de emergencias de cada uno', async () => {
+      const calls = [];
+      const pool = {
+        query: async (sql, params) => {
+          calls.push({ sql, params });
+          if (sql.includes('COUNT(*)::int AS total')) return { rows: [{ total: 1 }] };
+          return { rows: [{ id: 'i-4', emergency_type: 'PANICO', priority: 'high', emergency_count: 3 }] };
+        },
+      };
+      const repo = new IncidentRepository(pool);
 
-    const incidents = await repo.findActive();
+      const { incidents, total } = await repo.findActivePage({ page: 2, limit: 5 });
 
-    expect(incidents).toHaveLength(1);
-    expect(incidents[0].id).toBe('i-4');
+      expect(total).toBe(1);
+      expect(incidents).toHaveLength(1);
+      expect(incidents[0]).toMatchObject({ id: 'i-4', priority: 'high', emergencyCount: 3 });
+      expect(calls[1].sql).toMatch(/LIMIT \$1 OFFSET \$2/);
+      expect(calls[1].params).toEqual([5, 5]);
+    });
+
+    it('usa page=1 y limit=20 por defecto', async () => {
+      const calls = [];
+      const pool = {
+        query: async (sql, params) => {
+          calls.push({ sql, params });
+          return sql.includes('COUNT(*)::int AS total') ? { rows: [{ total: 0 }] } : { rows: [] };
+        },
+      };
+      const repo = new IncidentRepository(pool);
+
+      await repo.findActivePage();
+
+      expect(calls[1].params).toEqual([20, 0]);
+    });
+  });
+
+  describe('findByIdWithMembers', () => {
+    it('devuelve null si el incidente no existe', async () => {
+      const pool = { query: async () => ({ rows: [] }) };
+      const repo = new IncidentRepository(pool);
+
+      expect(await repo.findByIdWithMembers('missing')).toBeNull();
+    });
+
+    it('devuelve el incidente con sus emergencias miembro (sin coordenadas)', async () => {
+      let call = 0;
+      const pool = {
+        query: async () => {
+          call += 1;
+          if (call === 1) return { rows: [{ id: 'inc-1', emergency_type: 'INCENDIO', priority: 'high' }] };
+          return {
+            rows: [
+              { id: 'e1', status: 'VALIDATED', emergency_type: 'INCENDIO', created_at: 'c1' },
+              { id: 'e2', status: 'DISPATCHED', emergency_type: 'INCENDIO', created_at: 'c2' },
+            ],
+          };
+        },
+      };
+      const repo = new IncidentRepository(pool);
+
+      const detail = await repo.findByIdWithMembers('inc-1');
+
+      expect(detail.id).toBe('inc-1');
+      expect(detail.priority).toBe('high');
+      expect(detail.members).toEqual([
+        { id: 'e1', status: 'VALIDATED', emergencyType: 'INCENDIO', createdAt: 'c1' },
+        { id: 'e2', status: 'DISPATCHED', emergencyType: 'INCENDIO', createdAt: 'c2' },
+      ]);
+      expect(detail.members.every((m) => !('latitude' in m) && !('longitude' in m))).toBe(true);
+    });
   });
 
   it('addMember delega en emergencyRepository.setIncidentId', async () => {

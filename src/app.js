@@ -7,6 +7,7 @@ const { createEmergenciesRoutes } = require('./routes/emergencies.routes');
 const { createUserRoutes } = require('./routes/user.routes');
 const { createOutboxRoutes } = require('./routes/outbox.routes');
 const { createOfficerRoutes } = require('./routes/officer.routes');
+const { createIncidentsRoutes } = require('./routes/incidents.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
 const { secureLog } = require('./security/secure-log');
@@ -20,12 +21,14 @@ const { resolveCorsOrigins } = require('./security/cors');
  *   devAuthRouter?: import('express').Router|null,
  *   authMode?: string,
  *   officerRepository?: object|null,
+ *   incidentRepository?: object|null,
  * }} [options]
  */
 function createApp(kafkaService, emergencyRepository, options = {}) {
   const app = express();
   const authenticate = options.authenticate || createAuthenticateMiddleware();
   const officerRepository = options.officerRepository || null;
+  const incidentRepository = options.incidentRepository || null;
 
   app.set('trust proxy', 1);
   app.use(createSecurityMiddleware());
@@ -82,6 +85,9 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   app.use('/api/outbox-events', createOutboxRoutes(emergencyRepository, authenticate));
   if (officerRepository) {
     app.use('/api/officers', createOfficerRoutes(officerRepository, authenticate));
+  }
+  if (incidentRepository) {
+    app.use('/api/incidents', createIncidentsRoutes(incidentRepository, authenticate));
   }
 
   app.use((err, req, res, next) => {

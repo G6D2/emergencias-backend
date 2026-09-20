@@ -38,17 +38,77 @@ class IncidentRepository {
     return mapIncident(result.rows[0]);
   }
 
-  async findActive() {
-    const result = await this.pool.query(
-      `SELECT * FROM incidents i
-       WHERE EXISTS (
-         SELECT 1 FROM emergencies e
-         WHERE e.incident_id = i.id
-           AND e.status NOT IN ('CLOSED', 'CANCELLED', 'DISCARDED')
-       )
-       ORDER BY i.created_at DESC`
+  // "Activo" = tiene al menos una emergencia miembro que no está en un
+  // status terminal. reportCount cuenta TODAS las emergencias vinculadas
+  // (no solo las activas): es la misma definición que usa
+  // emergency.repository.js#mapIncidentSummary para el incident embebido en
+  // GET /api/emergencies, para que ambos endpoints no muestren números
+  // distintos para el mismo incidente.
+  static ACTIVE_INCIDENT_WHERE = `
+    WHERE EXISTS (
+      SELECT 1 FROM emergencies e
+      WHERE e.incident_id = i.id
+        AND e.status NOT IN ('CLOSED', 'CANCELLED', 'DISCARDED')
+    )`;
+
+  /**
+   * Lista paginada de incidentes activos (dispatcher, GET /api/incidents),
+   * con la cantidad de emergencias vinculadas a cada uno.
+   */
+  async findActivePage({ page = 1, limit = 20 } = {}) {
+    const offset = (page - 1) * limit;
+
+    const countResult = await this.pool.query(
+      `SELECT COUNT(*)::int AS total FROM incidents i ${IncidentRepository.ACTIVE_INCIDENT_WHERE}`
     );
-    return result.rows.map(mapIncident);
+
+    const result = await this.pool.query(
+      `SELECT i.*,
+              (SELECT COUNT(*)::int FROM emergencies e2 WHERE e2.incident_id = i.id) AS emergency_count
+       FROM incidents i
+       ${IncidentRepository.ACTIVE_INCIDENT_WHERE}
+       ORDER BY i.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    return {
+      incidents: result.rows.map((row) => ({
+        ...mapIncident(row),
+        emergencyCount: row.emergency_count,
+      })),
+      total: countResult.rows[0].total,
+    };
+  }
+
+  /**
+   * Detalle de un incidente (dispatcher, GET /api/incidents/:id): el
+   * incidente más sus emergencias miembro (id, status, emergencyType,
+   * createdAt — SIN coordenadas: el dispatcher ya las ve en el detalle de
+   * cada emergencia si las necesita, este endpoint es un resumen operativo).
+   * Devuelve null si el incidente no existe.
+   */
+  async findByIdWithMembers(id) {
+    const incidentResult = await this.pool.query('SELECT * FROM incidents WHERE id = $1', [id]);
+    if (incidentResult.rows.length === 0) return null;
+
+    const membersResult = await this.pool.query(
+      `SELECT id, status, emergency_type, created_at
+       FROM emergencies
+       WHERE incident_id = $1
+       ORDER BY created_at ASC`,
+      [id]
+    );
+
+    return {
+      ...mapIncident(incidentResult.rows[0]),
+      members: membersResult.rows.map((row) => ({
+        id: row.id,
+        status: row.status,
+        emergencyType: row.emergency_type,
+        createdAt: row.created_at,
+      })),
+    };
   }
 
   async addMember(incidentId, emergencyId) {
