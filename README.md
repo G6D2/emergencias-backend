@@ -571,6 +571,14 @@ npm run test:integration
 
 ---
 
+## Diagramas
+
+Casos de uso, modelo entidad-relación, arquitectura (C4), máquina de estados, secuencias,
+eventos de dominio, CI/CD y despliegue — generados desde el código real, en Mermaid:
+[`docs/diagramas/`](docs/diagramas/README.md).
+
+---
+
 ## ADRs Relacionados
 
 - [ADR-001: Event-Driven Architecture](../ADRs/)
