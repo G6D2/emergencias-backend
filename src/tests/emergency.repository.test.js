@@ -582,3 +582,92 @@ describe('EmergencyRepository dirección legible persistida junto con la ubicaci
     expect(mapped.address).toBeNull();
   });
 });
+
+describe('EmergencyRepository.findRecentByType (candidatos para el job de detección de incidentes, #60)', () => {
+  const crypto = createLocationCrypto(Buffer.alloc(32, 3).toString('base64'));
+
+  it('incluye una fila legacy sin ciphertext (location_encrypted null) con lat/lng null', async () => {
+    const since = new Date('2026-01-01T00:00:00.000Z');
+    const pool = createPool({
+      query: async (sql, params) => {
+        expect(sql).toMatch(/FROM emergencies/);
+        expect(params).toEqual(['INCENDIO', since]);
+        return {
+          rows: [{
+            id: 'e1',
+            correlation_id: 'c1',
+            user_id: 'u1',
+            latitude: null,
+            longitude: null,
+            location_encrypted: null,
+            severity: 'low',
+            incident_id: null,
+            created_at: 'c',
+          }],
+        };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: crypto });
+
+    const candidates = await repo.findRecentByType({ emergencyType: 'INCENDIO', since });
+
+    expect(candidates).toEqual([{
+      id: 'e1',
+      correlationId: 'c1',
+      userId: 'u1',
+      latitude: null,
+      longitude: null,
+      severity: 'low',
+      incidentId: null,
+      createdAt: 'c',
+    }]);
+  });
+
+  it('descifra la ubicación cuando hay ciphertext válido', async () => {
+    const ciphertext = crypto.encryptLocation({ latitude: -34.6, longitude: -58.4 });
+    const pool = createPool({
+      query: async () => ({
+        rows: [{
+          id: 'e2',
+          correlation_id: 'c2',
+          user_id: 'u2',
+          location_encrypted: ciphertext,
+          severity: 'high',
+          incident_id: 'inc-1',
+          created_at: 'c',
+        }],
+      }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: crypto });
+
+    const candidates = await repo.findRecentByType({ emergencyType: 'INCENDIO', since: new Date() });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      id: 'e2', latitude: -34.6, longitude: -58.4, incidentId: 'inc-1',
+    });
+  });
+
+  it('excluye del resultado una fila con ciphertext indescifrable (otra clave) en vez de romper el listado', async () => {
+    const otherKeyCrypto = createLocationCrypto(Buffer.alloc(32, 7).toString('base64'));
+    const ciphertext = otherKeyCrypto.encryptLocation({ latitude: -34.6, longitude: -58.4 });
+    const pool = createPool({
+      query: async () => ({
+        rows: [
+          {
+            id: 'e3', correlation_id: 'c3', user_id: 'u3', location_encrypted: ciphertext, severity: 'low', incident_id: null, created_at: 'c',
+          },
+          {
+            id: 'e4', correlation_id: 'c4', user_id: 'u4', location_encrypted: null, severity: 'low', incident_id: null, created_at: 'c',
+          },
+        ],
+      }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: crypto });
+
+    const candidates = await repo.findRecentByType({ emergencyType: 'INCENDIO', since: new Date() });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].id).toBe('e4');
+  });
+});

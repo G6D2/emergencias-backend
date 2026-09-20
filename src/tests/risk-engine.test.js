@@ -66,6 +66,23 @@ describe('risk-engine', () => {
       const { reasonCodes } = calculateIncidentScore(baseInput());
       expect(reasonCodes).toEqual([]);
     });
+
+    it('no suma proximidad ni agrega PROXIMITY_CLUSTER si no hay ninguna distancia disponible', () => {
+      const withDistance = calculateIncidentScore(baseInput({ minDistanceMeters: 10, maxDistanceMeters: 10 }));
+      const withoutDistance = calculateIncidentScore(
+        baseInput({ minDistanceMeters: undefined, maxDistanceMeters: undefined })
+      );
+
+      expect(withoutDistance.score).toBeLessThan(withDistance.score);
+      expect(withoutDistance.reasonCodes).not.toContain('PROXIMITY_CLUSTER');
+    });
+
+    it('no suma recencia si recencyMinutes no está disponible', () => {
+      const withRecency = calculateIncidentScore(baseInput({ recencyMinutes: 1 }));
+      const withoutRecency = calculateIncidentScore(baseInput({ recencyMinutes: undefined }));
+
+      expect(withoutRecency.score).toBeLessThan(withRecency.score);
+    });
   });
 
   describe('scoreToPriority', () => {

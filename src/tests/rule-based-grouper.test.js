@@ -88,6 +88,27 @@ describe('rule-based-grouper', () => {
       expect(groups).toHaveLength(1);
       expect(groups[0].slice().sort()).toEqual(['A', 'B', 'C']);
     });
+
+    it('agrupa 3 candidatos mutuamente cercanos (todos los pares dentro del radio) en un solo grupo', () => {
+      // Triángulo pequeño donde A-B, A-C y B-C están todos dentro del radio:
+      // al procesar el par B-C, find(B) y find(C) ya comparten raíz por la
+      // unión transitiva vía A, así que union() no vuelve a fusionar nada
+      // (rama "ya unidos" de union-find).
+      const pointA = { latitude: -34.6037, longitude: -58.3816 };
+      const pointB = { latitude: -34.6037 + 0.0003, longitude: -58.3816 };
+      const pointC = { latitude: -34.6037, longitude: -58.3816 + 0.0003 };
+
+      const candidates = [
+        candidate({ emergencyId: 'A', userId: 'user-A', ...pointA }),
+        candidate({ emergencyId: 'B', userId: 'user-B', ...pointB }),
+        candidate({ emergencyId: 'C', userId: 'user-C', ...pointC }),
+      ];
+
+      const groups = groupNearbyEmergencies(candidates, { radiusMeters: 100, minUniqueCitizens: 3 });
+
+      expect(groups).toHaveLength(1);
+      expect(groups[0].slice().sort()).toEqual(['A', 'B', 'C']);
+    });
   });
 
   describe('haversineDistanceMeters', () => {

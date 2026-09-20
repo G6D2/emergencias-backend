@@ -115,6 +115,35 @@ describe('incident-detector', () => {
       expect(criticalMember.finalPriority).toBe('critical');
     });
 
+    it('con minUniqueCitizens=1, una emergencia sola forma un grupo de un miembro (sin pares para calcular distancia)', () => {
+      const candidates = [
+        closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1', severity: 'medium' }),
+      ];
+
+      const decisions = processEmergencyTypeCandidates(candidates, { ...DEFAULT_OPTIONS, minUniqueCitizens: 1 });
+
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0].members).toHaveLength(1);
+      expect(decisions[0].factors.reportCount).toBe(1);
+      expect(decisions[0].factors.minDistanceMeters).toBe(0);
+      expect(decisions[0].factors.maxDistanceMeters).toBe(0);
+      expect(decisions[0].factors.maxSeverity).toBe('medium');
+    });
+
+    it('la severity máxima del grupo puede estar en un miembro que no es el primero', () => {
+      const candidates = [
+        closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1', severity: 'low' }),
+        closeCandidate({
+          id: 'e2', correlationId: 'e2', userId: 'u2', severity: 'critical', latitude: BASE_LATITUDE + 0.0002,
+        }),
+      ];
+
+      const decisions = processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0].factors.maxSeverity).toBe('critical');
+    });
+
     it('una emergencia sola, sin nadie mas cerca, no genera ninguna decision', () => {
       const candidates = [
         closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1' }),
