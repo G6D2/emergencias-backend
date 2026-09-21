@@ -1,8 +1,13 @@
 name: CD
-run-name: "CD · deploy ${{ github.ref_name }} · ${{ github.sha }}"
+# El branch/sha ahora vienen del workflow_run que dispara este CD, no del ref actual.
+run-name: "CD · deploy ${{ github.event.workflow_run.head_branch }} · ${{ github.event.workflow_run.head_sha }}"
 
 on:
-  push:
+  # CD depende de CI: solo se dispara al terminar un run de CI sobre main.
+  # El deploy real ademas exige que CI haya salido 'success' (ver el if del job).
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -12,9 +17,19 @@ jobs:
   deploy:
     name: Migrate & Deploy
     runs-on: ubuntu-latest
+    # Guardas duras:
+    #  - conclusion == 'success': CI paso (lint + build + unit + integracion).
+    #  - event == 'push':        descartamos runs de PR-CI que igual completaron.
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Deployar exactamente el SHA que CI aprobo, no HEAD de main:
+          # main puede haber avanzado con otros pushes entre CI y este CD.
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -58,8 +73,8 @@ jobs:
           body: |
             El pipeline de deploy del Backend falló en ${{ github.repository }}.
 
-            Branch:   ${{ github.ref_name }}
-            Commit:   ${{ github.sha }}
-            Actor:    ${{ github.actor }}
+            Branch:   ${{ github.event.workflow_run.head_branch }}
+            Commit:   ${{ github.event.workflow_run.head_sha }}
+            Actor:    ${{ github.event.workflow_run.actor.login }}
 
             Ver detalles: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
