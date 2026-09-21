@@ -2,7 +2,7 @@ const { spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { runFlyway } = require('../../../scripts/lib/flyway');
+const { runFlyway, runFlywayAuto } = require('../../../scripts/lib/flyway');
 const { parseDatabaseUrl } = require('../../../scripts/lib/db-url');
 
 const STATE_FILE = path.join(os.tmpdir(), 'emergencias-backend-test-db.json');
@@ -39,7 +39,7 @@ module.exports = async function globalSetup() {
       process.env.LOCATION_ENCRYPTION_KEY
       || 'flxqyJtbe6+mibyHqK76N6LSnFe0w22hnyDZg9KWIcs=';
     const connectionInfo = parseDatabaseUrl(process.env.TEST_DATABASE_URL);
-    runFlyway(connectionInfo, {
+    runFlywayAuto(connectionInfo, {
       command: 'migrate',
       migrationsDir: MIGRATIONS_DIR,
       sslmode: process.env.DATABASE_SSL === 'false' ? undefined : 'require',

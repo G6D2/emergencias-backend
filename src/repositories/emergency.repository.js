@@ -459,6 +459,63 @@ class EmergencyRepository {
     }
   }
 
+  /**
+   * Candidatos recientes de un emergencyType para el job de deteccion de
+   * incidentes (#60): sin JOIN a officers, sin paginacion, sin COUNT --
+   * el consumidor es el job, no un endpoint HTTP. Devuelve lat/lng ya
+   * descifrados porque el job los pasa directo a groupNearbyEmergencies.
+   * Una fila cuyo ciphertext no se puede descifrar se excluye del
+   * resultado (no puede tumbar la corrida del job), dejando constancia
+   * con secureLog de cual id se excluyo y por que.
+   */
+  async findRecentByType({ emergencyType, since }) {
+    const result = await this.pool.query(
+      `SELECT id, correlation_id, user_id, latitude, longitude, location_encrypted,
+              severity, incident_id, created_at
+       FROM emergencies
+       WHERE emergency_type = $1 AND created_at >= $2`,
+      [emergencyType, since]
+    );
+
+    const candidates = [];
+    for (const row of result.rows) {
+      if (!row.location_encrypted) {
+        candidates.push({
+          id: row.id,
+          correlationId: row.correlation_id,
+          userId: row.user_id,
+          latitude: null,
+          longitude: null,
+          severity: row.severity,
+          incidentId: row.incident_id,
+          createdAt: row.created_at,
+        });
+        continue;
+      }
+
+      try {
+        const location = this.locationCrypto.decryptLocation(row.location_encrypted);
+        candidates.push({
+          id: row.id,
+          correlationId: row.correlation_id,
+          userId: row.user_id,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          severity: row.severity,
+          incidentId: row.incident_id,
+          createdAt: row.created_at,
+        });
+      } catch (error) {
+        secureLog('warn', 'Emergency excluded from findRecentByType: location ciphertext could not be decrypted', {
+          emergencyId: row.id,
+          message: error.message,
+        });
+      }
+    }
+
+    return candidates;
+  }
+
   async setIncidentId(emergencyId, incidentId) {
     const result = await this.pool.query(
       'UPDATE emergencies SET incident_id = $1, updated_at = now() WHERE id = $2 RETURNING *',

@@ -103,4 +103,47 @@ function runFlyway(connectionInfo, { command = 'migrate', migrationsDir, sslmode
   }
 }
 
-module.exports = { runFlyway, resolveFlywayTarget };
+// Para desarrollo local sin Docker: si hay un binario `flyway` (requiere Java)
+// en el PATH, lo usamos directo contra la base indicada por TEST_DATABASE_URL
+// en vez de levantar el contenedor de flyway/flyway. No se usa en CI (ahí no
+// hay binario `flyway` en el PATH, así que sigue yendo por Docker como antes).
+function hasNativeFlywayBinary() {
+  const result = spawnSync('flyway', ['-v'], { stdio: 'ignore' });
+  return !result.error;
+}
+
+function runFlywayNative(connectionInfo, { command = 'migrate', migrationsDir, sslmode } = {}) {
+  const jdbcUrl = buildJdbcUrl(connectionInfo, sslmode);
+
+  console.log(
+    `Ejecutando "flyway ${command}" (binario local, sin Docker) contra ${connectionInfo.host}:${connectionInfo.port}/${connectionInfo.database}...`
+  );
+
+  const args = [
+    `-url=${jdbcUrl}`,
+    `-user=${connectionInfo.user}`,
+    `-password=${connectionInfo.password || ''}`,
+    `-locations=filesystem:${migrationsDir}`,
+    command,
+  ];
+
+  const result = spawnSync('flyway', args, { stdio: 'inherit' });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`flyway ${command} (nativo) terminó con código ${result.status}`);
+  }
+}
+
+// Punto de entrada usado por los tests de integración: usa el binario nativo
+// si está disponible (evita la dependencia de Docker en máquinas de dev sin
+// Docker) y si no, cae al camino de siempre (contenedor de flyway/flyway).
+function runFlywayAuto(connectionInfo, options) {
+  if (hasNativeFlywayBinary()) {
+    return runFlywayNative(connectionInfo, options);
+  }
+  return runFlyway(connectionInfo, options);
+}
+
+module.exports = { runFlyway, runFlywayAuto, resolveFlywayTarget, hasNativeFlywayBinary };
