@@ -62,6 +62,12 @@ stateDiagram-v2
 **Terminales** (sin transiciones de salida, `TERMINAL_STATUSES` en el código): `CLOSED`,
 `CANCELLED`, `DISCARDED`.
 
+**El motor de incidentes (PRs #36/#39/#41, ver `03-arquitectura.md` y `06-eventos.md`) no toca
+esta máquina de estados.** `incident_id` y `effectivePriority` viajan junto a la emergencia y
+afectan el orden en que la ve el dispatcher (`sortBy=priority`), pero no agregan ni quitan
+transiciones de `status`: una emergencia sigue moviéndose por los mismos 9 estados de siempre,
+sea o no parte de un incidente.
+
 Cualquier transición no listada en `TRANSITIONS` responde **409 Conflict**
 (`ConflictError`, ej. `Invalid transition PENDING → RESOLVED`). La validación corre dos veces:
 en el controller (`assertTransition`) y en `EmergencyRepository.updateStatus`/`assignOfficer`

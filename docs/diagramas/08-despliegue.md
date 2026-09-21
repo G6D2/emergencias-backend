@@ -13,7 +13,7 @@ flowchart TB
 
     subgraph renderBackup["Render — cuenta de backup"]
         direction TB
-        backupNode["Stack de backup<br/>(no encontrado en el repo)"]:::missing
+        backupNode["Backend backup<br/>(activate-backup.yml, manual)"]:::backup
     end
 
     neonNode[("Neon Postgres<br/>(único proyecto, pooled)")]
@@ -22,21 +22,22 @@ flowchart TB
         direction TB
         repoBack["emergencias-backend"]
         repoFront["Frontend"]
-        actionsNode["GitHub Actions<br/>(CI, CD, keep-warm)"]
+        actionsNode["GitHub Actions<br/>(CI, CD, keep-warm, activate-backup)"]
     end
 
-    sonarNode["SonarCloud<br/>(org g6d2, opcional)"]
+    sonarNode["SonarCloud<br/>(org g6d2, activo en los dos repos)"]
 
     feNode -->|"API_URL"| beNode
     beNode -->|"DATABASE_URL"| neonNode
-    backupNode -.->|"contra la misma Neon (no verificado)"| neonNode
+    backupNode -.->|"contra la misma Neon (config del servicio backup fuera de este repo)"| neonNode
     repoBack --> actionsNode
     repoFront --> actionsNode
     actionsNode -->|"deploy hook"| feNode
     actionsNode -->|"deploy hook + migrate"| beNode
+    actionsNode -.->|"workflow_dispatch manual"| backupNode
     actionsNode -.-> sonarNode
 
-    classDef missing fill:#ffe3e3,stroke:#e03131,color:#7d1a1a,stroke-width:1px,stroke-dasharray: 2 2;
+    classDef backup fill:#e5dbff,stroke:#7048e8,color:#3c1361,stroke-width:1px,stroke-dasharray: 3 2;
 ```
 
 ## Variables de entorno relevantes (sin valores)
@@ -74,18 +75,28 @@ flowchart TB
 |---|---|
 | `DATABASE_URL` | CD del backend, para correr `npm run migrate` contra Neon |
 | `RENDER_DEPLOY_HOOK_URL` | CD de ambos repos, dispara el redeploy en Render |
-| `SONAR_TOKEN` | Análisis opcional de SonarCloud |
+| `RENDER_DEPLOY_HOOK_URL_BACKUP` | `activate-backup.yml`, dispara el redeploy del backend backup en la otra cuenta de Render |
+| `SONAR_TOKEN` | Análisis de SonarCloud; cargado en ambos repos (backend desde el inicio, `Frontend` desde el 21/09) |
 | `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_TO` | Notificación por email si falla CI/CD |
 | `GITHUB_TOKEN` | Comentario de cobertura en el PR (provisto automáticamente por Actions) |
+
+### Variables de repo (no secretas) usadas por `activate-backup.yml`
+
+| Variable | Para qué |
+|---|---|
+| `BACKUP_BACKEND_URL` | URL pública del backend backup, usada para el polling de `/health` post-deploy |
 
 ## Notas
 
 - **Ambas apps duermen** en el plan free de Render tras 15 minutos sin tráfico (50-60s de
   arranque en frío). Por eso existen `keep-warm.yml` + `src/jobs/keep-warm.js` (backend) y
   `/api/warmup` (frontend) — ver `07-ci-cd.md`.
-- El stack de backup en otra cuenta de Render contra la misma Neon **no se encontró en el
-  código** de ninguno de los tres repos clonados. Se lo incluye porque lo pide la consigna de
-  este documento, marcado como no verificado.
+- El stack de backup en otra cuenta de Render **sí existe**: `.github/workflows/activate-backup.yml`
+  (PR #38) lo confirma, con secret `RENDER_DEPLOY_HOOK_URL_BACKUP` y variable `BACKUP_BACKEND_URL`.
+  Es manual (`workflow_dispatch`, sin cron ni failover automático) y no migra nada por sí solo.
+  Que apunte contra la misma Neon que el primario es una decisión de configuración del servicio
+  backup en el dashboard de Render — no vive en este repo, así que no se puede verificar línea
+  por línea contra código, pero es la config que el equipo reporta estar usando.
 - No hay object storage separado para adjuntos (fotos/evidencias): esas historias (HU-02 con
   foto, HU-09 observaciones) todavía no están implementadas.
 
@@ -93,5 +104,5 @@ flowchart TB
 
 - `render.yaml` (backend), `Frontend/render.yaml`
 - `.env.example` (backend)
-- `.github/workflows/*.yml` (backend y frontend)
+- `.github/workflows/*.yml` (backend y frontend), incluido `.github/workflows/activate-backup.yml`
 - `src/jobs/keep-warm.js`, `Frontend/app/api/warmup/route.js`, `Frontend/app/components/BackendWarmup.js`
