@@ -54,6 +54,28 @@ jobs:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
         run: curl --fail -sS -X POST "$RENDER_DEPLOY_HOOK_URL"
 
+      # Verificacion end-to-end: el POST al deploy hook solo *encola* el deploy en Render.
+      # Sin este poll, un webhook aceptado deja el workflow en verde aunque despues
+      # falle el build/deploy. Esperamos a que /health responda 200 con el
+      # servicio nuevo levantado. Render free puede tardar 3-8 min entre build
+      # y cold start; damos hasta 10 min con reintentos de 15s.
+      - name: Verify deploy health
+        env:
+          HEALTH_URL: https://emergencias-backend-34go.onrender.com/health
+        run: |
+          echo "Esperando 60s a que Render arranque el deploy..."
+          sleep 60
+          for i in $(seq 1 40); do
+            if curl --fail -sS -o /dev/null "$HEALTH_URL"; then
+              echo "✓ Health OK en intento $i ($HEALTH_URL)"
+              exit 0
+            fi
+            echo "Intento $i/40: sin respuesta 2xx todavia, reintento en 15s..."
+            sleep 15
+          done
+          echo "::error::El deploy no quedo saludable tras 10 min. Revisar Render logs."
+          exit 1
+
   notify-failure:
     name: Notify deploy failure
     runs-on: ubuntu-latest
