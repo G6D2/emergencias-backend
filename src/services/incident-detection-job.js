@@ -121,7 +121,7 @@ function startIncidentDetectionJob(emergencyRepository, incidentRepository, opti
           // filtrar.
           for (const emergencyType of EMERGENCY_TYPES) {
             const candidates = await emergencyRepository.findRecentByType({ emergencyType, since });
-            const decisions = processEmergencyTypeCandidates(candidates, {
+            const decisions = await processEmergencyTypeCandidates(candidates, {
               radiusMeters,
               minUniqueCitizens,
               emergencyType,

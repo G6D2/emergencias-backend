@@ -6,6 +6,7 @@
 const { groupNearbyEmergencies, haversineDistanceMeters } = require('./rule-based-grouper');
 const { calculateIncidentScore, scoreToPriority, applyPriorityInvariant } = require('./risk-engine');
 const { compareSeverity } = require('./severity');
+const { detectGroups } = require('./incident-detection-strategy');
 
 const ALGORITHM_VERSION = 'rule-based-v1';
 
@@ -47,13 +48,26 @@ function maxSeverityOf(members) {
  *
  * @param {Array<{ id: string, correlationId: string, userId: string, latitude: number, longitude: number, createdAt: string|Date, severity: string, incidentId: string|null }>} candidates
  * @param {{ radiusMeters: number, minUniqueCitizens: number, emergencyType: string }} options
- * @returns {Array<object>} decisiones, una por grupo detectado
+ * @returns {Promise<Array<object>>} decisiones, una por grupo detectado
  */
-function processEmergencyTypeCandidates(candidates, { radiusMeters, minUniqueCitizens, emergencyType }) {
+async function processEmergencyTypeCandidates(candidates, { radiusMeters, minUniqueCitizens, emergencyType }) {
   // groupNearbyEmergencies identifica cada candidato por emergencyId; los
   // candidatos de findRecentByType usan id (ver discrepancia resuelta con Mati).
   const withEmergencyId = candidates.map((candidate) => ({ ...candidate, emergencyId: candidate.id }));
-  const groups = groupNearbyEmergencies(withEmergencyId, { radiusMeters, minUniqueCitizens });
+  // Selección de estrategia (#61, parte 1/2, ADR-002): por ahora primary y
+  // fallback son la MISMA función (groupNearbyEmergencies) -- DbscanGrouper
+  // todavía no existe, es la parte 2/2 en esta misma rama. Esto es
+  // intencional, no un error: deja la infraestructura de selección lista y
+  // funcionando exactamente igual que antes (mismo comportamiento
+  // observable), sin introducir DBSCAN todavía.
+  const groups = await detectGroups(
+    withEmergencyId,
+    { radiusMeters, minUniqueCitizens },
+    {
+      primary: groupNearbyEmergencies,
+      fallback: groupNearbyEmergencies,
+    }
+  );
   const candidatesByEmergencyId = new Map(withEmergencyId.map((c) => [c.emergencyId, c]));
 
   const decisions = [];
