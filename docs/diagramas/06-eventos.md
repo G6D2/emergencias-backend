@@ -1,0 +1,83 @@
+# Eventos de dominio
+
+Para qué sirve: documentar qué eventos publica hoy el módulo (`src/services/emergency-events.js`),
+por qué tópico, cuándo se disparan, y qué tan lejos está el payload actual del envelope que
+pide Analítica (Grupo 8) en `tableros-analitica.md`.
+
+```mermaid
+flowchart LR
+    subgraph triggers["Disparadores"]
+        t1["POST /api/panic-button"]
+        t2["PATCH .../validate"]
+        t3["PATCH .../discard"]
+        t4["PATCH .../assign"]
+        t5["PATCH .../cancel"]
+        t6["PATCH .../close"]
+    end
+
+    subgraph builders["src/services/emergency-events.js"]
+        e1["buildEmergencyCreatedEvent<br/>type: EmergenciaCreada"]
+        e2["buildEmergencyStatusUpdatedEvent<br/>type: EmergenciaEstadoActualizado"]
+        e3["buildEmergencyClosedEvent<br/>type: EmergenciaCerrada"]
+    end
+
+    outbox[("outbox_events<br/>(misma transacción SQL)")]
+    pub["OutboxPublisher<br/>(poll 5000ms)"]
+    kafka["Kafka<br/>KAFKA_ENABLED=false en prod hoy"]:::planned
+    analitica["Analítica / otros módulos<br/>(previsto, sin consumer hoy)"]:::planned
+
+    t1 --> e1
+    t2 --> e2
+    t3 --> e2
+    t4 --> e2
+    t5 --> e2
+    t6 --> e3
+
+    e1 -->|"topic: emergencias.boton-panico"| outbox
+    e2 -->|"topic: emergencias.estado-actualizado"| outbox
+    e3 -->|"topic: emergencias.cerrada"| outbox
+
+    outbox --> pub
+    pub -.->|"deshabilitado: eventos quedan PENDING"| kafka
+    kafka -.-> analitica
+
+    classDef planned fill:#f1f3f5,stroke:#adb5bd,color:#495057,stroke-width:1px,stroke-dasharray: 4 3;
+```
+
+## Eventos publicados hoy
+
+| Evento (`type`) | Tópico (env var, default) | Cuándo | Payload resumido (`data`) |
+|---|---|---|---|
+| `EmergenciaCreada` | `TOPIC_PANIC_BUTTON` → `emergencias.boton-panico` | Al crear una emergencia vía `POST /api/panic-button` | `id, correlationId, userId, description, severity, status, assignedOfficerId, emergencyType, createdAt, updatedAt` |
+| `EmergenciaEstadoActualizado` | `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO` → `emergencias.estado-actualizado` | En `validate`, `discard`, `assign` y `cancel` (los 4 endpoints reusan el mismo evento) | `id, correlationId, previousStatus, newStatus, actor, reason, timestamp` |
+| `EmergenciaCerrada` | `TOPIC_EMERGENCIA_CERRADA` → `emergencias.cerrada` | En `PATCH .../close` | `id, correlationId, actor, closedAt` |
+
+Cada evento lleva además, **fuera de `data`**: `type`, `eventId` (`randomUUID()`, generado en
+`insertOutboxEvent`) y `correlationId` (duplicado: está en la raíz **y** dentro de `data`).
+
+## Brecha contra el contrato de Analítica (`tableros-analitica.md`)
+
+Analítica define un envelope común (`metadata.eventId`, `metadata.eventType`,
+`metadata.occurredAt`, `metadata.source`, `metadata.version`, `data.correlationId`). El código
+actual no lo respeta:
+
+| Campo esperado | Estado en el código |
+|---|---|
+| `metadata.eventId` | Existe como `eventId`, pero **en la raíz del payload**, no dentro de un objeto `metadata` |
+| `metadata.eventType` | Existe como `type` en la raíz (mismo valor PascalCase-pasado que pide el contrato: `EmergenciaCreada`, etc.), pero fuera de `metadata` |
+| `metadata.occurredAt` | **No existe a nivel evento.** Solo `EmergenciaEstadoActualizado` trae `data.timestamp`; `EmergenciaCreada` y `EmergenciaCerrada` no traen ningún timestamp propio (habría que inferirlo de `createdAt`/`closedAt` dentro de `data`) |
+| `metadata.source` | No existe en ningún evento |
+| `metadata.version` | No existe en ningún evento |
+| `data.correlationId` | Sí existe (además duplicado en la raíz del payload) |
+| `EmergenciaPriorizada` | No se publica: no hay motor de priorización integrado (ver `01-casos-de-uso.md`, CU-04 parcial) |
+| `EmergenciaDespachada` | No se publica como tipo propio: `assign` reusa `EmergenciaEstadoActualizado` con `reason: "Assigned officer <id>"` en vez de un evento dedicado |
+| Entrega real al bus | `KAFKA_ENABLED=false` en `render.yaml` de producción: ningún evento sale de `outbox_events` hoy, así que Analítica no podría consumir nada aunque el contrato estuviera alineado (ver `05-secuencias.md`, flujo c) |
+
+## Fuente en el código
+
+- `src/services/emergency-events.js` (builders de los 3 eventos)
+- `src/repositories/emergency.repository.js` (`insertOutboxEvent` — genera `eventId`, arma el `INSERT` a `outbox_events`)
+- `src/services/outbox-publisher.js`, `src/services/kafka.service.js`
+- `src/controllers/panic-button.controller.js`, `src/controllers/emergency.controller.js` (tópicos vía `process.env.TOPIC_*`)
+- `render.yaml` (`KAFKA_ENABLED`, `TOPIC_*`)
+- Documento de producto: `tableros-analitica.md` (sección 1.2 y 3), `Emergencias - Roadmap y Historias de Usuario.md` (contrato de eventos del bus)
