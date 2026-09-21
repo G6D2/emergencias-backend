@@ -5,6 +5,7 @@ const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
 const { mapOfficer } = require('./officer.repository');
+const { effectivePriority } = require('../domain/severity');
 
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
@@ -61,6 +62,51 @@ function mapEmergency(row, locationCrypto) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
+  };
+}
+
+// Solo se llama sobre filas de queries que hicieron LEFT JOIN a incidents
+// (ver INCIDENT_JOIN_SQL más abajo): ahí sí vienen las columnas incident_*.
+// row.incident_id es una columna propia de emergencies (existe siempre,
+// joineada o no); si el JOIN no encontró nada, todas las incident_* quedan
+// NULL y esta función devuelve null (la emergencia todavía no pertenece a
+// ningún incidente).
+function mapIncidentSummary(row) {
+  if (!row.incident_id) return null;
+  return {
+    id: row.incident_id,
+    priority: row.incident_priority,
+    score: row.incident_score != null ? Number(row.incident_score) : null,
+    reportCount: row.incident_report_count != null ? Number(row.incident_report_count) : 0,
+    uniqueCitizens: row.incident_unique_citizens != null ? Number(row.incident_unique_citizens) : 0,
+    reasonCodes: row.incident_reason_codes,
+  };
+}
+
+// Fragmento de SELECT/JOIN reusado por findPage y findDetailById (las dos
+// lecturas que exponen el resultado del motor de incidentes al dispatcher/
+// ciudadano, tarea de visibilidad apilada sobre #36). El resto de los
+// métodos del repository (create, updateStatus, assignOfficer, ...) sigue
+// usando el SELECT simple de siempre: no necesitan este dato y no vale la
+// pena pagar el JOIN + subqueries en cada mutación.
+const INCIDENT_JOIN_SQL = `LEFT JOIN incidents i ON i.id = e.incident_id`;
+const INCIDENT_SELECT_FIELDS = `
+       i.priority AS incident_priority,
+       i.score AS incident_score,
+       i.reason_codes AS incident_reason_codes,
+       (SELECT COUNT(*)::int FROM emergencies em2 WHERE em2.incident_id = e.incident_id) AS incident_report_count,
+       (SELECT COUNT(DISTINCT em3.user_id)::int FROM emergencies em3 WHERE em3.incident_id = e.incident_id) AS incident_unique_citizens`;
+
+// mapEmergency + incident: null|{...} + effectivePriority (máximo entre
+// severity individual y incident.priority, ver src/domain/severity.js).
+function mapEmergencyWithIncident(row, locationCrypto) {
+  const emergency = mapEmergency(row, locationCrypto);
+  if (!emergency) return null;
+  const incident = mapIncidentSummary(row);
+  return {
+    ...emergency,
+    incident,
+    effectivePriority: effectivePriority(emergency.severity, incident ? incident.priority : null),
   };
 }
 
@@ -186,13 +232,22 @@ class EmergencyRepository {
   }
 
   /**
-   * Detalle de una emergencia (tarea #32): la emergencia más su historial de
-   * estados en orden cronológico. Son dos queries y no un JOIN para reusar
-   * mapEmergency/mapHistoryEntry y no multiplicar la fila principal por cada
-   * entrada del historial. Devuelve null si la emergencia no existe.
+   * Detalle de una emergencia (tarea #32, + incident/effectivePriority):
+   * la emergencia (con su incidente y prioridad efectiva si pertenece a
+   * alguno) más su historial de estados en orden cronológico. El historial
+   * es una segunda query, no un JOIN, para no multiplicar la fila principal
+   * por cada entrada. Devuelve null si la emergencia no existe.
    */
   async findDetailById(id) {
-    const emergency = await this.findById(id);
+    const result = await this.pool.query(
+      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}
+       FROM emergencies e
+       LEFT JOIN officers o ON o.id = e.assigned_officer_id
+       ${INCIDENT_JOIN_SQL}
+       WHERE e.id = $1`,
+      [id]
+    );
+    const emergency = mapEmergencyWithIncident(result.rows[0], this.locationCrypto);
     if (!emergency) return null;
 
     const statusHistory = await this.findHistoryByEmergencyId(id);
@@ -319,8 +374,25 @@ class EmergencyRepository {
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
     const offset = (page - 1) * limit;
     const direction = order === 'asc' ? 'ASC' : 'DESC';
+    // Prioridad efectiva en SQL (para poder ordenar/paginar en la base):
+    // rank 4 = critical ... 1 = low, ELSE 0 (sin severity/incidente
+    // reconocido). GREATEST toma el rank MÁS urgente entre la severity
+    // individual y la priority del incidente — "máximo entre severity e
+    // incident.priority según SEVERITY_LEVELS". Si no hay incidente,
+    // i.priority es NULL → ese CASE cae en el ELSE (0), que nunca gana
+    // contra la severity individual (rank >= 1), así que el resultado es
+    // el mismo que ordenar solo por severity.
+    //
+    // BUG encontrado en el código heredado (antes de esta tarea, no de
+    // #36): la escala anterior tenía critical=1...low=4 y se ordenaba con
+    // el mismo DESC/ASC de siempre, así que sortBy=priority (sin order,
+    // que por defecto es 'desc') listaba las emergencias MENOS urgentes
+    // primero. Con critical=4...low=1, DESC (default) ahora sí lista las
+    // más urgentes primero — mismo sentido que created_at DESC = más
+    // reciente primero.
+    const priorityRank = (column) => `CASE ${column} WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
     const sortExpression = sortBy === 'priority'
-      ? "CASE e.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 WHEN 'low' THEN 4 ELSE 5 END"
+      ? `GREATEST(${priorityRank('e.severity')}, ${priorityRank('i.priority')})`
       : 'e.created_at';
 
     const countResult = await this.pool.query(
@@ -329,9 +401,10 @@ class EmergencyRepository {
     );
     values.push(limit, offset);
     const result = await this.pool.query(
-      `SELECT e.*, o.name AS assigned_officer_name
+      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}
        FROM emergencies e
        LEFT JOIN officers o ON o.id = e.assigned_officer_id
+       ${INCIDENT_JOIN_SQL}
        ${where}
        ORDER BY ${sortExpression} ${direction}, e.created_at ASC
        LIMIT $${values.length - 1} OFFSET $${values.length}`,
@@ -339,7 +412,7 @@ class EmergencyRepository {
     );
 
     return {
-      emergencies: result.rows.map((row) => mapEmergency(row, this.locationCrypto)),
+      emergencies: result.rows.map((row) => mapEmergencyWithIncident(row, this.locationCrypto)),
       total: countResult.rows[0].total,
     };
   }

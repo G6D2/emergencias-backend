@@ -43,6 +43,7 @@ async function start() {
     devAuthRouter: auth.devAuthRouter,
     authMode: auth.mode,
     officerRepository,
+    incidentRepository,
   });
 
   const server = app.listen(PORT, () => {

@@ -5,6 +5,7 @@ const {
   normalizeSeverity,
   severityForType,
   SEVERITY_BY_TYPE,
+  effectivePriority,
 } = require('../domain/severity');
 const { EMERGENCY_TYPES } = require('../domain/emergency-type');
 
@@ -48,5 +49,25 @@ describe('severityForType', () => {
   it('degrades to low for an unmapped type instead of throwing', () => {
     expect(severityForType('UNKNOWN')).toBe('low');
     expect(severityForType(undefined)).toBe('low');
+  });
+});
+
+describe('effectivePriority', () => {
+  it('sin incidente (null/undefined), la efectiva es la propia severity', () => {
+    expect(effectivePriority('medium', null)).toBe('medium');
+    expect(effectivePriority('high', undefined)).toBe('high');
+  });
+
+  it('un incidentPriority no reconocido se ignora (degrada a la severity individual, no lanza)', () => {
+    expect(effectivePriority('medium', 'no-existe')).toBe('medium');
+  });
+
+  it('devuelve incidentPriority cuando es mayor que severity', () => {
+    expect(effectivePriority('low', 'critical')).toBe('critical');
+  });
+
+  it('devuelve severity cuando es mayor o igual que incidentPriority (nunca baja)', () => {
+    expect(effectivePriority('critical', 'low')).toBe('critical');
+    expect(effectivePriority('high', 'high')).toBe('high');
   });
 });

@@ -187,6 +187,47 @@ describe('EmergencyRepository lecturas', () => {
     const detail = await repo.findDetailById('e-1');
     expect(detail.id).toBe('e-1');
     expect(detail.statusHistory).toHaveLength(1);
+    expect(detail.incident).toBeNull();
+    expect(detail.effectivePriority).toBe(detail.severity);
+  });
+
+  it('findDetailById devuelve incident con sus campos y effectivePriority combinada (LEFT JOIN a incidents)', async () => {
+    let call = 0;
+    const pool = createPool({
+      query: async () => {
+        call += 1;
+        if (call === 1) {
+          return {
+            rows: [{
+              id: 'e-2',
+              severity: 'low',
+              incident_id: 'inc-1',
+              incident_priority: 'critical',
+              incident_score: '87.5',
+              incident_report_count: '3',
+              incident_unique_citizens: '2',
+              incident_reason_codes: ['MULTI_REPORT_THRESHOLD'],
+            }],
+          };
+        }
+        return { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const detail = await repo.findDetailById('e-2');
+
+    expect(detail.incident).toEqual({
+      id: 'inc-1',
+      priority: 'critical',
+      score: 87.5,
+      reportCount: 3,
+      uniqueCitizens: 2,
+      reasonCodes: ['MULTI_REPORT_THRESHOLD'],
+    });
+    // severity individual es 'low' pero el incidente es 'critical': la
+    // efectiva nunca puede ser menor a la del incidente (src/domain/severity.js).
+    expect(detail.effectivePriority).toBe('critical');
   });
 
   it('recordAccess inserta y mapea la auditoría', async () => {
@@ -268,7 +309,11 @@ describe('EmergencyRepository.findPage', () => {
     const pool = createPool({
       query: async (sql, params) => {
         calls.push({ sql, params });
-        if (sql.includes('COUNT(*)')) return { rows: [{ total: 1 }] };
+        // "AS total" es único de la query de COUNT: la SELECT principal
+        // también tiene subqueries con COUNT(*) (para incident_report_count/
+        // incident_unique_citizens), así que `includes('COUNT(*)')` a solas
+        // matchearía las dos.
+        if (sql.includes('AS total')) return { rows: [{ total: 1 }] };
         return { rows: [{ id: 'e-1' }] };
       },
     });
@@ -293,6 +338,39 @@ describe('EmergencyRepository.findPage', () => {
     expect(selectCall.sql).toMatch(/WHERE/);
     expect(selectCall.sql).toMatch(/ASC/);
     expect(selectCall.sql).toMatch(/CASE e.severity/);
+    expect(selectCall.sql).toMatch(/CASE i.priority/);
+    expect(selectCall.sql).toMatch(/GREATEST\(/);
+    expect(selectCall.sql).toMatch(/LEFT JOIN incidents i ON i.id = e.incident_id/);
+    // sin incidente: incident null y effectivePriority = la propia severity
+    expect(result.emergencies[0].incident).toBeNull();
+    expect(result.emergencies[0].effectivePriority).toBe(result.emergencies[0].severity);
+  });
+
+  it('sortBy=priority ordena por LEAST(severity, incident.priority) y devuelve el incident embebido', async () => {
+    const pool = createPool({
+      query: async (sql) => (sql.includes('AS total')
+        ? { rows: [{ total: 1 }] }
+        : {
+          rows: [{
+            id: 'e-9',
+            severity: 'low',
+            incident_id: 'inc-9',
+            incident_priority: 'high',
+            incident_score: 55,
+            incident_report_count: 4,
+            incident_unique_citizens: 3,
+            incident_reason_codes: ['PROXIMITY_CLUSTER'],
+          }],
+        }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const { emergencies } = await repo.findPage({ ...baseArgs, sortBy: 'priority' });
+
+    expect(emergencies[0].incident).toEqual({
+      id: 'inc-9', priority: 'high', score: 55, reportCount: 4, uniqueCitizens: 3, reasonCodes: ['PROXIMITY_CLUSTER'],
+    });
+    expect(emergencies[0].effectivePriority).toBe('high');
   });
 
   it('sin filtros no agrega WHERE y usa DESC por defecto', async () => {
@@ -300,7 +378,7 @@ describe('EmergencyRepository.findPage', () => {
     const pool = createPool({
       query: async (sql, params) => {
         calls.push({ sql, params });
-        if (sql.includes('COUNT(*)')) return { rows: [{ total: 0 }] };
+        if (sql.includes('AS total')) return { rows: [{ total: 0 }] };
         return { rows: [] };
       },
     });

@@ -29,6 +29,7 @@ const options = {
       { name: 'Panic Button', description: 'Activación y consulta de botón de pánico' },
       { name: 'Emergencies', description: 'Listado, detalle y cambios de estado de emergencias' },
       { name: 'Officers', description: 'Catálogo de oficiales para asignación (dispatcher)' },
+      { name: 'Incidents', description: 'Resultado del motor de detección de incidentes (dispatcher)' },
     ],
     components: {
       securitySchemes: {
@@ -105,6 +106,100 @@ const options = {
             createdAt: { type: 'string', format: 'date-time' },
             updatedAt: { type: 'string', format: 'date-time' },
             closedAt: { type: 'string', format: 'date-time', nullable: true },
+            incident: {
+              allOf: [{ $ref: '#/components/schemas/IncidentSummary' }],
+              nullable: true,
+              description: 'Incidente al que fue agrupada esta emergencia (motor de detección de '
+                + 'incidentes, corre cada 60s), o null si todavía no fue agrupada a ninguno. '
+                + 'SOLO en la respuesta al dispatcher: un citizen nunca recibe este campo '
+                + '(no se filtra información operativa a quien reporta).',
+            },
+            effectivePriority: {
+              type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
+              example: 'critical',
+              description: 'Máximo entre severity y incident.priority (nunca menor a severity). '
+                + 'SOLO en la respuesta al dispatcher, igual que incident.',
+            },
+          },
+        },
+        IncidentSummary: {
+          type: 'object',
+          description: 'Incidente embebido en Emergency.incident (GET /api/emergencies).',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            priority: {
+              type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
+              example: 'critical',
+            },
+            score: { type: 'number', example: 87, nullable: true },
+            reportCount: { type: 'integer', example: 3, description: 'Emergencias vinculadas a este incidente (todas, no solo activas)' },
+            uniqueCitizens: { type: 'integer', example: 3 },
+            reasonCodes: {
+              type: 'array',
+              items: { type: 'string' },
+              example: ['MULTI_REPORT_THRESHOLD', 'PROXIMITY_CLUSTER'],
+              nullable: true,
+            },
+          },
+        },
+        Incident: {
+          type: 'object',
+          description: 'Incidente listado en GET /api/incidents.',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            emergencyType: {
+              type: 'string',
+              enum: [...EMERGENCY_TYPES],
+              nullable: true,
+            },
+            priority: {
+              type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
+              nullable: true,
+            },
+            score: { type: 'number', nullable: true },
+            reasonCodes: { type: 'array', items: { type: 'string' }, nullable: true },
+            factors: { type: 'object', nullable: true },
+            algorithmVersion: { type: 'string', nullable: true, example: 'rule-based-v1' },
+            emergencyCount: { type: 'integer', example: 3, description: 'Cantidad de emergencias vinculadas a este incidente' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        IncidentMember: {
+          type: 'object',
+          description: 'Emergencia miembro de un incidente, SIN coordenadas (GET /api/incidents/{id}).',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            status: { type: 'string', enum: [...EMERGENCY_STATUSES] },
+            emergencyType: { type: 'string', enum: [...EMERGENCY_TYPES] },
+            createdAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        IncidentDetail: {
+          description: 'Incidente con sus emergencias miembro (GET /api/incidents/{id}).',
+          allOf: [
+            { $ref: '#/components/schemas/Incident' },
+            {
+              type: 'object',
+              properties: {
+                members: {
+                  type: 'array',
+                  items: { $ref: '#/components/schemas/IncidentMember' },
+                },
+              },
+            },
+          ],
+        },
+        Pagination: {
+          type: 'object',
+          properties: {
+            page: { type: 'integer', example: 1 },
+            limit: { type: 'integer', example: 20 },
+            total: { type: 'integer', example: 42 },
+            totalPages: { type: 'integer', example: 3 },
           },
         },
         StatusHistoryEntry: {

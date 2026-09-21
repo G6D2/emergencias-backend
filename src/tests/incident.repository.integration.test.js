@@ -86,21 +86,81 @@ describe('IncidentRepository (integración contra Postgres real)', () => {
     expect(foundSecond.incidentId).toBe(incident.id);
   });
 
-  it('findActive() devuelve un incidente con una emergencia miembro PENDING y no uno cuyas emergencias están todas CLOSED', async () => {
-    const activeIncident = await incidentRepository.create({ emergencyType: 'PANICO' });
-    const pendingEmergency = buildEmergency();
-    await emergencyRepository.create(pendingEmergency);
-    await emergencyRepository.setIncidentId(pendingEmergency.id, activeIncident.id);
+  describe('findActivePage', () => {
+    it('devuelve un incidente con una emergencia miembro PENDING y no uno cuyas emergencias están todas CLOSED', async () => {
+      const activeIncident = await incidentRepository.create({ emergencyType: 'PANICO' });
+      const pendingEmergency = buildEmergency();
+      await emergencyRepository.create(pendingEmergency);
+      await emergencyRepository.setIncidentId(pendingEmergency.id, activeIncident.id);
 
-    const closedIncident = await incidentRepository.create({ emergencyType: 'PANICO' });
-    const closedEmergency = buildEmergency({ status: 'CLOSED' });
-    await emergencyRepository.create(closedEmergency);
-    await emergencyRepository.setIncidentId(closedEmergency.id, closedIncident.id);
+      const closedIncident = await incidentRepository.create({ emergencyType: 'PANICO' });
+      const closedEmergency = buildEmergency({ status: 'CLOSED' });
+      await emergencyRepository.create(closedEmergency);
+      await emergencyRepository.setIncidentId(closedEmergency.id, closedIncident.id);
 
-    const active = await incidentRepository.findActive();
+      const { incidents } = await incidentRepository.findActivePage({ page: 1, limit: 50 });
 
-    expect(active.some((row) => row.id === activeIncident.id)).toBe(true);
-    expect(active.some((row) => row.id === closedIncident.id)).toBe(false);
+      expect(incidents.some((row) => row.id === activeIncident.id)).toBe(true);
+      expect(incidents.some((row) => row.id === closedIncident.id)).toBe(false);
+    });
+
+    it('emergencyCount cuenta TODAS las emergencias vinculadas (activas y terminales)', async () => {
+      const incident = await incidentRepository.create({ emergencyType: 'INCENDIO' });
+      const active = buildEmergency();
+      const closed = buildEmergency({ status: 'CLOSED' });
+      await emergencyRepository.create(active);
+      await emergencyRepository.create(closed);
+      await emergencyRepository.setIncidentId(active.id, incident.id);
+      await emergencyRepository.setIncidentId(closed.id, incident.id);
+
+      const { incidents } = await incidentRepository.findActivePage({ page: 1, limit: 50 });
+
+      const found = incidents.find((row) => row.id === incident.id);
+      expect(found.emergencyCount).toBe(2);
+    });
+
+    it('pagina correctamente (limit=1 devuelve 1 fila, total refleja todos los activos)', async () => {
+      const first = await incidentRepository.create({ emergencyType: 'MEDICA' });
+      const second = await incidentRepository.create({ emergencyType: 'MEDICA' });
+      for (const incident of [first, second]) {
+        const emergency = buildEmergency();
+        await emergencyRepository.create(emergency);
+        await emergencyRepository.setIncidentId(emergency.id, incident.id);
+      }
+
+      const page1 = await incidentRepository.findActivePage({ page: 1, limit: 1 });
+      expect(page1.incidents).toHaveLength(1);
+      expect(page1.total).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('findByIdWithMembers', () => {
+    it('devuelve el incidente con sus emergencias miembro, sin coordenadas', async () => {
+      const incident = await incidentRepository.create({ emergencyType: 'INCENDIO', priority: 'high' });
+      const first = buildEmergency({ emergencyType: 'INCENDIO' });
+      const second = buildEmergency({ status: 'VALIDATED', emergencyType: 'INCENDIO' });
+      await emergencyRepository.create(first);
+      await emergencyRepository.create(second);
+      await emergencyRepository.setIncidentId(first.id, incident.id);
+      await emergencyRepository.setIncidentId(second.id, incident.id);
+
+      const detail = await incidentRepository.findByIdWithMembers(incident.id);
+
+      expect(detail.id).toBe(incident.id);
+      expect(detail.priority).toBe('high');
+      expect(detail.members).toHaveLength(2);
+      const byId = new Map(detail.members.map((m) => [m.id, m]));
+      expect(byId.get(first.id)).toMatchObject({ status: 'PENDING', emergencyType: 'INCENDIO' });
+      expect(byId.get(second.id)).toMatchObject({ status: 'VALIDATED', emergencyType: 'INCENDIO' });
+      detail.members.forEach((member) => {
+        expect(member).not.toHaveProperty('latitude');
+        expect(member).not.toHaveProperty('longitude');
+      });
+    });
+
+    it('devuelve null si el incidente no existe', async () => {
+      expect(await incidentRepository.findByIdWithMembers(randomUUID())).toBeNull();
+    });
   });
 
   describe('applyScoringDecision', () => {

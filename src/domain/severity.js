@@ -39,6 +39,24 @@ function severityForType(type) {
   return SEVERITY_BY_TYPE[type] || 'low';
 }
 
+/**
+ * Prioridad efectiva de una emergencia (tarea #63/visibilidad del motor de
+ * incidentes): el máximo entre su severity individual y la priority del
+ * incidente al que pertenece, si pertenece a alguno. Mismo criterio que
+ * risk-engine.applyPriorityInvariant (branch feature/incident-detection-rule-based:
+ * la prioridad agrupada nunca puede bajar la de una emergencia individual),
+ * pero sin lanzar si incidentPriority es null/undefined: acá "todavía sin
+ * incidente" es el caso normal (la mayoría de las emergencias), no un dato
+ * corrupto.
+ * @param {'low'|'medium'|'high'|'critical'} severity
+ * @param {'low'|'medium'|'high'|'critical'|null|undefined} incidentPriority
+ * @returns {'low'|'medium'|'high'|'critical'}
+ */
+function effectivePriority(severity, incidentPriority) {
+  if (!incidentPriority || !SEVERITY_LEVELS.includes(incidentPriority)) return severity;
+  return compareSeverity(incidentPriority, severity) > 0 ? incidentPriority : severity;
+}
+
 module.exports = {
   SEVERITY_LEVELS,
   isValidSeverity,
@@ -46,4 +64,5 @@ module.exports = {
   compareSeverity,
   SEVERITY_BY_TYPE,
   severityForType,
+  effectivePriority,
 };
