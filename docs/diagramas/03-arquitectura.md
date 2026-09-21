@@ -36,9 +36,9 @@ flowchart TB
         kw["Keep-warm (cron + job in-process)"]
     end
 
-    sonar["SonarCloud<br/>(analisis estatico, opcional)"]:::optional
+    sonar["SonarCloud<br/>(analisis estatico, activo en ambos repos)"]:::optional
 
-    backup["Stack de backup en otra cuenta Render<br/>contra la misma Neon"]:::unverified
+    backup["Backend backup (otra cuenta Render)<br/>activate-backup.yml, manual"]:::backup
 
     ciudadano -->|HTTPS| bff
     bff -->|"Bearer JWT (cookie httpOnly server-side) + retry 502/503/504"| api
@@ -54,30 +54,37 @@ flowchart TB
     kw -->|"GET /health, GET /api/warmup"| api
     kw -.-> rfe
     ci -.-> sonar
-    backup -.->|"no confirmado en el repo, ver nota"| neon
+    backup -.->|"workflow_dispatch manual, deploy hook + espera /health"| neon
 
     classDef actor fill:#e7f5ff,stroke:#1971c2,color:#0b3d91,stroke-width:1.5px;
     classDef planned fill:#f1f3f5,stroke:#adb5bd,color:#495057,stroke-width:1px,stroke-dasharray: 4 3;
     classDef optional fill:#fff3bf,stroke:#e8a33d,color:#5c3d00,stroke-width:1px;
-    classDef unverified fill:#ffe3e3,stroke:#e03131,color:#7d1a1a,stroke-width:1px,stroke-dasharray: 2 2;
+    classDef backup fill:#e5dbff,stroke:#7048e8,color:#3c1361,stroke-width:1px,stroke-dasharray: 3 2;
 ```
 
-> **Nota sobre el stack de backup:** no se encontró en `emergencias-backend`, `Frontend` ni
-> `ADRs` ningún workflow, `render.yaml` o mención de un segundo despliegue de respaldo en otra
-> cuenta de Render. Se incluye el nodo porque la consigna de este documento lo pide, pero queda
-> marcado como **no verificado en el código** — ver la sección de inconsistencias en el resumen
-> de esta tarea.
+> **Nota sobre el stack de backup:** existe de verdad, a diferencia de lo que decía la versión
+> anterior de este documento. `.github/workflows/activate-backup.yml` (mergeado en el PR #38) es
+> un workflow manual (`workflow_dispatch`, sin cron ni trigger automático): dispara el deploy
+> hook de un segundo servicio backend en otra cuenta de Render (secret
+> `RENDER_DEPLOY_HOOK_URL_BACKUP`) y espera hasta 6 minutos a que su `/health` responda 200
+> (variable de repo `BACKUP_BACKEND_URL`). Ni la URL del servicio backup ni su propio
+> `DATABASE_URL` están versionados en este repo (se configuran en el dashboard de Render); que
+> apunte a la misma Neon primaria es una decisión operativa del equipo, no algo que se pueda leer
+> en este código — se documenta igual porque así lo confirmó quien armó el stack. No hay
+> failover automático: alguien tiene que correr el workflow a mano.
 
 ## Componentes internos del backend
 
 ```mermaid
 flowchart TB
-    routes["routes<br/>panic-button, emergencies, officer, user, outbox, dev-auth"]
+    routes["routes<br/>panic-button, emergencies, officer, user, outbox, dev-auth, incidents"]
     auth["auth<br/>authenticate, authorize, jwt-verifier, groups, setup"]
-    controllers["controllers<br/>panic-button, emergency, officer, user"]
+    controllers["controllers<br/>panic-button, emergency, officer, user, incident"]
     domain["domain<br/>emergency-status, emergency-type, severity"]
-    repositories["repositories<br/>emergency, officer"]
+    incidentDomain["domain · motor de incidentes<br/>rule-based-grouper (Union-Find), risk-engine, incident-detector"]:::incident
+    repositories["repositories<br/>emergency, officer, incident"]
     services["services<br/>emergency-events, kafka.service, outbox-publisher"]
+    detectionJob["incident-detection-job<br/>cada 60s, pg_try_advisory_lock"]:::incident
     security["security<br/>location-crypto, location-retention, cors, rate-limit, secure-log, security-headers"]
     jobs["jobs / procesos en background<br/>OutboxPublisher.start(), location-retention, keep-warm"]
     db[("Neon Postgres")]
@@ -95,8 +102,22 @@ flowchart TB
     jobs --> services
     services --> kafkaC
 
+    detectionJob --> incidentDomain
+    detectionJob -->|"findRecentByType"| repositories
+    detectionJob -->|"create / addMember / applyScoringDecision"| repositories
+    detectionJob -.->|"pg_try_advisory_lock(875312047)"| db
+
     classDef planned fill:#f1f3f5,stroke:#adb5bd,color:#495057,stroke-width:1px,stroke-dasharray: 4 3;
+    classDef incident fill:#d3f9d8,stroke:#2f9e44,color:#1b4332,stroke-width:1.5px;
 ```
+
+> **Sobre `IncidentDetectionStrategy`:** el ADR de incidentes con IA (`ADRs-Incidentes-IA-...`)
+> propone una interfaz `IncidentDetectionStrategy` con `DbscanGrouper` como estrategia primaria
+> (ML) y `RuleBasedGrouper` como fallback determinístico. **Esa interfaz no existe todavía en
+> este repo**: `src/domain/incident-detector.js` importa `rule-based-grouper.js` directo
+> (`require('./rule-based-grouper')`), sin ninguna capa de estrategia intercambiable ni
+> `DbscanGrouper`. La interfaz y el agrupador por ML son arquitectura objetivo (ADR propuesto,
+> no aceptado), no el estado actual del código.
 
 ## Leyenda
 
@@ -106,13 +127,14 @@ flowchart TB
 | Línea punteada | Deshabilitado, previsto o de respaldo (no es el camino feliz actual) |
 | `Kafka` | El código de producer existe (`src/services/kafka.service.js`) pero `render.yaml` fija `KAFKA_ENABLED=false`: los eventos quedan en `outbox_events` sin publicarse (ver `05-secuencias.md`) |
 | `IdP Grupo 2` | Previsto: hoy corre `AUTH_MODE=local` (JWT propio con el mismo contrato de claims que usaría el IdP real, ver `src/auth/setup.js`) |
-| SonarCloud | Corre solo si existe el secret `SONAR_TOKEN` (repo privado); `continue-on-error: true`, no bloquea el pipeline |
-| Stack de backup | Incluido por la consigna de este documento; no se encontró evidencia en el repositorio (ver nota arriba) |
+| SonarCloud | Corre en los dos repos (secret `SONAR_TOKEN` cargado en backend y, desde el 21/09, en `Frontend`); sigue siendo `continue-on-error: true`, no bloquea el pipeline |
+| Stack de backup | Confirmado en el código por `.github/workflows/activate-backup.yml` (PR #38); manual, sin failover automático (ver nota arriba) |
+| `IncidentDetectionStrategy` | No existe: `incident-detector.js` llama directo a `rule-based-grouper.js`. Arquitectura objetivo de un ADR propuesto, no el código actual |
 
 ## Fuente en el código
 
-- `src/app.js` (montaje de rutas y middlewares), `src/index.js` (composition root)
-- `src/routes/*.js`, `src/controllers/*.js`, `src/domain/*.js`, `src/repositories/*.js`, `src/services/*.js`, `src/security/*.js`, `src/auth/*.js`
+- `src/app.js` (montaje de rutas y middlewares), `src/index.js` (composition root, arranca `startIncidentDetectionJob`)
+- `src/routes/*.js` (incluido `incidents.routes.js`), `src/controllers/*.js` (incluido `incident.controller.js`), `src/domain/*.js` (incluidos `rule-based-grouper.js`, `risk-engine.js`, `incident-detector.js`), `src/repositories/*.js` (incluido `incident.repository.js`), `src/services/*.js` (incluido `incident-detection-job.js`), `src/security/*.js`, `src/auth/*.js`
 - `render.yaml` (backend), `Frontend/render.yaml`, `Frontend/app/api/backend/[...path]/route.js`, `Frontend/app/api/geocode/route.js`, `Frontend/lib/geocode-server.js`
-- `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/workflows/keep-warm.yml` (backend) y sus equivalentes en `Frontend/.github/workflows/`
+- `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/workflows/keep-warm.yml`, `.github/workflows/activate-backup.yml` (backend) y sus equivalentes en `Frontend/.github/workflows/`
 - `sonar-project.properties` (backend y frontend)

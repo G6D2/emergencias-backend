@@ -41,6 +41,14 @@ flowchart TB
         kwCron --> kwPing
     end
 
+    subgraph backendBackup["emergencias-backend · Activate backup (activate-backup.yml)"]
+        direction TB
+        abTrigger["on: workflow_dispatch (manual, sin cron)"]
+        abHook["curl deploy hook del backend backup<br/>secret RENDER_DEPLOY_HOOK_URL_BACKUP"]
+        abWait["polling /health hasta 200<br/>var BACKUP_BACKEND_URL, 36 intentos x 10s"]
+        abTrigger --> abHook --> abWait
+    end
+
     subgraph frontendCI["Frontend · CI (ci.yml)"]
         direction TB
         fTrigger["on: pull_request -> main, push a main"]
@@ -72,10 +80,11 @@ flowchart TB
     bDeploy -.->|"despierta al front"| kwPing
     bMigrate -->|"mismo Neon"| sharedDb[("Neon Postgres")]
 
-    activateBackup["Job de activate-backup"]:::missing
-    activateBackup -.->|"no existe ningún workflow así en el repo"| backendCD
+    backupSvc["Backend backup<br/>(otra cuenta Render)"]:::backup
+    abWait -.->|"health check post-deploy"| backupSvc
+    abHook -.->|"mismo Neon (config fuera de este repo)"| sharedDb
 
-    classDef missing fill:#ffe3e3,stroke:#e03131,color:#7d1a1a,stroke-width:1px,stroke-dasharray: 2 2;
+    classDef backup fill:#e5dbff,stroke:#7048e8,color:#3c1361,stroke-width:1px,stroke-dasharray: 3 2;
 ```
 
 ## Gates que bloquean un merge
@@ -87,23 +96,31 @@ flowchart TB
 | Migraciones aplican limpio contra Postgres efímero | `lint-and-test` (solo backend, servicio `postgres:15-alpine`) | Falla el job antes de llegar a los tests |
 | Cobertura de tests **80%** en statements/branches/functions/lines | `jest coverageThreshold` (back) / `vitest coverage.thresholds` (front) | El comando de test sale con código de error, el job falla |
 | Tests de integración | `lint-and-test` (`npm run test:integration` / `vitest run --config vitest.integration.config.mjs`) | Falla el job |
-| SonarCloud | `lint-and-test`, paso final | **No bloquea**: `continue-on-error: true` y solo corre si hay `SONAR_TOKEN` |
+| SonarCloud | `lint-and-test`, paso final | **No bloquea**: `continue-on-error: true`; corre porque `SONAR_TOKEN` está cargado como secret en **ambos** repos (backend desde el inicio, `Frontend` desde el 21/09) |
 
 ## CD
 
 | Repo | Trigger | Pasos | Nota |
 |---|---|---|---|
-| `emergencias-backend` | `push` a `main` | `npm run migrate` (Flyway contra `DATABASE_URL` secret) → deploy hook de Render | Sin `FLYWAY_BASELINE_VERSION` a propósito (ver comentario en `cd.yml`): una base nueva necesita correr V1..V13 completas |
+| `emergencias-backend` | `push` a `main` | `npm run migrate` (Flyway contra `DATABASE_URL` secret) → deploy hook de Render | Sin `FLYWAY_BASELINE_VERSION` a propósito (ver comentario en `cd.yml`): una base nueva necesita correr V1..V14 completas |
 | `Frontend` | `push` a `main` | Deploy hook de Render únicamente | No corre migraciones (no tiene schema propio) |
 
-Ninguno de los dos `cd.yml` tiene un job de `activate-backup` ni ningún paso que apunte a una
-segunda cuenta de Render: se buscó explícitamente y no aparece en ningún workflow de ninguno de
-los tres repos clonados (`emergencias-backend`, `Frontend`, `ADRs`). Se deja marcado en el
-diagrama como **no encontrado**, no como "deshabilitado".
+## Failover manual: `activate-backup.yml`
+
+A diferencia de `ci.yml`/`cd.yml`, **no** dispara con `push`: es `workflow_dispatch` puro, para
+correrlo a mano desde Actions cuando el backend primario está caído. Dos pasos con `curl`: (1)
+dispara el deploy hook del servicio backup (secret `RENDER_DEPLOY_HOOK_URL_BACKUP`) y (2) hace
+polling de su `/health` (variable de repo `BACKUP_BACKEND_URL`) hasta 36 intentos de 10s (6
+minutos); si no responde 200 en ese tiempo, el job falla. No migra nada (asume que la base ya
+está al día porque el `cd.yml` normal corrió `npm run migrate` contra la misma Neon) y no
+reemplaza automáticamente al servicio primario en el DNS/URL pública: quien lo corre tiene que
+avisar/redirigir tráfico a mano. Mergeado en el PR #38; el equipo tiene un workflow equivalente
+en el repo `Frontend` (PR #36), no verificado en este clon porque este documento vive en
+`emergencias-backend`.
 
 ## Fuente en el código
 
-- `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/workflows/keep-warm.yml` (`emergencias-backend`)
+- `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/workflows/keep-warm.yml`, `.github/workflows/activate-backup.yml` (`emergencias-backend`)
 - `Frontend/.github/workflows/ci.yml`, `Frontend/.github/workflows/cd.yml`
 - `package.json` (`jest.coverageThreshold`) y `Frontend/vitest.config.mjs` (`coverage.thresholds`)
 - `sonar-project.properties` (backend y frontend)

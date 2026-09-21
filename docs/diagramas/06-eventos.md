@@ -13,16 +13,18 @@ flowchart LR
         t4["PATCH .../assign"]
         t5["PATCH .../cancel"]
         t6["PATCH .../close"]
+        t7["incident-detection-job<br/>cada 60s, si cambió priority"]:::incident
     end
 
     subgraph builders["src/services/emergency-events.js"]
         e1["buildEmergencyCreatedEvent<br/>type: EmergenciaCreada"]
         e2["buildEmergencyStatusUpdatedEvent<br/>type: EmergenciaEstadoActualizado"]
         e3["buildEmergencyClosedEvent<br/>type: EmergenciaCerrada"]
+        e4["buildEmergencyPrioritizedEvent<br/>type: EmergenciaPriorizada"]:::incident
     end
 
     outbox[("outbox_events<br/>(misma transacción SQL)")]
-    pub["OutboxPublisher<br/>(poll 5000ms)"]
+    pub["OutboxPublisher<br/>(poll 5000ms, key: null)"]
     kafka["Kafka<br/>KAFKA_ENABLED=false en prod hoy"]:::planned
     analitica["Analítica / otros módulos<br/>(previsto, sin consumer hoy)"]:::planned
 
@@ -32,16 +34,19 @@ flowchart LR
     t4 --> e2
     t5 --> e2
     t6 --> e3
+    t7 --> e4
 
     e1 -->|"topic: emergencias.boton-panico"| outbox
     e2 -->|"topic: emergencias.estado-actualizado"| outbox
     e3 -->|"topic: emergencias.cerrada"| outbox
+    e4 -->|"topic: emergencias.priorizada"| outbox
 
     outbox --> pub
     pub -.->|"deshabilitado: eventos quedan PENDING"| kafka
     kafka -.-> analitica
 
     classDef planned fill:#f1f3f5,stroke:#adb5bd,color:#495057,stroke-width:1px,stroke-dasharray: 4 3;
+    classDef incident fill:#d3f9d8,stroke:#2f9e44,color:#1b4332,stroke-width:1.5px;
 ```
 
 ## Eventos publicados hoy
@@ -51,9 +56,20 @@ flowchart LR
 | `EmergenciaCreada` | `TOPIC_PANIC_BUTTON` → `emergencias.boton-panico` | Al crear una emergencia vía `POST /api/panic-button` | `id, correlationId, userId, description, severity, status, assignedOfficerId, emergencyType, createdAt, updatedAt` |
 | `EmergenciaEstadoActualizado` | `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO` → `emergencias.estado-actualizado` | En `validate`, `discard`, `assign` y `cancel` (los 4 endpoints reusan el mismo evento) | `id, correlationId, previousStatus, newStatus, actor, reason, timestamp` |
 | `EmergenciaCerrada` | `TOPIC_EMERGENCIA_CERRADA` → `emergencias.cerrada` | En `PATCH .../close` | `id, correlationId, actor, closedAt` |
+| `EmergenciaPriorizada` | `TOPIC_EMERGENCIA_PRIORIZADA` → `emergencias.priorizada` | Cada 60s, dentro de `incident-detection-job.js`, **solo si la `priority` del incidente cambió** respecto a la corrida anterior (`IncidentRepository.applyScoringDecision`); se dispara una vez por cada emergencia miembro del incidente | `id, correlationId, incidentId, priorityIndividual, incidentPriority, priority (finalPriority del miembro), score, reasonCodes, algorithmVersion` |
 
 Cada evento lleva además, **fuera de `data`**: `type`, `eventId` (`randomUUID()`, generado en
 `insertOutboxEvent`) y `correlationId` (duplicado: está en la raíz **y** dentro de `data`).
+
+**El módulo hoy solo publica: no hay ningún consumer de Kafka en este repo** (`kafka.service.js`
+únicamente crea un `producer`, nunca un `consumer`). Todos los mensajes salen con `key: null`
+(`producer.send({ topic, messages: [{ key: null, value }] })` en `KafkaService.publishEvent`):
+sin partition key, Kafka no puede garantizar orden entre eventos de la misma emergencia si caen
+en particiones distintas. A eso se suma que `OutboxPublisher` reintenta con **backoff
+exponencial** (`markFailed`, hasta `OUTBOX_MAX_ATTEMPTS`) cuando falla un envío: un evento viejo
+que reintenta puede publicarse después que uno más nuevo del mismo `correlationId`. Ningún
+consumidor previsto (Analítica u otro) debería asumir que el orden de llegada coincide con el
+orden de negocio.
 
 ## Brecha contra el contrato de Analítica (`tableros-analitica.md`)
 
@@ -69,15 +85,17 @@ actual no lo respeta:
 | `metadata.source` | No existe en ningún evento |
 | `metadata.version` | No existe en ningún evento |
 | `data.correlationId` | Sí existe (además duplicado en la raíz del payload) |
-| `EmergenciaPriorizada` | No se publica: no hay motor de priorización integrado (ver `01-casos-de-uso.md`, CU-04 parcial) |
+| `EmergenciaPriorizada` | **Se publica** desde los PRs #36/#39/#41 (ver `01-casos-de-uso.md`, CU-04 implementado), pero solo cuando cambia la `priority` del incidente — no hay un evento por cada corrida del job, y su payload tampoco tiene el envelope `metadata.*` que pide Analítica (mismas brechas que los otros tres eventos) |
 | `EmergenciaDespachada` | No se publica como tipo propio: `assign` reusa `EmergenciaEstadoActualizado` con `reason: "Assigned officer <id>"` en vez de un evento dedicado |
 | Entrega real al bus | `KAFKA_ENABLED=false` en `render.yaml` de producción: ningún evento sale de `outbox_events` hoy, así que Analítica no podría consumir nada aunque el contrato estuviera alineado (ver `05-secuencias.md`, flujo c) |
 
 ## Fuente en el código
 
-- `src/services/emergency-events.js` (builders de los 3 eventos)
+- `src/services/emergency-events.js` (builders de los 4 eventos, incluido `buildEmergencyPrioritizedEvent`)
 - `src/repositories/emergency.repository.js` (`insertOutboxEvent` — genera `eventId`, arma el `INSERT` a `outbox_events`)
-- `src/services/outbox-publisher.js`, `src/services/kafka.service.js`
+- `src/repositories/incident.repository.js` (`applyScoringDecision` — decide si notifica comparando `previousPriority` vs `priority`)
+- `src/services/incident-detection-job.js` (dispara la decisión cada 60s)
+- `src/services/outbox-publisher.js`, `src/services/kafka.service.js` (`publishEvent` — `key: null`, sin consumer)
 - `src/controllers/panic-button.controller.js`, `src/controllers/emergency.controller.js` (tópicos vía `process.env.TOPIC_*`)
-- `render.yaml` (`KAFKA_ENABLED`, `TOPIC_*`)
+- `render.yaml` (`KAFKA_ENABLED`, `TOPIC_PANIC_BUTTON`, `TOPIC_EMERGENCIA_CERRADA`); `.env.example` trae además `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO` y `TOPIC_EMERGENCIA_PRIORIZADA`, que en producción no están seteadas y caen al default hardcodeado en cada builder
 - Documento de producto: `tableros-analitica.md` (sección 1.2 y 3), `Emergencias - Roadmap y Historias de Usuario.md` (contrato de eventos del bus)

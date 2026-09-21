@@ -25,7 +25,7 @@ flowchart LR
     end
 
     subgraph epica2["Épica 2 · Priorización y despacho"]
-        cu04["CU-04 Priorizar automáticamente"]:::partial
+        cu04["CU-04 Priorizar automáticamente"]:::done
         cu05["CU-05 Validar / descartar emergencia"]:::done
         cu06["CU-06 Asignar a un oficial"]:::done
         hu07["HU-07 Dashboard del dispatcher"]:::done
@@ -84,7 +84,7 @@ flowchart LR
 | CU-02 Reportar incidente urbano con detalle | Parcial | Mismo endpoint `POST /api/panic-button` con `emergencyType` + `address` (`app/lib/api.js#reportIncident` en el front). No hay carga de foto (el backend no tiene endpoint ni columna para adjuntos) |
 | CU-03 Recibir emergencia desde otro módulo | Planificado | HU-13, Sprint 3-6 / Hito 2. No hay consumer de Kafka en `src/services/kafka.service.js` (solo producer) |
 | HU-03 Cancelar asistencia propia | Implementado | `PATCH /api/emergencies/:id/cancel` (`requireCitizen` + `canCancelEmergency`, solo dueño) |
-| CU-04 Priorizar automáticamente | Parcial | La severidad se **deriva** de `emergencyType` con una tabla fija (`src/domain/severity.js#severityForType`), no hay motor de reglas por ubicación/cantidad de reportes/hora. La tabla `incidents` (migración V12) existe como destino de un futuro Risk Engine (rama `feature/incident-detection-rule-based`, ver ADR "detectar incidentes y priorizar con motor determinístico"), pero ningún código de este repo escribe filas ahí |
+| CU-04 Priorizar automáticamente | Implementado | La severidad base se deriva de `emergencyType` (`src/domain/severity.js#severityForType`) y desde los PRs #36/#39/#41 hay un motor de incidentes real corriendo cada 60s (`src/services/incident-detection-job.js`): agrupa emergencias del mismo tipo cercanas entre sí (`RuleBasedGrouper`, Union-Find + Haversine, radio 300m) y calcula un score/prioridad determinístico (`RiskEngine`) que nunca puede bajar la severity individual (`applyPriorityInvariant`). El resultado se expone en `GET /api/incidents`, `GET /api/incidents/:id` y como `incident`/`effectivePriority` en el listado/detalle de emergencias del dispatcher (`sortBy=priority` ordena por `effectivePriority`). **Sigue planificado**: el override manual de prioridad por el dispatcher (`overridePriority`, stub 501 en el front) — hoy la prioridad solo la fija el motor automático |
 | CU-05 Validar / descartar emergencia | Implementado | `PATCH /api/emergencies/:id/validate` y `.../discard` (`requireDispatcher`) |
 | CU-06 Asignar a un oficial | Implementado | `PATCH /api/emergencies/:id/assign` + catálogo `GET /api/officers` (`src/repositories/officer.repository.js`) |
 | HU-07 Dashboard del dispatcher | Implementado | `DispatcherView` (front) hace polling de `GET /api/emergencies` cada 5 s (`POLLING_INTERVAL_MS`); no hay push/WebSocket |
@@ -97,6 +97,8 @@ flowchart LR
 
 - `src/routes/panic-button.routes.js`, `src/routes/emergencies.routes.js`, `src/routes/officer.routes.js`, `src/routes/user.routes.js`, `src/routes/outbox.routes.js`, `src/routes/dev-auth.routes.js`
 - `src/auth/groups.js`, `src/auth/authorize.js` (roles `citizen`/`dispatcher`, sin `officer`)
-- `src/domain/severity.js`, `db/migrations/V12__add_incidents_table.sql`
+- `src/domain/severity.js`, `db/migrations/V12__add_incidents_table.sql`, `db/migrations/V14__add_incident_factors.sql`
+- `src/domain/rule-based-grouper.js`, `src/domain/risk-engine.js`, `src/domain/incident-detector.js`, `src/services/incident-detection-job.js`
+- `src/repositories/incident.repository.js`, `src/routes/incidents.routes.js`, `src/controllers/incident.controller.js`
 - `app/lib/api.js` (`reportIncident`, stubs 501 `updateEmergencyStatus`/`addObservation`/`requestReinforcements`/`overridePriority`) en el repo `Frontend`
 - Documento de producto: `Grupo 6 - Emergencias - Casos de Uso.md`, `Emergencias - Roadmap y Historias de Usuario.md`

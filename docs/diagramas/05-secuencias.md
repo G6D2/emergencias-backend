@@ -130,6 +130,49 @@ sequenceDiagram
     end
 ```
 
+## d) Job de detección de incidentes (cada 60s)
+
+```mermaid
+sequenceDiagram
+    participant Job as IncidentDetectionJob
+    participant DB as Neon Postgres
+    participant Rules as RuleBasedGrouper + RiskEngine
+    participant Repo as IncidentRepository
+
+    loop cada 60000ms (INCIDENT_DETECTION_INTERVAL_MS)
+        Job->>DB: pg_try_advisory_lock(875312047) en conexión dedicada
+        alt lock ocupado por otra instancia
+            DB-->>Job: locked = false
+            Note over Job: se saltea esta corrida, hay otra en 60s
+        else lock libre
+            DB-->>Job: locked = true
+            loop por cada emergencyType del catálogo
+                Job->>DB: findRecentByType(emergencyType, since = now - 15min)
+                DB-->>Job: candidatos con lat/lng ya descifrados
+                Job->>Rules: groupNearbyEmergencies (Union-Find, radio 300m, min 2 ciudadanos)
+                Rules-->>Job: grupos válidos por componente conexa
+                Job->>Rules: calculateIncidentScore + scoreToPriority
+                Rules-->>Job: score, reasonCodes, priority del incidente
+                Job->>Rules: applyPriorityInvariant(severity individual, priority incidente)
+                Rules-->>Job: finalPriority por miembro, nunca por debajo de su severity
+                alt grupo con incidentes previos distintos entre sí
+                    Note over Job: AMBIGUOUS_EXISTING_INCIDENTS, se descarta el grupo
+                else grupo consistente
+                    Job->>Repo: create() si es incidente nuevo, o addMember() a uno existente
+                    Job->>Repo: applyScoringDecision(incidentId, factors, score, priority)
+                    Repo->>DB: BEGIN, SELECT priority FOR UPDATE, UPDATE incidents, COMMIT
+                    alt priority cambió respecto a la anterior
+                        Repo->>DB: INSERT outbox_events (EmergenciaPriorizada) por cada miembro
+                    else priority sin cambios
+                        Note over Repo: no se publica evento, evita ruido en cada corrida
+                    end
+                end
+            end
+            Job->>DB: pg_advisory_unlock(875312047)
+        end
+    end
+```
+
 ## Leyenda
 
 | Elemento | Notas |
@@ -138,8 +181,12 @@ sequenceDiagram
 | `fetchBackend` | Reintenta 502/503/504 hasta 6 veces (~24s) porque Render (free) duerme el backend tras 15 min sin tráfico |
 | Outbox transaccional | El `INSERT` en `emergencies`/`emergency_status_history` y el `INSERT` en `outbox_events` van en la **misma transacción**: si Kafka está caído, la emergencia igual queda persistida |
 | `KAFKA_ENABLED=false` | Configurado así en `render.yaml` de producción hoy: el flujo (c) nunca llega a la rama que publica de verdad; los eventos se acumulan `PENDING` |
+| `address` en el SOS | La dirección legible que resuelve el front (`resolveEmergencyAddress`, geocode inverso con timeout 2.5s) viaja al backend en el mismo body que `latitude`/`longitude`, como campo `address` (≤200 caracteres); `normalizeAddress` la sanea y `locationCrypto.encryptLocation` la guarda **dentro del mismo blob cifrado** que la ubicación (ver `02-modelo-entidad-relacion.md`) |
+| Advisory lock del job (d) | `pg_try_advisory_lock` no bloquea: si otra instancia del backend (p. ej. el stack de backup activado) ya tiene el lock, esa corrida se saltea en vez de esperar — hay otra corrida 60s después |
+| `EmergenciaPriorizada` condicional | Solo se publica si `applyScoringDecision` detecta que la `priority` del incidente cambió respecto a la que tenía antes (`NULL` cuenta como distinta, así que la primera vez siempre notifica); si no cambió, la corrida no genera evento nuevo aunque haya recalculado el score |
 
 ## Fuente en el código
 
 - Front (`Frontend`): `app/(citizen)/inicio/InicioClient.js`, `app/lib/sosController.js`, `app/lib/api.js`, `app/lib/geocoding.js`, `lib/geocode-server.js`, `lib/backend-fetch.js`, `app/api/backend/[...path]/route.js`, `app/api/geocode/route.js`, `app/components/DispatcherView.js`, `app/(citizen)/mis-alertas/[id]/page.js`
-- Back (`emergencias-backend`): `src/controllers/panic-button.controller.js`, `src/controllers/emergency.controller.js`, `src/repositories/emergency.repository.js`, `src/services/outbox-publisher.js`, `src/services/kafka.service.js`, `src/services/emergency-events.js`
+- Back (`emergencias-backend`): `src/controllers/panic-button.controller.js` (`normalizeAddress`), `src/controllers/emergency.controller.js`, `src/repositories/emergency.repository.js`, `src/security/location-crypto.js`, `src/services/outbox-publisher.js`, `src/services/kafka.service.js`, `src/services/emergency-events.js`
+- Motor de incidentes (secuencia d): `src/services/incident-detection-job.js` (`withDetectionLock`, `DETECTION_LOCK_KEY`), `src/domain/incident-detector.js`, `src/domain/rule-based-grouper.js`, `src/domain/risk-engine.js`, `src/repositories/incident.repository.js` (`applyScoringDecision`)
