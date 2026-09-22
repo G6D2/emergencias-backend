@@ -94,9 +94,32 @@ flowchart TB
 | Título/descripción de PR no vacíos | `validate-pr` (back y front) | Falla el job, no bloquea el merge por sí solo pero dispara `notify-failure` |
 | Lint (`eslint`) | `lint-and-test` | Falla el job |
 | Migraciones aplican limpio contra Postgres efímero | `lint-and-test` (solo backend, servicio `postgres:15-alpine`) | Falla el job antes de llegar a los tests |
-| Cobertura de tests **80%** en statements/branches/functions/lines | `jest coverageThreshold` (back) / `vitest coverage.thresholds` (front) | El comando de test sale con código de error, el job falla |
+| Cobertura de tests **80%** (gate interno) en statements/branches/functions/lines | `jest coverageThreshold` (back) / `vitest coverage.thresholds` (front) | El comando de test sale con código de error, el job falla |
 | Tests de integración | `lint-and-test` (`npm run test:integration` / `vitest run --config vitest.integration.config.mjs`) | Falla el job |
 | SonarCloud | `lint-and-test`, paso final | **No bloquea**: `continue-on-error: true`; corre porque `SONAR_TOKEN` está cargado como secret en **ambos** repos (backend desde el inicio, `Frontend` desde el 21/09) |
+
+## Cobertura: requisito externo vs. gate interno vs. valor real
+
+Hay tres números distintos que se confunden al presentar el pipeline:
+
+| Nivel | Qué es | Valor |
+|---|---|---|
+| **Requisito externo (cátedra)** | Umbral mínimo pedido por la consigna | **60%** |
+| **Gate interno del pipeline** | Umbral que fuerza el fallo del job en CI | **80%** en statements/branches/functions/lines |
+| **Valor real medido** | Cobertura obtenida en el último run de CI sobre `main` | Ver tabla abajo |
+
+### Último CI exitoso sobre `main` (2026-09-21)
+
+| Repo | Statements | Branches | Functions | Lines | Run |
+|---|---|---|---|---|---|
+| `emergencias-backend` | **96.70 %** | **87.15 %** | **96.48 %** | **96.96 %** | [35665928569](https://github.com/G6D2/emergencias-backend/actions/runs/35665928569) |
+| `Frontend` | **96.12 %** | **89.59 %** | **95.18 %** | **98.43 %** | [35664969982](https://github.com/G6D2/Frontend/actions/runs/35664969982) |
+
+Los cuatro ejes están holgadamente por encima del gate interno (80%) y del requisito externo (60%). El eje más cerca del umbral en ambos repos es **branches**.
+
+> **Aviso de scope:** los porcentajes del frontend son sobre `lib/**` y `app/lib/**` únicamente (con exclusiones puntuales listadas en `vitest.config.mjs`). No cubren componentes ni páginas — ver detalle en la sección "Front CI" y en el `README.md` del frontend.
+
+Cuando la cátedra pregunte el porcentaje: mostrar los tres — pedido externo 60%, gate interno 80%, valor real actual (fila de la tabla). No presentar el 80% como si fuera el requisito de la cátedra, ni el valor real como si aplicara a toda la app.
 
 ## CD
 

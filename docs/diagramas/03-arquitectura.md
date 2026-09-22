@@ -31,7 +31,7 @@ flowchart TB
     end
 
     subgraph gha["GitHub Actions"]
-        ci["CI: lint + tests + cobertura 80% + Sonar"]
+        ci["CI: lint + tests + cobertura (gate interno 80%, catedra pide 60%) + Sonar"]
         cd["CD: migrate (Flyway) + deploy hook"]
         kw["Keep-warm (cron + job in-process)"]
     end
