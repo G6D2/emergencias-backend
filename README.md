@@ -569,6 +569,27 @@ npm test
 npm run test:integration
 ```
 
+### Estrategia por capa
+
+La prioridad de diseño está en la lógica de dominio (transiciones de estado, severidad, priorización, detección de incidentes), pero **también hay cobertura HTTP/API**: cada controller tiene su suite y las middlewares críticos (auth, authorize, cors, rate-limit, error handler) están testeados en aislamiento. Desglose:
+
+| Capa | Archivos en `src/tests/` | Qué prueban |
+|---|---|---|
+| **Controllers / API** | `auth.test.js`, `auth-local.test.js`, `user.test.js`, `panic-button.test.js`, `emergency.test.js`, `officer.test.js`, `assign.test.js`, `incident.controller.test.js`, `incident.test.js` | Endpoints HTTP: statuses, payloads, autorización, validación de input, errores 4xx/5xx. Se monta la app con `createApp(...)` y se ejercitan con supertest. |
+| **Middlewares** | `authorize.test.js`, `cors.test.js`, `rate-limit.test.js`, `app-error-handler.test.js` | Comportamiento de cada middleware en isolation (roles, orígenes permitidos, throttling por IP, sanitización de errores). |
+| **Dominio** | `emergency-status.test.js`, `emergency-type.test.js`, `emergency-events.test.js`, `severity.test.js`, `incident-detector.test.js`, `risk-engine.test.js`, `rule-based-grouper.test.js`, `map-emergency.test.js` | Reglas puras: transiciones de estado, severidad derivada, priorización, agrupación por Union-Find. |
+| **Servicios** | `kafka.service.test.js`, `outbox-publisher.test.js`, `keep-warm.test.js`, `location-retention.test.js`, `incident-detection-job.test.js` | Publicación al bus (con `kafkajs` mockeado), poll del outbox, job de retención, detección con lock cross-instance. |
+| **Seguridad** | `security.test.js`, `secure-log.test.js`, `local-keys.test.js` | Headers, sanitización de logs (sin JWT ni lat/lng), rotación de keys. |
+| **Repositories (unit)** | `emergency.repository.test.js`, `incident.repository.test.js`, `officer.repository.test.js` | Queries con `pg` mockeado. |
+| **Repositories (integración)** | `emergency.repository.integration.test.js`, `incident.repository.integration.test.js`, `incident-detection-job.integration.test.js` | Postgres real (contenedor efímero + Flyway); en CI corren con el service `postgres:15-alpine`. |
+| **Infra** | `flyway.test.js`, `pool.test.js` | Aplicación de migraciones, configuración del pool. |
+
+Cobertura del último CI: ver `docs/diagramas/07-ci-cd.md` (statements ~97%, branches ~87%, functions ~96%, lines ~97%).
+
+### Respuesta para la presentación
+
+Si preguntan "¿por qué no testean controllers?": **sí los testean**. La respuesta correcta es que la **prioridad de diseño** es el dominio (transiciones, severidad, priorización), y ahí es donde hay más profundidad de casos; pero cada controller/endpoint tiene su suite HTTP con `createApp(...)` que valida statuses, autorización, y payloads. También hay cobertura de middlewares (auth, authorize, cors, rate-limit, error handler).
+
 ---
 
 ## Diagramas

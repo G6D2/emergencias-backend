@@ -89,6 +89,30 @@ actual no lo respeta:
 | `EmergenciaDespachada` | No se publica como tipo propio: `assign` reusa `EmergenciaEstadoActualizado` con `reason: "Assigned officer <id>"` en vez de un evento dedicado |
 | Entrega real al bus | `KAFKA_ENABLED=false` en `render.yaml` de producción: ningún evento sale de `outbox_events` hoy, así que Analítica no podría consumir nada aunque el contrato estuviera alineado (ver `05-secuencias.md`, flujo c) |
 
+## Semántica de orden y entrega
+
+No prometemos orden estricto de entrega — no de los eventos hoy publicados, ni de los eventos pendientes cuando se prende Kafka. Los detalles:
+
+| Aspecto | Comportamiento actual | Consecuencia |
+|---|---|---|
+| **Orden de reclamo** | `OutboxPublisher.claimBatch()` corre `SELECT ... ORDER BY created_at FOR UPDATE SKIP LOCKED` (`src/services/outbox-publisher.js:28`) | Dentro de un batch, los más viejos salen primero |
+| **Retries** | Si `publishEvent` falla, `markFailed()` setea `available_at = now() + backoff` (30 s, 60 s, 120 s, … hasta 15 min). El evento vuelve a `PENDING` pero **demorado** | Un evento posterior con `created_at` mayor puede **adelantar** al fallido si el próximo poll (5 s) llega antes que el backoff |
+| **Partition key en Kafka** | `producer.send({ messages: [{ key: null, value }] })` (`src/services/kafka.service.js:91`) | Sin key: Kafka distribuye round-robin entre las particiones del tópico. **Cero ordenamiento cross-partition**, ni siquiera para eventos de la misma emergencia |
+| **Entrega** | Producer con `at-least-once` (default de KafkaJS + outbox transaccional) | Un consumer puede recibir el mismo evento más de una vez si el `markPublished` falla después de que Kafka confirmó |
+| **Prender Kafka con eventos acumulados** | El poll de 5 s reclama el batch más viejo primero. Si alguno falla, el resto del batch sigue publicando y el fallido se demora | La afirmación "salen todos en orden al prender Kafka" es **falsa** en cuanto hay una falla intermedia |
+
+### Qué habría que hacer si un consumer necesitase orden
+
+- **Ordenamiento por emergencia:** setear `key = emergencyId` en `kafka.service.js` → Kafka garantiza orden dentro de la partición para una misma key. **No implementado.**
+- **Ordenamiento estricto global:** un solo tópico con una sola partición y sin retries paralelos. Descarta throughput. **No aplica al diseño del gateway del Grupo 1.**
+- **Ordenamiento por `correlationId`:** similar a `key = emergencyId` pero agrupa por cadena de eventos. **No implementado.**
+
+Mientras ningún consumidor exija orden, el diseño actual está bien. Cuando aparezca alguno que lo necesite (Analítica podría), se decide `key` de tópico y se documenta en la ADR-005.
+
+### Respuesta canónica para la presentación
+
+Si preguntan "¿los eventos salen en orden cuando prende Kafka?": **no garantizamos orden estricto**. El outbox reclama por `created_at`, pero un fallo con retry deja al evento demorado mientras otros posteriores salen antes. Aparte, se publica con `key: null`, así que Kafka distribuye entre particiones sin ordenamiento cross-partition. Si algún consumer futuro necesita orden, se implementa `key = emergencyId` o `key = correlationId`.
+
 ## Fuente en el código
 
 - `src/services/emergency-events.js` (builders de los 4 eventos, incluido `buildEmergencyPrioritizedEvent`)
