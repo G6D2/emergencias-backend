@@ -121,6 +121,29 @@ Los cuatro ejes están holgadamente por encima del gate interno (80%) y del requ
 
 Cuando la cátedra pregunte el porcentaje: mostrar los tres — pedido externo 60%, gate interno 80%, valor real actual (fila de la tabla). No presentar el 80% como si fuera el requisito de la cátedra, ni el valor real como si aplicara a toda la app.
 
+## Gate efectivo del proyecto vs. análisis externos
+
+Para no confundir lo que **bloquea** un merge con lo que **acompaña** como análisis auxiliar:
+
+### Gate efectivo (bloqueante)
+
+Un PR no puede mergearse si alguno de estos falla:
+
+1. **Metadata del PR** — título y descripción no vacíos (`validate-pr`)
+2. **Lint** — `eslint` limpio (`npm run lint`)
+3. **Build** — `next build` (solo frontend, en `lint-and-test`)
+4. **Migraciones** — Flyway aplica limpio contra Postgres efímero (solo backend)
+5. **Tests unitarios + cobertura ≥ 80%** — `npm test` (backend con `jest coverageThreshold`) / `npm run test:coverage` (frontend con `vitest coverage.thresholds`)
+6. **Tests de integración** — backend contra Postgres real; frontend BFF contra mocks (ver hallazgo #39)
+
+### Análisis externo (no bloqueante)
+
+- **SonarCloud** — corre solo si el repo tiene el secret `SONAR_TOKEN`, y el step usa `continue-on-error: true`. Un Quality Gate rojo en Sonar **no traba el CI**. Su rol es alertar sobre code smells, seguridad estática y cobertura sobre "new code"; se lee, no se depende de él para mergear.
+
+### Respuesta canónica para la presentación
+
+Si preguntan "¿SonarCloud es su quality gate?": **no**. El gate efectivo hoy es **ESLint + build + Vitest/Jest con cobertura ≥ 80% + integración**. SonarCloud es un análisis externo complementario que puede estar rojo sin trabar el pipeline. Si quisieran hacerlo gate real, habría que quitar `continue-on-error: true` del step en `ci.yml`.
+
 ## CD
 
 | Repo | Trigger | Pasos | Nota |
