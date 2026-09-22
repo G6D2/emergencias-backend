@@ -1,4 +1,4 @@
-const SENSITIVE_KEY = /^(authorization|cookie|access_token|refresh_token|password|latitude|longitude|location|location_encrypted)$/i;
+const SENSITIVE_KEY = /^(authorization|cookie|access_token|refresh_token|password|latitude|longitude|location|location_encrypted|phone|emergencyContactName|emergencyContactPhone|medicalCondition|sensitive_encrypted)$/i;
 
 function redactValue(key, value) {
   if (value == null) return value;

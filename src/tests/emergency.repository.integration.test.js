@@ -438,7 +438,7 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(audit[0].actorSub).toBe('U000999');
 
     await getPool().query(
-      `UPDATE emergencies SET created_at = now() - interval '100 hours' WHERE id = $1`,
+      `UPDATE emergencies SET closed_at = now() - interval '100 hours' WHERE id = $1`,
       [input.id]
     );
 

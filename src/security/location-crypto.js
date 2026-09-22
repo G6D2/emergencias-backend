@@ -322,9 +322,83 @@ function createLocationCrypto(config) {
     throw lastError || new Error('Invalid location ciphertext');
   }
 
+  function decryptJsonWith(key, parts) {
+    const decipher = crypto.createDecipheriv(ALGORITHM, key, parts.iv, {
+      authTagLength: AUTH_TAG_LENGTH,
+    });
+    decipher.setAuthTag(parts.authTag);
+    const plaintext = Buffer.concat([decipher.update(parts.encrypted), decipher.final()]);
+    return JSON.parse(plaintext.toString('utf8'));
+  }
+
+  /**
+   * Cifra un objeto JSON arbitrario con el mismo wire format / keyring
+   * que las ubicaciones (perfil ciudadano, ubicaciones guardadas, etc.).
+   */
+  function encryptJson(value) {
+    if (value === null || typeof value !== 'object') {
+      throw new Error('encryptJson requires a plain object or array');
+    }
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv(ALGORITHM, activeKey, iv, {
+      authTagLength: AUTH_TAG_LENGTH,
+    });
+    const plaintext = Buffer.from(JSON.stringify(value), 'utf8');
+    const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return encodePayload({
+      keyId: activeKeyId,
+      iv,
+      authTag: cipher.getAuthTag(),
+      encrypted,
+    }).toString('base64');
+  }
+
+  function decryptJson(ciphertextBase64) {
+    if (!ciphertextBase64 || typeof ciphertextBase64 !== 'string') {
+      throw new Error('Invalid ciphertext');
+    }
+
+    const payload = Buffer.from(ciphertextBase64, 'base64');
+    const versioned = decodeVersionedPayload(payload);
+    if (versioned) {
+      const key = keys.get(versioned.keyId);
+      if (key) {
+        try {
+          return decryptJsonWith(key, versioned);
+        } catch (err) {
+          void err;
+        }
+      }
+    }
+
+    const legacy = decodeLegacyPayload(payload);
+    if (!legacy) {
+      throw new Error('Invalid ciphertext length');
+    }
+
+    let lastError = null;
+    for (const key of keys.values()) {
+      try {
+        return decryptJsonWith(key, legacy);
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (versioned && !keys.has(versioned.keyId)) {
+      throw new Error(
+        `No encryption key available for key id "${versioned.keyId}"`
+      );
+    }
+
+    throw lastError || new Error('Invalid ciphertext');
+  }
+
   return {
     encryptLocation,
     decryptLocation,
+    encryptJson,
+    decryptJson,
     activeKeyId,
     keyIds: Array.from(keys.keys()),
   };

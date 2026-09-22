@@ -4,6 +4,7 @@ const { getPool } = require('./db/pool');
 const { EmergencyRepository } = require('./repositories/emergency.repository');
 const { OfficerRepository } = require('./repositories/officer.repository');
 const { IncidentRepository } = require('./repositories/incident.repository');
+const { CitizenProfileRepository } = require('./repositories/citizen-profile.repository');
 const { createApp } = require('./app');
 const { createAuthSetup } = require('./auth/setup');
 const { createLocationCrypto } = require('./security/location-crypto');
@@ -25,6 +26,7 @@ async function start() {
   const emergencyRepository = new EmergencyRepository(pool, { locationCrypto });
   const officerRepository = new OfficerRepository(pool);
   const incidentRepository = new IncidentRepository(pool, emergencyRepository);
+  const citizenProfileRepository = new CitizenProfileRepository(pool, { locationCrypto });
   const outboxPublisher = new OutboxPublisher(pool, kafkaService);
 
   // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
@@ -44,6 +46,7 @@ async function start() {
     authMode: auth.mode,
     officerRepository,
     incidentRepository,
+    citizenProfileRepository,
   });
 
   const server = app.listen(PORT, () => {

@@ -20,7 +20,7 @@ erDiagram
         text severity "CHECK low|medium|high|critical (V7)"
         text status "default PENDING desde V5, sin CHECK (lo valida la app)"
         text location_encrypted "AES-256-GCM, JSON con lat/lng/address (V3)"
-        timestamptz location_anonymized_at "set por el job de retencion 72h (V3)"
+        timestamptz location_anonymized_at "set por el job de retencion 72h post-cierre (V3)"
         text assigned_officer_id "id logico de officers, sin FK (V4)"
         text emergency_type "CHECK catalogo cerrado (V4 + V10)"
         uuid correlation_id "trazabilidad de eventos, = id si no viene (V9)"
@@ -90,7 +90,8 @@ erDiagram
 | Tema | Detalle |
 |---|---|
 | Cifrado de ubicación | `latitude`/`longitude` no se guardan en claro desde V3. Se cifran con **AES-256-GCM** y se persisten en `location_encrypted` (`src/security/location-crypto.js`); la clave sale de `LOCATION_ENCRYPTION_KEY`/`LOCATION_ENCRYPTION_KEYS` (keyring rotable). El plaintext cifrado es `{ latitude, longitude, address? }`: la dirección legible (`address`) **no tiene columna propia**, viaja dentro del mismo blob para heredar retención y saneo sin migración nueva. |
-| Retención | Job en background (`src/security/location-retention.js`) anonimiza el ciphertext después de **72 horas** (`LOCATION_RETENTION_HOURS`, default 72): pone `location_encrypted`, `latitude`, `longitude` en `NULL` y marca `location_anonymized_at`. La emergencia sigue existiendo, solo se pierde la ubicación. |
+| Retención | Job en background (`src/security/location-retention.js`) anonimiza el ciphertext **72 horas después de `closed_at`** (`LOCATION_RETENTION_HOURS`, default 72; configurable). Solo aplica a emergencias cerradas. Pone `location_encrypted`, `latitude`, `longitude` en `NULL` y marca `location_anonymized_at`. La emergencia sigue existiendo, solo se pierde la ubicación. |
+| Perfil ciudadano | Tablas `citizen_profiles` y `citizen_saved_locations` (V15). Teléfono / contacto / condición médica y direcciones+coords de ubicaciones frecuentes se cifran con el mismo AES-256-GCM (`encryptJson`). Endpoints bajo `/api/citizen/*` (solo grupo `citizen`, scoped al `sub` del JWT). |
 | `status` (emergencies) | Sin `CHECK` en la base: la única fuente de verdad de las transiciones válidas es `src/domain/emergency-status.js` (ver `04-maquina-de-estados.md`). El `DEFAULT` original de V1 era `'CREATED'` (valor histórico fuera de vocabulario); V5 lo cambió a `'PENDING'`. |
 | `severity` (emergencies) | `CHECK (severity IS NULL OR severity IN ('low','medium','high','critical'))` (V7). Se deriva del `emergency_type` en el controller (`src/domain/severity.js`), no la elige el cliente. |
 | `emergency_type` (emergencies e incidents) | Catálogo cerrado igual en ambas tablas: `MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO` (V10, V12). `PANICO` representa el botón SOS y conceptualmente es un "origen", no un tipo — queda así hasta que se modele el origen aparte. |

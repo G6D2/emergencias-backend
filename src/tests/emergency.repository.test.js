@@ -259,10 +259,20 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
   });
 
   it('anonimiza y devuelve ids afectados', async () => {
-    const pool = createPool({ query: async () => ({ rowCount: 2, rows: [{ id: 'e-1' }, { id: 'e-2' }] }) });
+    const queries = [];
+    const pool = createPool({
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        return { rowCount: 2, rows: [{ id: 'e-1' }, { id: 'e-2' }] };
+      },
+    });
     const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
     const result = await repo.anonymizeExpiredLocations(72);
     expect(result).toEqual({ anonymizedCount: 2, ids: ['e-1', 'e-2'] });
+    expect(queries[0].sql).toMatch(/closed_at IS NOT NULL/);
+    expect(queries[0].sql).toMatch(/closed_at < now\(\)/);
+    expect(queries[0].sql).not.toMatch(/created_at </);
+    expect(queries[0].params).toEqual([72]);
   });
 });
 
