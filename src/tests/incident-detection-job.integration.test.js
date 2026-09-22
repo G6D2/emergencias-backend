@@ -44,7 +44,7 @@ describe('incident-detection-job pipeline (integración contra Postgres real, si
   }) {
     const since = new Date(Date.now() - windowMinutes * 60000);
     const candidates = await emergencyRepository.findRecentByType({ emergencyType, since });
-    const decisions = processEmergencyTypeCandidates(candidates, {
+    const decisions = await processEmergencyTypeCandidates(candidates, {
       radiusMeters,
       minUniqueCitizens,
       emergencyType,

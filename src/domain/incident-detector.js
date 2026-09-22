@@ -4,10 +4,13 @@
 // para que el job (incident-detection-job.js) las persista.
 
 const { groupNearbyEmergencies, haversineDistanceMeters } = require('./rule-based-grouper');
+const { groupNearbyEmergenciesDbscan } = require('./dbscan-grouper');
 const { calculateIncidentScore, scoreToPriority, applyPriorityInvariant } = require('./risk-engine');
 const { compareSeverity } = require('./severity');
+const { detectGroups } = require('./incident-detection-strategy');
 
-const ALGORITHM_VERSION = 'rule-based-v1';
+const RULE_BASED_ALGORITHM_VERSION = 'rule-based-v1';
+const DBSCAN_ALGORITHM_VERSION = 'dbscan-v1';
 
 function pairwiseDistances(members) {
   if (members.length < 2) {
@@ -47,13 +50,26 @@ function maxSeverityOf(members) {
  *
  * @param {Array<{ id: string, correlationId: string, userId: string, latitude: number, longitude: number, createdAt: string|Date, severity: string, incidentId: string|null }>} candidates
  * @param {{ radiusMeters: number, minUniqueCitizens: number, emergencyType: string }} options
- * @returns {Array<object>} decisiones, una por grupo detectado
+ * @returns {Promise<Array<object>>} decisiones, una por grupo detectado
  */
-function processEmergencyTypeCandidates(candidates, { radiusMeters, minUniqueCitizens, emergencyType }) {
+async function processEmergencyTypeCandidates(candidates, { radiusMeters, minUniqueCitizens, emergencyType }) {
   // groupNearbyEmergencies identifica cada candidato por emergencyId; los
   // candidatos de findRecentByType usan id (ver discrepancia resuelta con Mati).
   const withEmergencyId = candidates.map((candidate) => ({ ...candidate, emergencyId: candidate.id }));
-  const groups = groupNearbyEmergencies(withEmergencyId, { radiusMeters, minUniqueCitizens });
+  // Selección de estrategia (#61, ADR-002): DbscanGrouper es la primaria;
+  // RuleBasedGrouper queda como fallback ante una falla técnica real de
+  // DBSCAN (Caso A). Si DBSCAN corre bien y no encuentra cluster, esa
+  // respuesta vacía se respeta tal cual (Caso B) -- detectGroups() nunca
+  // cae a fallback por un resultado vacío, solo por excepción.
+  const { groups, strategy } = await detectGroups(
+    withEmergencyId,
+    { radiusMeters, minUniqueCitizens },
+    {
+      primary: groupNearbyEmergenciesDbscan,
+      fallback: groupNearbyEmergencies,
+    }
+  );
+  const algorithmVersion = strategy === 'fallback' ? RULE_BASED_ALGORITHM_VERSION : DBSCAN_ALGORITHM_VERSION;
   const candidatesByEmergencyId = new Map(withEmergencyId.map((c) => [c.emergencyId, c]));
 
   const decisions = [];
@@ -117,7 +133,7 @@ function processEmergencyTypeCandidates(candidates, { radiusMeters, minUniqueCit
       priority: incidentPriority,
       score,
       reasonCodes,
-      algorithmVersion: ALGORITHM_VERSION,
+      algorithmVersion,
       skippedReason: null,
     });
   }
@@ -125,4 +141,4 @@ function processEmergencyTypeCandidates(candidates, { radiusMeters, minUniqueCit
   return decisions;
 }
 
-module.exports = { processEmergencyTypeCandidates, ALGORITHM_VERSION };
+module.exports = { processEmergencyTypeCandidates, RULE_BASED_ALGORITHM_VERSION, DBSCAN_ALGORITHM_VERSION };

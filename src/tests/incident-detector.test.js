@@ -30,13 +30,13 @@ const DEFAULT_OPTIONS = { radiusMeters: 300, minUniqueCitizens: 2, emergencyType
 
 describe('incident-detector', () => {
   describe('processEmergencyTypeCandidates', () => {
-    it('un grupo nuevo (ningun miembro con incidentId) genera una decision con incidentId null', () => {
+    it('un grupo nuevo (ningun miembro con incidentId) genera una decision con incidentId null', async () => {
       const candidates = [
         closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1' }),
         closeCandidate({ id: 'e2', correlationId: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002 }),
       ];
 
-      const decisions = processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+      const decisions = await processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
 
       expect(decisions).toHaveLength(1);
       expect(decisions[0].incidentId).toBeNull();
@@ -45,7 +45,7 @@ describe('incident-detector', () => {
       expect(decisions[0].members.map((m) => m.emergencyId).sort()).toEqual(['e1', 'e2']);
     });
 
-    it('un grupo donde todos los miembros ya comparten el mismo incidentId genera una decision con ese incidentId', () => {
+    it('un grupo donde todos los miembros ya comparten el mismo incidentId genera una decision con ese incidentId', async () => {
       const candidates = [
         closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1', incidentId: 'inc-1' }),
         closeCandidate({
@@ -57,7 +57,7 @@ describe('incident-detector', () => {
         }),
       ];
 
-      const decisions = processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+      const decisions = await processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
 
       expect(decisions).toHaveLength(1);
       expect(decisions[0].incidentId).toBe('inc-1');
@@ -65,7 +65,7 @@ describe('incident-detector', () => {
       expect(decisions[0].members.every((m) => m.alreadyLinked)).toBe(true);
     });
 
-    it('un grupo con miembros de DOS incidentId existentes distintos se marca AMBIGUOUS_EXISTING_INCIDENTS sin members para actuar', () => {
+    it('un grupo con miembros de DOS incidentId existentes distintos se marca AMBIGUOUS_EXISTING_INCIDENTS sin members para actuar', async () => {
       const candidates = [
         closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1', incidentId: 'inc-1' }),
         closeCandidate({
@@ -77,7 +77,7 @@ describe('incident-detector', () => {
         }),
       ];
 
-      const decisions = processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+      const decisions = await processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
 
       expect(decisions).toHaveLength(1);
       expect(decisions[0].skippedReason).toBe('AMBIGUOUS_EXISTING_INCIDENTS');
@@ -85,7 +85,7 @@ describe('incident-detector', () => {
       expect(decisions[0].conflictingIncidentIds.sort()).toEqual(['inc-1', 'inc-2']);
     });
 
-    it('el finalPriority de cada member nunca es menor al priorityIndividual de esa emergencia', () => {
+    it('el finalPriority de cada member nunca es menor al priorityIndividual de esa emergencia', async () => {
       // Grupo disperso en el tiempo y de severity mayormente baja: el score del
       // incidente da bajo, pero un miembro individualmente 'critical' no puede
       // bajar de esa prioridad por el invariante de risk-engine.
@@ -102,7 +102,7 @@ describe('incident-detector', () => {
         }),
       ];
 
-      const decisions = processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+      const decisions = await processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
 
       expect(decisions).toHaveLength(1);
       decisions[0].members.forEach((member) => {
@@ -115,12 +115,12 @@ describe('incident-detector', () => {
       expect(criticalMember.finalPriority).toBe('critical');
     });
 
-    it('con minUniqueCitizens=1, una emergencia sola forma un grupo de un miembro (sin pares para calcular distancia)', () => {
+    it('con minUniqueCitizens=1, una emergencia sola forma un grupo de un miembro (sin pares para calcular distancia)', async () => {
       const candidates = [
         closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1', severity: 'medium' }),
       ];
 
-      const decisions = processEmergencyTypeCandidates(candidates, { ...DEFAULT_OPTIONS, minUniqueCitizens: 1 });
+      const decisions = await processEmergencyTypeCandidates(candidates, { ...DEFAULT_OPTIONS, minUniqueCitizens: 1 });
 
       expect(decisions).toHaveLength(1);
       expect(decisions[0].members).toHaveLength(1);
@@ -130,7 +130,7 @@ describe('incident-detector', () => {
       expect(decisions[0].factors.maxSeverity).toBe('medium');
     });
 
-    it('la severity máxima del grupo puede estar en un miembro que no es el primero', () => {
+    it('la severity máxima del grupo puede estar en un miembro que no es el primero', async () => {
       const candidates = [
         closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1', severity: 'low' }),
         closeCandidate({
@@ -138,21 +138,76 @@ describe('incident-detector', () => {
         }),
       ];
 
-      const decisions = processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+      const decisions = await processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
 
       expect(decisions).toHaveLength(1);
       expect(decisions[0].factors.maxSeverity).toBe('critical');
     });
 
-    it('una emergencia sola, sin nadie mas cerca, no genera ninguna decision', () => {
+    it('una emergencia sola, sin nadie mas cerca, no genera ninguna decision', async () => {
       const candidates = [
         closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1' }),
         farCandidate({ id: 'e2', correlationId: 'e2', userId: 'u2' }),
       ];
 
-      const decisions = processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+      const decisions = await processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
 
       expect(decisions).toEqual([]);
+    });
+
+    it('candidatos validos: DBSCAN corre normal como estrategia primaria y algorithmVersion es dbscan-v1', async () => {
+      const candidates = [
+        closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1' }),
+        closeCandidate({ id: 'e2', correlationId: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002 }),
+      ];
+
+      const decisions = await processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0].algorithmVersion).toBe('dbscan-v1');
+    });
+
+    // DBSCAN falla en runtime (excepcion tecnica real de la libreria, no un
+    // resultado vacio): se usa RuleBasedGrouper real -- sin mockear -- y el
+    // resultado debe tener algorithmVersion 'rule-based-v1'. No existe un
+    // array de candidatos con lat/lng invalidos que rompa solo a DBSCAN sin
+    // romper tambien a RuleBasedGrouper (ambas comparten haversineDistance
+    // Meters sin validar, ver LIMITACION CONOCIDA en dbscan-grouper.js) --
+    // confirmado empiricamente antes de escribir este test. Por eso mockeamos
+    // puntualmente el modulo dbscan-grouper (solo en este test, via
+    // jest.doMock + jest.resetModules) para forzar la falla de la primaria;
+    // RuleBasedGrouper sigue siendo codigo real, sin mockear. Esto prueba el
+    // WIRING real de incident-detector.js (las constantes de version quedan
+    // bien conectadas), no el mecanismo abstracto de conmutacion en si, que
+    // ya esta cubierto con fakes en incident-detection-strategy.test.js.
+    it('DBSCAN falla tecnicamente en runtime: se usa RuleBasedGrouper real (sin mock) y algorithmVersion es rule-based-v1', async () => {
+      jest.resetModules();
+      jest.doMock('../domain/dbscan-grouper', () => ({
+        groupNearbyEmergenciesDbscan: jest.fn(() => {
+          throw new Error('fallo simulado de DBSCAN');
+        }),
+      }));
+
+      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        const { processEmergencyTypeCandidates: processWithBrokenDbscan } = require('../domain/incident-detector');
+
+        const candidates = [
+          closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1' }),
+          closeCandidate({ id: 'e2', correlationId: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002 }),
+        ];
+
+        const decisions = await processWithBrokenDbscan(candidates, DEFAULT_OPTIONS);
+
+        expect(decisions).toHaveLength(1);
+        expect(decisions[0].algorithmVersion).toBe('rule-based-v1');
+        expect(decisions[0].members.map((m) => m.emergencyId).sort()).toEqual(['e1', 'e2']);
+      } finally {
+        consoleWarnSpy.mockRestore();
+        jest.dontMock('../domain/dbscan-grouper');
+        jest.resetModules();
+      }
     });
   });
 });
