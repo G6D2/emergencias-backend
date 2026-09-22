@@ -4,11 +4,13 @@
 // para que el job (incident-detection-job.js) las persista.
 
 const { groupNearbyEmergencies, haversineDistanceMeters } = require('./rule-based-grouper');
+const { groupNearbyEmergenciesDbscan } = require('./dbscan-grouper');
 const { calculateIncidentScore, scoreToPriority, applyPriorityInvariant } = require('./risk-engine');
 const { compareSeverity } = require('./severity');
 const { detectGroups } = require('./incident-detection-strategy');
 
-const ALGORITHM_VERSION = 'rule-based-v1';
+const RULE_BASED_ALGORITHM_VERSION = 'rule-based-v1';
+const DBSCAN_ALGORITHM_VERSION = 'dbscan-v1';
 
 function pairwiseDistances(members) {
   if (members.length < 2) {
@@ -54,20 +56,20 @@ async function processEmergencyTypeCandidates(candidates, { radiusMeters, minUni
   // groupNearbyEmergencies identifica cada candidato por emergencyId; los
   // candidatos de findRecentByType usan id (ver discrepancia resuelta con Mati).
   const withEmergencyId = candidates.map((candidate) => ({ ...candidate, emergencyId: candidate.id }));
-  // Selección de estrategia (#61, parte 1/2, ADR-002): por ahora primary y
-  // fallback son la MISMA función (groupNearbyEmergencies) -- DbscanGrouper
-  // todavía no existe, es la parte 2/2 en esta misma rama. Esto es
-  // intencional, no un error: deja la infraestructura de selección lista y
-  // funcionando exactamente igual que antes (mismo comportamiento
-  // observable), sin introducir DBSCAN todavía.
-  const groups = await detectGroups(
+  // Selección de estrategia (#61, ADR-002): DbscanGrouper es la primaria;
+  // RuleBasedGrouper queda como fallback ante una falla técnica real de
+  // DBSCAN (Caso A). Si DBSCAN corre bien y no encuentra cluster, esa
+  // respuesta vacía se respeta tal cual (Caso B) -- detectGroups() nunca
+  // cae a fallback por un resultado vacío, solo por excepción.
+  const { groups, strategy } = await detectGroups(
     withEmergencyId,
     { radiusMeters, minUniqueCitizens },
     {
-      primary: groupNearbyEmergencies,
+      primary: groupNearbyEmergenciesDbscan,
       fallback: groupNearbyEmergencies,
     }
   );
+  const algorithmVersion = strategy === 'fallback' ? RULE_BASED_ALGORITHM_VERSION : DBSCAN_ALGORITHM_VERSION;
   const candidatesByEmergencyId = new Map(withEmergencyId.map((c) => [c.emergencyId, c]));
 
   const decisions = [];
@@ -131,7 +133,7 @@ async function processEmergencyTypeCandidates(candidates, { radiusMeters, minUni
       priority: incidentPriority,
       score,
       reasonCodes,
-      algorithmVersion: ALGORITHM_VERSION,
+      algorithmVersion,
       skippedReason: null,
     });
   }
@@ -139,4 +141,4 @@ async function processEmergencyTypeCandidates(candidates, { radiusMeters, minUni
   return decisions;
 }
 
-module.exports = { processEmergencyTypeCandidates, ALGORITHM_VERSION };
+module.exports = { processEmergencyTypeCandidates, RULE_BASED_ALGORITHM_VERSION, DBSCAN_ALGORITHM_VERSION };

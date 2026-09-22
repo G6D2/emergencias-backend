@@ -154,5 +154,60 @@ describe('incident-detector', () => {
 
       expect(decisions).toEqual([]);
     });
+
+    it('candidatos validos: DBSCAN corre normal como estrategia primaria y algorithmVersion es dbscan-v1', async () => {
+      const candidates = [
+        closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1' }),
+        closeCandidate({ id: 'e2', correlationId: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002 }),
+      ];
+
+      const decisions = await processEmergencyTypeCandidates(candidates, DEFAULT_OPTIONS);
+
+      expect(decisions).toHaveLength(1);
+      expect(decisions[0].algorithmVersion).toBe('dbscan-v1');
+    });
+
+    // DBSCAN falla en runtime (excepcion tecnica real de la libreria, no un
+    // resultado vacio): se usa RuleBasedGrouper real -- sin mockear -- y el
+    // resultado debe tener algorithmVersion 'rule-based-v1'. No existe un
+    // array de candidatos con lat/lng invalidos que rompa solo a DBSCAN sin
+    // romper tambien a RuleBasedGrouper (ambas comparten haversineDistance
+    // Meters sin validar, ver LIMITACION CONOCIDA en dbscan-grouper.js) --
+    // confirmado empiricamente antes de escribir este test. Por eso mockeamos
+    // puntualmente el modulo dbscan-grouper (solo en este test, via
+    // jest.doMock + jest.resetModules) para forzar la falla de la primaria;
+    // RuleBasedGrouper sigue siendo codigo real, sin mockear. Esto prueba el
+    // WIRING real de incident-detector.js (las constantes de version quedan
+    // bien conectadas), no el mecanismo abstracto de conmutacion en si, que
+    // ya esta cubierto con fakes en incident-detection-strategy.test.js.
+    it('DBSCAN falla tecnicamente en runtime: se usa RuleBasedGrouper real (sin mock) y algorithmVersion es rule-based-v1', async () => {
+      jest.resetModules();
+      jest.doMock('../domain/dbscan-grouper', () => ({
+        groupNearbyEmergenciesDbscan: jest.fn(() => {
+          throw new Error('fallo simulado de DBSCAN');
+        }),
+      }));
+
+      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        const { processEmergencyTypeCandidates: processWithBrokenDbscan } = require('../domain/incident-detector');
+
+        const candidates = [
+          closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1' }),
+          closeCandidate({ id: 'e2', correlationId: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002 }),
+        ];
+
+        const decisions = await processWithBrokenDbscan(candidates, DEFAULT_OPTIONS);
+
+        expect(decisions).toHaveLength(1);
+        expect(decisions[0].algorithmVersion).toBe('rule-based-v1');
+        expect(decisions[0].members.map((m) => m.emergencyId).sort()).toEqual(['e1', 'e2']);
+      } finally {
+        consoleWarnSpy.mockRestore();
+        jest.dontMock('../domain/dbscan-grouper');
+        jest.resetModules();
+      }
+    });
   });
 });

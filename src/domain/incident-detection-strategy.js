@@ -18,16 +18,18 @@ const { secureLog } = require('../security/secure-log');
  * @param {{ primary: Function, fallback: Function }} strategies funciones
  *   con la firma (candidates, options) => string[][] (array de arrays de
  *   emergencyId), sync o async indistintamente.
- * @returns {Promise<string[][]>}
+ * @returns {Promise<{ groups: string[][], strategy: 'primary' | 'fallback' }>}
  */
 async function detectGroups(candidates, options, { primary, fallback }) {
   try {
-    return await primary(candidates, options);
+    const groups = await primary(candidates, options);
+    return { groups, strategy: 'primary' };
   } catch (error) {
     secureLog('warn', 'Incident detection primary strategy failed, using fallback', {
       message: error.message,
     });
-    return await fallback(candidates, options);
+    const groups = await fallback(candidates, options);
+    return { groups, strategy: 'fallback' };
   }
 }
 

@@ -8,7 +8,8 @@ describe('incident-detection-strategy', () => {
 
       const result = await detectGroups(['candidate'], { radiusMeters: 300 }, { primary, fallback });
 
-      expect(result).toEqual([['e1', 'e2']]);
+      expect(result.groups).toEqual([['e1', 'e2']]);
+      expect(result.strategy).toBe('primary');
       expect(primary).toHaveBeenCalledTimes(1);
       expect(primary).toHaveBeenCalledWith(['candidate'], { radiusMeters: 300 });
       expect(fallback).not.toHaveBeenCalled();
@@ -20,7 +21,8 @@ describe('incident-detection-strategy', () => {
 
       const result = await detectGroups(['candidate'], {}, { primary, fallback });
 
-      expect(result).toEqual([]);
+      expect(result.groups).toEqual([]);
+      expect(result.strategy).toBe('primary');
       expect(fallback).not.toHaveBeenCalled();
     });
 
@@ -33,7 +35,8 @@ describe('incident-detection-strategy', () => {
 
       const result = await detectGroups(['candidate'], {}, { primary, fallback });
 
-      expect(result).toEqual([['from-fallback']]);
+      expect(result.groups).toEqual([['from-fallback']]);
+      expect(result.strategy).toBe('fallback');
       expect(fallback).toHaveBeenCalledTimes(1);
       expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
       expect(consoleWarnSpy.mock.calls[0][0]).toContain('primary rompio sync');
@@ -48,7 +51,8 @@ describe('incident-detection-strategy', () => {
 
       const result = await detectGroups(['candidate'], {}, { primary, fallback });
 
-      expect(result).toEqual([['from-fallback-async']]);
+      expect(result.groups).toEqual([['from-fallback-async']]);
+      expect(result.strategy).toBe('fallback');
       expect(fallback).toHaveBeenCalledTimes(1);
       expect(consoleWarnSpy).toHaveBeenCalledTimes(1);
       expect(consoleWarnSpy.mock.calls[0][0]).toContain('primary rompio async');
