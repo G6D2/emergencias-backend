@@ -79,7 +79,7 @@ erDiagram
         numeric score
         jsonb reason_codes
         jsonb factors "snapshot de features del scoring (V14)"
-        text algorithm_version "'rule-based-v1' hoy"
+        text algorithm_version "'dbscan-v1' (primaria) o 'rule-based-v1' (fallback), PR #51"
         timestamptz created_at
         timestamptz updated_at
     }

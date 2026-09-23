@@ -81,7 +81,10 @@ flowchart TB
     auth["auth<br/>authenticate, authorize, jwt-verifier, groups, setup"]
     controllers["controllers<br/>panic-button, emergency, officer, user, incident"]
     domain["domain<br/>emergency-status, emergency-type, severity"]
-    incidentDomain["domain · motor de incidentes<br/>rule-based-grouper (Union-Find), risk-engine, incident-detector"]:::incident
+    incidentDomain["domain · motor de incidentes<br/>incident-detector, risk-engine"]:::incident
+    strategy["incident-detection-strategy<br/>detectGroups(candidates, options, {primary, fallback})"]:::incident
+    dbscanGrouper["dbscan-grouper<br/>(estrategia primaria, DBSCAN vía density-clustering)"]:::incident
+    ruleGrouper["rule-based-grouper<br/>(estrategia fallback, Union-Find + Haversine)"]:::incident
     repositories["repositories<br/>emergency, officer, incident"]
     services["services<br/>emergency-events, kafka.service, outbox-publisher"]
     detectionJob["incident-detection-job<br/>cada 60s, pg_try_advisory_lock"]:::incident
@@ -103,6 +106,9 @@ flowchart TB
     services --> kafkaC
 
     detectionJob --> incidentDomain
+    incidentDomain --> strategy
+    strategy --> dbscanGrouper
+    strategy -.->|"fallback solo si primary lanza excepción"| ruleGrouper
     detectionJob -->|"findRecentByType"| repositories
     detectionJob -->|"create / addMember / applyScoringDecision"| repositories
     detectionJob -.->|"pg_try_advisory_lock(875312047)"| db
@@ -111,13 +117,17 @@ flowchart TB
     classDef incident fill:#d3f9d8,stroke:#2f9e44,color:#1b4332,stroke-width:1.5px;
 ```
 
-> **Sobre `IncidentDetectionStrategy`:** el ADR de incidentes con IA (`ADRs-Incidentes-IA-...`)
-> propone una interfaz `IncidentDetectionStrategy` con `DbscanGrouper` como estrategia primaria
-> (ML) y `RuleBasedGrouper` como fallback determinístico. **Esa interfaz no existe todavía en
-> este repo**: `src/domain/incident-detector.js` importa `rule-based-grouper.js` directo
-> (`require('./rule-based-grouper')`), sin ninguna capa de estrategia intercambiable ni
-> `DbscanGrouper`. La interfaz y el agrupador por ML son arquitectura objetivo (ADR propuesto,
-> no aceptado), no el estado actual del código.
+> **Sobre `IncidentDetectionStrategy`:** implementada en el PR #51 (tarea #61, ADR-002
+> "IncidentDetectionStrategy"), verificada en producción el 23/09. `src/domain/incident-detector.js`
+> ya no importa `rule-based-grouper.js` directo: llama a `detectGroups(candidates, options, {
+> primary, fallback })` de `src/domain/incident-detection-strategy.js`, con `DbscanGrouper`
+> (`src/domain/dbscan-grouper.js`, librería `density-clustering`, mismo `haversineDistanceMeters`
+> y `minPts = INCIDENT_MIN_CITIZENS` con filtro posterior de ciudadanos únicos) como estrategia
+> primaria y `RuleBasedGrouper` como fallback determinístico. `detectGroups` cae a `fallback`
+> **solo** ante una excepción de `primary` — nunca porque el resultado sea un array vacío, que es
+> una respuesta válida. La estrategia que corrió queda en `algorithmVersion` (`dbscan-v1` o
+> `rule-based-v1`). Pendiente: calibrar los parámetros de DBSCAN con el dataset sintético de
+> `scripts/demo-dbscan.js` contra casos reales.
 
 ## Leyenda
 
@@ -129,12 +139,12 @@ flowchart TB
 | `IdP Grupo 2` | Previsto: hoy corre `AUTH_MODE=local` (JWT propio con el mismo contrato de claims que usaría el IdP real, ver `src/auth/setup.js`) |
 | SonarCloud | Corre en los dos repos (secret `SONAR_TOKEN` cargado en backend y, desde el 21/09, en `Frontend`); sigue siendo `continue-on-error: true`, no bloquea el pipeline |
 | Stack de backup | Confirmado en el código por `.github/workflows/activate-backup.yml` (PR #38); manual, sin failover automático (ver nota arriba) |
-| `IncidentDetectionStrategy` | No existe: `incident-detector.js` llama directo a `rule-based-grouper.js`. Arquitectura objetivo de un ADR propuesto, no el código actual |
+| `IncidentDetectionStrategy` | Implementada desde el PR #51 (verificado en producción el 23/09): `incident-detector.js` llama a `detectGroups()`, que corre `DbscanGrouper` como primaria y cae a `RuleBasedGrouper` solo ante una excepción de DBSCAN. Ver nota arriba |
 
 ## Fuente en el código
 
 - `src/app.js` (montaje de rutas y middlewares), `src/index.js` (composition root, arranca `startIncidentDetectionJob`)
-- `src/routes/*.js` (incluido `incidents.routes.js`), `src/controllers/*.js` (incluido `incident.controller.js`), `src/domain/*.js` (incluidos `rule-based-grouper.js`, `risk-engine.js`, `incident-detector.js`), `src/repositories/*.js` (incluido `incident.repository.js`), `src/services/*.js` (incluido `incident-detection-job.js`), `src/security/*.js`, `src/auth/*.js`
+- `src/routes/*.js` (incluido `incidents.routes.js`), `src/controllers/*.js` (incluido `incident.controller.js`), `src/domain/*.js` (incluidos `rule-based-grouper.js`, `dbscan-grouper.js`, `incident-detection-strategy.js`, `risk-engine.js`, `incident-detector.js`), `src/repositories/*.js` (incluido `incident.repository.js`), `src/services/*.js` (incluido `incident-detection-job.js`), `src/security/*.js`, `src/auth/*.js`, `scripts/demo-dbscan.js` (dataset sintético de demo)
 - `render.yaml` (backend), `Frontend/render.yaml`, `Frontend/app/api/backend/[...path]/route.js`, `Frontend/app/api/geocode/route.js`, `Frontend/lib/geocode-server.js`
 - `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/workflows/keep-warm.yml`, `.github/workflows/activate-backup.yml` (backend) y sus equivalentes en `Frontend/.github/workflows/`
 - `sonar-project.properties` (backend y frontend)
