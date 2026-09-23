@@ -147,10 +147,11 @@ describe('Citizen profile API', () => {
 
   it('rejects profile fields with invalid types', async () => {
     const app = createCitizenApp();
-    await request(app)
+    const res = await request(app)
       .put('/api/citizen/profile')
-      .send({ phone: 1122334455 })
-      .expect(400);
+      .send({ phone: 1122334455 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('ValidationError');
   });
 
   it('forbids dispatcher from citizen profile endpoints', async () => {
@@ -194,25 +195,27 @@ describe('Citizen profile API', () => {
 
   it('rejects saved location without label/address', async () => {
     const app = createCitizenApp();
-    await request(app)
+    const res = await request(app)
       .post('/api/citizen/saved-locations')
-      .send({ label: '', address: '' })
-      .expect(400);
+      .send({ label: '', address: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('ValidationError');
   });
 
   it('returns 409 when saved location limit is reached', async () => {
     const { MAX_SAVED_LOCATIONS_PER_USER } = require('../repositories/citizen-profile.repository');
     const app = createCitizenApp();
     for (let i = 0; i < MAX_SAVED_LOCATIONS_PER_USER; i += 1) {
-      await request(app)
+      const created = await request(app)
         .post('/api/citizen/saved-locations')
-        .send({ label: `L${i}`, address: `Addr ${i}` })
-        .expect(201);
+        .send({ label: `L${i}`, address: `Addr ${i}` });
+      expect(created.status).toBe(201);
     }
-    await request(app)
+    const overflow = await request(app)
       .post('/api/citizen/saved-locations')
-      .send({ label: 'Overflow', address: 'No room' })
-      .expect(409);
+      .send({ label: 'Overflow', address: 'No room' });
+    expect(overflow.status).toBe(409);
+    expect(overflow.body.error).toBe('ConflictError');
   });
 
   it('returns 404 for another user location id', async () => {
@@ -228,13 +231,14 @@ describe('Citizen profile API', () => {
 
     const created = await request(ownerApp)
       .post('/api/citizen/saved-locations')
-      .send({ label: 'Casa', address: 'A' })
-      .expect(201);
+      .send({ label: 'Casa', address: 'A' });
+    expect(created.status).toBe(201);
 
-    await request(otherApp)
+    const hack = await request(otherApp)
       .patch(`/api/citizen/saved-locations/${created.body.data.id}`)
-      .send({ address: 'Hack' })
-      .expect(404);
+      .send({ address: 'Hack' });
+    expect(hack.status).toBe(404);
+    expect(hack.body.error).toBe('NotFoundError');
   });
 });
 

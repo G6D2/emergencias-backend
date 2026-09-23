@@ -67,15 +67,19 @@ function resolveDevLoginClaims(body = {}, env = process.env) {
   const groups = rawGroups
     .filter((g) => typeof g === 'string' && ALLOWED_DEV_GROUPS.has(g));
 
+  let hasAntipanic;
+  if (typeof body.has_antipanic_button === 'boolean') {
+    hasAntipanic = body.has_antipanic_button;
+  } else if (typeof body.hasAntipanicButton === 'boolean') {
+    hasAntipanic = body.hasAntipanicButton;
+  }
+
   return {
     sub,
     preferred_username:
       typeof body.preferred_username === 'string' ? body.preferred_username : undefined,
     groups: groups.length > 0 ? groups : ['citizen'],
-    has_antipanic_button:
-      typeof body.has_antipanic_button === 'boolean'
-        ? body.has_antipanic_button
-        : (typeof body.hasAntipanicButton === 'boolean' ? body.hasAntipanicButton : undefined),
+    has_antipanic_button: hasAntipanic,
   };
 }
 

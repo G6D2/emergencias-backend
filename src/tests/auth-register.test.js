@@ -99,22 +99,24 @@ describe('AUTH_MODE=local register/login', () => {
   });
 
   it('POST /auth/register rejects duplicate email with 409', async () => {
-    await request(app)
+    const first = await request(app)
       .post('/auth/register')
-      .send({ email: 'dup@example.com', password: 'secreto12' })
-      .expect(201);
+      .send({ email: 'dup@example.com', password: 'secreto12' });
+    expect(first.status).toBe(201);
 
-    await request(app)
+    const dup = await request(app)
       .post('/auth/register')
-      .send({ email: 'DUP@example.com', password: 'secreto12' })
-      .expect(409);
+      .send({ email: 'DUP@example.com', password: 'secreto12' });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error).toBe('ConflictError');
   });
 
   it('POST /auth/register validates password length', async () => {
-    await request(app)
+    const res = await request(app)
       .post('/auth/register')
-      .send({ email: 'corto@example.com', password: '123' })
-      .expect(400);
+      .send({ email: 'corto@example.com', password: '123' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('ValidationError');
   });
 
   it('POST /auth/login authenticates and returns JWT usable on protected routes', async () => {
@@ -142,15 +144,16 @@ describe('AUTH_MODE=local register/login', () => {
   });
 
   it('POST /auth/login rejects wrong password', async () => {
-    await request(app)
+    const created = await request(app)
       .post('/auth/register')
-      .send({ email: 'wrong@example.com', password: 'secreto12' })
-      .expect(201);
+      .send({ email: 'wrong@example.com', password: 'secreto12' });
+    expect(created.status).toBe(201);
 
-    await request(app)
+    const bad = await request(app)
       .post('/auth/login')
-      .send({ email: 'wrong@example.com', password: 'otra-cosa' })
-      .expect(401);
+      .send({ email: 'wrong@example.com', password: 'otra-cosa' });
+    expect(bad.status).toBe(401);
+    expect(bad.body.error).toBe('UnauthorizedError');
   });
 
   it('keeps POST /auth/dev/login for scripts', async () => {

@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
@@ -221,6 +221,15 @@ function decodeLegacyPayload(payload) {
   };
 }
 
+function decryptJsonPayload(key, { iv, authTag, encrypted }) {
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, {
+    authTagLength: AUTH_TAG_LENGTH,
+  });
+  decipher.setAuthTag(authTag);
+  const plaintext = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+  return JSON.parse(plaintext.toString('utf8'));
+}
+
 /**
  * AES-256-GCM para la ubicación at rest, con keyring para poder rotar.
  * Formato: base64("ELC" || version || keyIdLen || keyId || iv || authTag || ct)
@@ -290,10 +299,9 @@ function createLocationCrypto(config) {
       if (key) {
         try {
           return decryptWith(key, versioned);
-        } catch (err) {
+        } catch {
           // Un ciphertext viejo puede empezar con los bytes de MAGIC por azar
           // (~1 en 2^32): si falla, se reintenta abajo como formato legacy.
-          void err;
         }
       }
     }
@@ -322,19 +330,6 @@ function createLocationCrypto(config) {
     throw lastError || new Error('Invalid location ciphertext');
   }
 
-  function decryptJsonWith(key, parts) {
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, parts.iv, {
-      authTagLength: AUTH_TAG_LENGTH,
-    });
-    decipher.setAuthTag(parts.authTag);
-    const plaintext = Buffer.concat([decipher.update(parts.encrypted), decipher.final()]);
-    return JSON.parse(plaintext.toString('utf8'));
-  }
-
-  /**
-   * Cifra un objeto JSON arbitrario con el mismo wire format / keyring
-   * que las ubicaciones (perfil ciudadano, ubicaciones guardadas, etc.).
-   */
   function encryptJson(value) {
     if (value === null || typeof value !== 'object') {
       throw new Error('encryptJson requires a plain object or array');
@@ -364,9 +359,9 @@ function createLocationCrypto(config) {
       const key = keys.get(versioned.keyId);
       if (key) {
         try {
-          return decryptJsonWith(key, versioned);
-        } catch (err) {
-          void err;
+          return decryptJsonPayload(key, versioned);
+        } catch {
+          // Auth tag inválida con esta key → probar legacy / otras keys abajo.
         }
       }
     }
@@ -379,7 +374,7 @@ function createLocationCrypto(config) {
     let lastError = null;
     for (const key of keys.values()) {
       try {
-        return decryptJsonWith(key, legacy);
+        return decryptJsonPayload(key, legacy);
       } catch (err) {
         lastError = err;
       }

@@ -18,7 +18,7 @@ function resolveSslConfig(env = process.env) {
   if (env.DATABASE_SSL_VERIFY === 'true') {
     const ssl = { rejectUnauthorized: true };
     if (typeof env.DATABASE_SSL_CA === 'string' && env.DATABASE_SSL_CA.trim()) {
-      ssl.ca = env.DATABASE_SSL_CA.replace(/\\n/g, '\n');
+      ssl.ca = env.DATABASE_SSL_CA.replaceAll('\\n', '\n');
     }
     return ssl;
   }

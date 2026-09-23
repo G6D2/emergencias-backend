@@ -1,4 +1,4 @@
-const { randomUUID } = require('crypto');
+const { randomUUID } = require('node:crypto');
 const bcrypt = require('bcryptjs');
 
 const BCRYPT_ROUNDS = 10;

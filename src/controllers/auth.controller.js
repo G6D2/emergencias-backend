@@ -1,10 +1,21 @@
 const { ValidationError, ConflictError, UnauthorizedError } = require('../errors/app-errors');
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Anclado a forma típica de email; evita cuantificadores anidados (Sonar S5852).
+const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 const MIN_PASSWORD_LENGTH = 8;
 
 function normalizeEmail(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function resolveDisplayName(body) {
+  if (typeof body.preferred_username === 'string') {
+    return body.preferred_username;
+  }
+  if (typeof body.displayName === 'string') {
+    return body.displayName;
+  }
+  return undefined;
 }
 
 class AuthController {
@@ -20,9 +31,7 @@ class AuthController {
 
     const email = normalizeEmail(body.email);
     const password = body.password;
-    const displayName = typeof body.preferred_username === 'string'
-      ? body.preferred_username
-      : (typeof body.displayName === 'string' ? body.displayName : undefined);
+    const displayName = resolveDisplayName(body);
 
     if (!email || !EMAIL_RE.test(email)) {
       throw new ValidationError('email must be a valid email address');

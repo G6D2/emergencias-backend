@@ -1,4 +1,4 @@
-const { randomUUID } = require('crypto');
+const { randomUUID } = require('node:crypto');
 const { ConflictError } = require('../errors/app-errors');
 const { secureLog } = require('../security/secure-log');
 
@@ -207,12 +207,14 @@ class CitizenProfileRepository {
     const nextAddress = changes.address !== undefined
       ? String(changes.address).trim().slice(0, 240)
       : current.address;
-    const nextLat = changes.lat !== undefined
-      ? (typeof changes.lat === 'number' && !Number.isNaN(changes.lat) ? changes.lat : null)
-      : current.lat;
-    const nextLng = changes.lng !== undefined
-      ? (typeof changes.lng === 'number' && !Number.isNaN(changes.lng) ? changes.lng : null)
-      : current.lng;
+    let nextLat = current.lat;
+    if (changes.lat !== undefined) {
+      nextLat = typeof changes.lat === 'number' && !Number.isNaN(changes.lat) ? changes.lat : null;
+    }
+    let nextLng = current.lng;
+    if (changes.lng !== undefined) {
+      nextLng = typeof changes.lng === 'number' && !Number.isNaN(changes.lng) ? changes.lng : null;
+    }
 
     const locationEncrypted = this.locationCrypto.encryptJson({
       address: nextAddress,

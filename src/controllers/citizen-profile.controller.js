@@ -19,6 +19,20 @@ function readOptionalString(body, key) {
   return body[key];
 }
 
+function parseOptionalCoord(raw, fieldName) {
+  if (raw === undefined) {
+    return { present: false };
+  }
+  if (raw === null || raw === '') {
+    return { present: true, value: null };
+  }
+  const value = Number(raw);
+  if (Number.isNaN(value)) {
+    throw new ValidationError(`${fieldName} must be a number`);
+  }
+  return { present: true, value };
+}
+
 class CitizenProfileController {
   constructor(citizenProfileRepository) {
     this.repo = citizenProfileRepository;
@@ -68,25 +82,14 @@ class CitizenProfileController {
       throw new ValidationError('label and address are required');
     }
 
-    const lat = body.lat === undefined || body.lat === null || body.lat === ''
-      ? null
-      : Number(body.lat);
-    const lng = body.lng === undefined || body.lng === null || body.lng === ''
-      ? null
-      : Number(body.lng);
-
-    if (lat !== null && Number.isNaN(lat)) {
-      throw new ValidationError('lat must be a number');
-    }
-    if (lng !== null && Number.isNaN(lng)) {
-      throw new ValidationError('lng must be a number');
-    }
+    const lat = parseOptionalCoord(body.lat, 'lat');
+    const lng = parseOptionalCoord(body.lng, 'lng');
 
     const entry = await this.repo.addSavedLocation(user.sub, {
       label,
       address,
-      lat,
-      lng,
+      lat: lat.present ? lat.value : null,
+      lng: lng.present ? lng.value : null,
     });
     return { data: entry };
   }
@@ -100,18 +103,11 @@ class CitizenProfileController {
     const changes = {};
     if (body.label !== undefined) changes.label = body.label;
     if (body.address !== undefined) changes.address = body.address;
-    if (body.lat !== undefined) {
-      changes.lat = body.lat === null || body.lat === '' ? null : Number(body.lat);
-      if (changes.lat !== null && Number.isNaN(changes.lat)) {
-        throw new ValidationError('lat must be a number');
-      }
-    }
-    if (body.lng !== undefined) {
-      changes.lng = body.lng === null || body.lng === '' ? null : Number(body.lng);
-      if (changes.lng !== null && Number.isNaN(changes.lng)) {
-        throw new ValidationError('lng must be a number');
-      }
-    }
+
+    const lat = parseOptionalCoord(body.lat, 'lat');
+    if (lat.present) changes.lat = lat.value;
+    const lng = parseOptionalCoord(body.lng, 'lng');
+    if (lng.present) changes.lng = lng.value;
 
     const entry = await this.repo.updateSavedLocation(user.sub, id, changes);
     if (!entry) {
