@@ -62,6 +62,9 @@ function createJwtVerifier(config, jwks = null) {
       module: typeof payload.module === 'string' ? payload.module : undefined,
       jti: typeof payload.jti === 'string' ? payload.jti : undefined,
       tokenUse: payload.token_use,
+      hasAntipanicButton: typeof payload.has_antipanic_button === 'boolean'
+        ? payload.has_antipanic_button
+        : undefined,
     };
   }
 

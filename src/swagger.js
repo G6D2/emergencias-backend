@@ -30,6 +30,7 @@ const options = {
       { name: 'Emergencies', description: 'Listado, detalle y cambios de estado de emergencias' },
       { name: 'Officers', description: 'Catálogo de oficiales para asignación (dispatcher)' },
       { name: 'Incidents', description: 'Resultado del motor de detección de incidentes (dispatcher)' },
+      { name: 'CitizenProfile', description: 'Perfil personal y ubicaciones frecuentes del ciudadano' },
     ],
     components: {
       securitySchemes: {

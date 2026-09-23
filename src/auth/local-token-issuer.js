@@ -8,6 +8,7 @@ function createLocalTokenIssuer(privateKey, config) {
     sub,
     preferred_username: preferredUsername,
     groups = [],
+    has_antipanic_button: hasAntipanicButton,
   }) {
     if (typeof sub !== 'string' || sub.trim().length === 0) {
       throw new ValidationError('sub is required');
@@ -22,7 +23,7 @@ function createLocalTokenIssuer(privateKey, config) {
       ? preferredUsername
       : sub;
 
-    const accessToken = await new SignJWT({
+    const claims = {
       aud: [config.audience],
       token_use: config.expectedTokenUse,
       ver: config.expectedVer,
@@ -30,7 +31,12 @@ function createLocalTokenIssuer(privateKey, config) {
       module: config.module,
       groups: normalizedGroups,
       jti: randomUUID(),
-    })
+    };
+    if (typeof hasAntipanicButton === 'boolean') {
+      claims.has_antipanic_button = hasAntipanicButton;
+    }
+
+    const accessToken = await new SignJWT(claims)
       .setProtectedHeader({ alg: 'RS256', kid: LOCAL_KEY_ID })
       .setIssuer(config.issuer)
       .setSubject(sub.trim())

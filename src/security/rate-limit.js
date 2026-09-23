@@ -55,8 +55,34 @@ function createPanicButtonRateLimiter(env = process.env) {
   );
 }
 
+/** PUT profile / mutaciones de ubicaciones guardadas: 30 req/min por IP. */
+function createCitizenProfileMutationRateLimiter(env = process.env) {
+  return buildLimiter(
+    {
+      windowMs: 60 * 1000,
+      max: 30,
+      message: 'Demasiadas modificaciones al perfil. Probá de nuevo en un minuto.',
+    },
+    env
+  );
+}
+
+/** POST /auth/login y /auth/register: 20 req/min por IP. */
+function createAuthCredentialRateLimiter(env = process.env) {
+  return buildLimiter(
+    {
+      windowMs: 60 * 1000,
+      max: 20,
+      message: 'Demasiados intentos. Probá de nuevo en un minuto.',
+    },
+    env
+  );
+}
+
 module.exports = {
   isRateLimitEnabled,
   createDevLoginRateLimiter,
   createPanicButtonRateLimiter,
+  createCitizenProfileMutationRateLimiter,
+  createAuthCredentialRateLimiter,
 };

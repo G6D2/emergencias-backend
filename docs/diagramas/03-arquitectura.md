@@ -89,7 +89,7 @@ flowchart TB
     services["services<br/>emergency-events, kafka.service, outbox-publisher"]
     detectionJob["incident-detection-job<br/>cada 60s, pg_try_advisory_lock"]:::incident
     security["security<br/>location-crypto, location-retention, cors, rate-limit, secure-log, security-headers"]
-    jobs["jobs / procesos en background<br/>OutboxPublisher.start(), location-retention, keep-warm"]
+    jobs["jobs / procesos en background<br/>OutboxPublisher, location-retention,<br/>incident-detection-job, keep-warm"]
     db[("Neon Postgres")]
     kafkaC["Kafka (KafkaService, deshabilitado en prod)"]:::planned
 
@@ -101,6 +101,7 @@ flowchart TB
     repositories --> security
     repositories --> db
     services --> security
+    jobs --> domain
     jobs --> repositories
     jobs --> services
     services --> kafkaC

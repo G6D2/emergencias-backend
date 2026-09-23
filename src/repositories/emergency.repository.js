@@ -275,7 +275,8 @@ class EmergencyRepository {
   }
 
   /**
-   * Borra ciphertext de ubicaciones más viejas que retentionHours.
+   * Borra ciphertext de ubicaciones cerradas hace más de retentionHours.
+   * Solo aplica a emergencias con closed_at; las abiertas se conservan.
    * Las filas siguen existiendo; lat/lng quedan null (minimización).
    */
   async anonymizeExpiredLocations(retentionHours) {
@@ -292,12 +293,13 @@ class EmergencyRepository {
            location_anonymized_at = now(),
            updated_at = now()
        WHERE location_anonymized_at IS NULL
+         AND closed_at IS NOT NULL
          AND (
            location_encrypted IS NOT NULL
            OR latitude IS NOT NULL
            OR longitude IS NOT NULL
          )
-         AND created_at < now() - ($1::double precision * interval '1 hour')
+         AND closed_at < now() - ($1::double precision * interval '1 hour')
        RETURNING id`,
       [hours]
     );

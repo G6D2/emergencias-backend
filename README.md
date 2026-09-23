@@ -111,8 +111,17 @@ Los endpoints bajo `/api/*` exigen `Authorization: Bearer <access_token>`.
 
 Funcionás solos con JWT local que **respeta el mismo contrato** que CityPass+ (claims, RS256, `verify()`).
 
-1. `POST /auth/dev/login` → devuelve `access_token` (mismo shape que el IdP)
-2. Mandá ese token en `Authorization: Bearer …` al resto de la API
+1. `POST /auth/register` — alta email+password (tabla `auth_users`, bcrypt)
+2. `POST /auth/login` — login email+password → `access_token`
+3. `POST /auth/dev/login` — token inventando `sub` (tests / atajos demo)
+4. Mandá ese token en `Authorization: Bearer …` al resto de la API
+
+Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipánico) y `luciatranquila@gmail.com`.
+
+**Ejemplo register/login:**
+```json
+{ "email": "nuevo@example.com", "password": "secreto12", "preferred_username": "nuevo" }
+```
 
 **Ejemplo dev login:**
 ```json
@@ -254,14 +263,14 @@ sin perder los datos ya guardados.
    `LOCATION_ENCRYPTION_KEYS=v1:<vieja>,v2:<nueva>` + `LOCATION_ENCRYPTION_KEY_ID=v1`.
 2. Cambiar el activo a `v2`. Las filas nuevas se cifran con `v2`; las viejas se
    siguen leyendo con `v1`.
-3. Cuando ya no queden filas con `v1` (con retención de 72h, después de 72h),
+3. Cuando ya no queden filas con `v1` (con retención post-cierre, tras `LOCATION_RETENTION_HOURS`),
    sacar `v1` del keyring.
 
 Las filas escritas antes de esta versión no tienen cabecera y se desencriptan
 probando las claves del keyring, así que la migración no requiere backfill.
 
 ### Retención / minimización
-Job en background (y `npm run security:anonymize-locations`) borra el ciphertext después de `LOCATION_RETENTION_HOURS` (default 72). La emergencia sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
+Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
 
 Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
@@ -279,7 +288,7 @@ Cada `GET /api/panic-button/:id` autorizado deja un registro en `emergency_acces
 | `LOCATION_ENCRYPTION_KEY` | AES-256 key (base64, 32 bytes) — **obligatoria** (salvo que se use `LOCATION_ENCRYPTION_KEYS`) |
 | `LOCATION_ENCRYPTION_KEYS` | Keyring para rotar: `id:base64key,id2:base64key2` (opcional) |
 | `LOCATION_ENCRYPTION_KEY_ID` | Id de la clave con la que se cifra (default: `1`, o la primera del keyring) |
-| `LOCATION_RETENTION_HOURS` | Horas antes de anonimizar (default 72) |
+| `LOCATION_RETENTION_HOURS` | Horas tras el cierre (`closed_at`) antes de anonimizar (default 72) |
 | `LOCATION_RETENTION_ENABLED` | `false` para desactivar el job |
 | `FORCE_HTTPS` | Forzar HTTPS aunque no sea production |
 | `CORS_ALLOWED_ORIGINS` | Origins permitidos (coma-separados). Sin ella: `http://localhost:3001` fuera de producción; en producción exige la variable y si falta cae a `https://frontend-krds.onrender.com` con un warn en el log (nunca refleja el origin del request) |
@@ -295,6 +304,7 @@ El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `c
 | Endpoint | Límite | Respuesta al exceder |
 |----------|--------|-----------------------|
 | `POST /auth/dev/login` | 10 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
+| `POST /auth/login` / `POST /auth/register` | 20 req/min por IP | idem |
 | `POST /api/panic-button` | 5 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
 
 ### Pool de conexiones (`pg`)
@@ -384,7 +394,9 @@ Decisión de producto: "la severidad no la elige quien reporta". Tabla en `src/d
 | `INFRAESTRUCTURA` | `medium` |
 | `OTRO` | `low` |
 
-Es la base sobre la que el Risk Engine (branch `feature/incident-detection-rule-based`) solo puede **subir** la prioridad, nunca bajarla.
+Es la base sobre la que el Risk Engine en `main` (`src/domain/risk-engine.js`, job
+`incident-detection-job`, merge #36) solo puede **subir** la prioridad, nunca bajarla
+(`effectivePriority` / invariante en `severity.js`).
 
 ### GET `/api/panic-button/:id`
 

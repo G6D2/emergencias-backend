@@ -10,6 +10,8 @@ const { createDevAuthRoutes } = require('../routes/dev-auth.routes');
  * Arma middleware + rutas según AUTH_MODE.
  * - local: emite y valida JWT con clave propia (misma forma que CityPass+)
  * - idp: valida contra JWKS del Grupo 2
+ *
+ * @param {{ env?: object, config?: object, jwks?: object, authUserRepository?: object|null }} [options]
  */
 async function createAuthSetup(options = {}) {
   const env = options.env || process.env;
@@ -28,7 +30,8 @@ async function createAuthSetup(options = {}) {
         config,
         verifyAccessToken: verifier.verifyAccessToken,
       }),
-      devAuthRouter: createDevAuthRoutes(issuer),
+      // register/login solo si hay repo de usuarios (pool disponible)
+      devAuthRouter: createDevAuthRoutes(issuer, options.authUserRepository || null),
     };
   }
 

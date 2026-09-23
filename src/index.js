@@ -4,10 +4,12 @@ const { getPool } = require('./db/pool');
 const { EmergencyRepository } = require('./repositories/emergency.repository');
 const { OfficerRepository } = require('./repositories/officer.repository');
 const { IncidentRepository } = require('./repositories/incident.repository');
+const { CitizenProfileRepository } = require('./repositories/citizen-profile.repository');
 const { createApp } = require('./app');
 const { createAuthSetup } = require('./auth/setup');
 const { createLocationCrypto } = require('./security/location-crypto');
 const { startLocationRetentionJob } = require('./security/location-retention');
+const { startCitizenProfileRetentionJob } = require('./security/citizen-profile-retention');
 const { startIncidentDetectionJob } = require('./services/incident-detection-job');
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
@@ -18,13 +20,16 @@ const PORT = process.env.PORT || 3000;
 async function start() {
   // Valida la key al boot (falla temprano si falta o es inválida).
   const locationCrypto = createLocationCrypto();
-
-  const auth = await createAuthSetup();
-  const kafkaService = new KafkaService();
   const pool = getPool();
+  const { AuthUserRepository } = require('./repositories/auth-user.repository');
+  const authUserRepository = new AuthUserRepository(pool);
+
+  const auth = await createAuthSetup({ authUserRepository });
+  const kafkaService = new KafkaService();
   const emergencyRepository = new EmergencyRepository(pool, { locationCrypto });
   const officerRepository = new OfficerRepository(pool);
   const incidentRepository = new IncidentRepository(pool, emergencyRepository);
+  const citizenProfileRepository = new CitizenProfileRepository(pool, { locationCrypto });
   const outboxPublisher = new OutboxPublisher(pool, kafkaService);
 
   // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
@@ -34,6 +39,7 @@ async function start() {
   outboxPublisher.start();
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
+  const citizenPiiRetentionJob = startCitizenProfileRetentionJob(citizenProfileRepository);
   const incidentDetectionJob = startIncidentDetectionJob(emergencyRepository, incidentRepository, { pool });
   // Mantiene despiertos backend y frontend en horario de clase (Render free).
   const keepWarmJob = startKeepWarmJob();
@@ -44,6 +50,7 @@ async function start() {
     authMode: auth.mode,
     officerRepository,
     incidentRepository,
+    citizenProfileRepository,
   });
 
   const server = app.listen(PORT, () => {
@@ -51,7 +58,7 @@ async function start() {
     secureLog('info', `Health check: http://localhost:${PORT}/health`);
     secureLog('info', `Swagger UI: http://localhost:${PORT}/api-docs`);
     if (auth.mode === 'local') {
-      secureLog('info', `Auth LOCAL — POST http://localhost:${PORT}/auth/dev/login`);
+      secureLog('info', `Auth LOCAL — POST http://localhost:${PORT}/auth/login | /auth/register | /auth/dev/login`);
     } else {
       secureLog('info', `Auth IdP (${auth.config.issuer})`);
     }
@@ -59,6 +66,7 @@ async function start() {
 
   const shutdown = async () => {
     retentionJob.stop();
+    citizenPiiRetentionJob.stop();
     incidentDetectionJob.stop();
     keepWarmJob.stop();
     outboxPublisher.stop();

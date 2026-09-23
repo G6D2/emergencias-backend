@@ -7,6 +7,7 @@ class UserController {
         username: user.username,
         groups: user.groups,
         module: user.module,
+        hasAntipanicButton: user.hasAntipanicButton,
       },
     };
   }

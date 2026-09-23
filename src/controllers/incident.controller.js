@@ -3,9 +3,9 @@ const { assertUuid } = require('../utils/uuid');
 
 /**
  * Endpoints de solo lectura para hacer visible al dispatcher el resultado
- * del motor de incidentes (Risk Engine + RuleBasedGrouper, branch
- * feature/incident-detection-rule-based). No hay altas/bajas manuales de
- * incidentes: los crea y actualiza el job de detección.
+ * del motor de incidentes (Risk Engine + RuleBasedGrouper, en main vía #36/#41).
+ * No hay altas/bajas manuales de incidentes: los crea y actualiza el job de
+ * detección.
  */
 class IncidentController {
   constructor(incidentRepository) {

@@ -8,6 +8,7 @@ const { createUserRoutes } = require('./routes/user.routes');
 const { createOutboxRoutes } = require('./routes/outbox.routes');
 const { createOfficerRoutes } = require('./routes/officer.routes');
 const { createIncidentsRoutes } = require('./routes/incidents.routes');
+const { createCitizenProfileRoutes } = require('./routes/citizen-profile.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
 const { secureLog } = require('./security/secure-log');
@@ -22,6 +23,7 @@ const { resolveCorsOrigins } = require('./security/cors');
  *   authMode?: string,
  *   officerRepository?: object|null,
  *   incidentRepository?: object|null,
+ *   citizenProfileRepository?: object|null,
  * }} [options]
  */
 function createApp(kafkaService, emergencyRepository, options = {}) {
@@ -29,6 +31,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   const authenticate = options.authenticate || createAuthenticateMiddleware();
   const officerRepository = options.officerRepository || null;
   const incidentRepository = options.incidentRepository || null;
+  const citizenProfileRepository = options.citizenProfileRepository || null;
 
   app.set('trust proxy', 1);
   app.use(createSecurityMiddleware());
@@ -45,7 +48,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   });
 
   if (options.devAuthRouter) {
-    app.use('/auth/dev', options.devAuthRouter);
+    app.use('/auth', options.devAuthRouter);
   }
 
   /**
@@ -88,6 +91,9 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   }
   if (incidentRepository) {
     app.use('/api/incidents', createIncidentsRoutes(incidentRepository, authenticate));
+  }
+  if (citizenProfileRepository) {
+    app.use('/api/citizen', createCitizenProfileRoutes(citizenProfileRepository, authenticate));
   }
 
   app.use((err, req, res, next) => {

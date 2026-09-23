@@ -1,4 +1,4 @@
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
@@ -221,6 +221,15 @@ function decodeLegacyPayload(payload) {
   };
 }
 
+function decryptJsonPayload(key, { iv, authTag, encrypted }) {
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, {
+    authTagLength: AUTH_TAG_LENGTH,
+  });
+  decipher.setAuthTag(authTag);
+  const plaintext = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+  return JSON.parse(plaintext.toString('utf8'));
+}
+
 /**
  * AES-256-GCM para la ubicación at rest, con keyring para poder rotar.
  * Formato: base64("ELC" || version || keyIdLen || keyId || iv || authTag || ct)
@@ -290,10 +299,9 @@ function createLocationCrypto(config) {
       if (key) {
         try {
           return decryptWith(key, versioned);
-        } catch (err) {
+        } catch {
           // Un ciphertext viejo puede empezar con los bytes de MAGIC por azar
           // (~1 en 2^32): si falla, se reintenta abajo como formato legacy.
-          void err;
         }
       }
     }
@@ -322,9 +330,70 @@ function createLocationCrypto(config) {
     throw lastError || new Error('Invalid location ciphertext');
   }
 
+  function encryptJson(value) {
+    if (value === null || typeof value !== 'object') {
+      throw new Error('encryptJson requires a plain object or array');
+    }
+    const iv = crypto.randomBytes(IV_LENGTH);
+    const cipher = crypto.createCipheriv(ALGORITHM, activeKey, iv, {
+      authTagLength: AUTH_TAG_LENGTH,
+    });
+    const plaintext = Buffer.from(JSON.stringify(value), 'utf8');
+    const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return encodePayload({
+      keyId: activeKeyId,
+      iv,
+      authTag: cipher.getAuthTag(),
+      encrypted,
+    }).toString('base64');
+  }
+
+  function decryptJson(ciphertextBase64) {
+    if (!ciphertextBase64 || typeof ciphertextBase64 !== 'string') {
+      throw new Error('Invalid ciphertext');
+    }
+
+    const payload = Buffer.from(ciphertextBase64, 'base64');
+    const versioned = decodeVersionedPayload(payload);
+    if (versioned) {
+      const key = keys.get(versioned.keyId);
+      if (key) {
+        try {
+          return decryptJsonPayload(key, versioned);
+        } catch {
+          // Auth tag inválida con esta key → probar legacy / otras keys abajo.
+        }
+      }
+    }
+
+    const legacy = decodeLegacyPayload(payload);
+    if (!legacy) {
+      throw new Error('Invalid ciphertext length');
+    }
+
+    let lastError = null;
+    for (const key of keys.values()) {
+      try {
+        return decryptJsonPayload(key, legacy);
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (versioned && !keys.has(versioned.keyId)) {
+      throw new Error(
+        `No encryption key available for key id "${versioned.keyId}"`
+      );
+    }
+
+    throw lastError || new Error('Invalid ciphertext');
+  }
+
   return {
     encryptLocation,
     decryptLocation,
+    encryptJson,
+    decryptJson,
     activeKeyId,
     keyIds: Array.from(keys.keys()),
   };
