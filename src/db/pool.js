@@ -5,24 +5,26 @@ let pool = null;
 /**
  * SSL para Postgres managed (Neon, etc.).
  * - DATABASE_SSL=false → sin SSL (Postgres local / docker-compose)
- * - default / DATABASE_SSL=true → SSL con verificación de certificado
- * - DATABASE_SSL_INSECURE=true → SSL sin verificar (solo si el pooler lo exige)
- * - DATABASE_SSL_CA → PEM del CA (opcional)
+ * - default → SSL con rejectUnauthorized: false (compatible con pooler Neon;
+ *   se endurece post-demo con DATABASE_SSL_VERIFY=true)
+ * - DATABASE_SSL_VERIFY=true → verifica el certificado del servidor
+ * - DATABASE_SSL_CA → PEM del CA (solo con VERIFY)
  */
 function resolveSslConfig(env = process.env) {
   if (env.DATABASE_SSL === 'false') {
     return false;
   }
 
-  if (env.DATABASE_SSL_INSECURE === 'true') {
-    return { rejectUnauthorized: false };
+  if (env.DATABASE_SSL_VERIFY === 'true') {
+    const ssl = { rejectUnauthorized: true };
+    if (typeof env.DATABASE_SSL_CA === 'string' && env.DATABASE_SSL_CA.trim()) {
+      ssl.ca = env.DATABASE_SSL_CA.replace(/\\n/g, '\n');
+    }
+    return ssl;
   }
 
-  const ssl = { rejectUnauthorized: true };
-  if (typeof env.DATABASE_SSL_CA === 'string' && env.DATABASE_SSL_CA.trim()) {
-    ssl.ca = env.DATABASE_SSL_CA.replace(/\\n/g, '\n');
-  }
-  return ssl;
+  // Default pre-demo: cifrado en tránsito sin validar el cert del pooler.
+  return { rejectUnauthorized: false };
 }
 
 function getPool() {

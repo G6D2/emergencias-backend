@@ -34,13 +34,13 @@ describe('resolveSslConfig', () => {
     expect(resolveSslConfig({ DATABASE_SSL: 'false' })).toBe(false);
   });
 
-  it('verifies certificates by default', () => {
-    expect(resolveSslConfig({})).toEqual({ rejectUnauthorized: true });
+  it('uses relaxed cert check by default (Neon pooler safe)', () => {
+    expect(resolveSslConfig({})).toEqual({ rejectUnauthorized: false });
   });
 
-  it('allows insecure opt-in', () => {
-    expect(resolveSslConfig({ DATABASE_SSL_INSECURE: 'true' })).toEqual({
-      rejectUnauthorized: false,
+  it('verifies certificates when DATABASE_SSL_VERIFY=true', () => {
+    expect(resolveSslConfig({ DATABASE_SSL_VERIFY: 'true' })).toEqual({
+      rejectUnauthorized: true,
     });
   });
 });
