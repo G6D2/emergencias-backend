@@ -19,7 +19,7 @@ function compareSeverity(left, right) {
 // Decisión de producto: la severidad no la elige quien reporta. El backend la
 // deriva del emergencyType (catálogo cerrado en src/domain/emergency-type.js);
 // cualquier `severity` que mande el cliente se ignora. Esta tabla es la base
-// sobre la que el Risk Engine (branch de Mati, feature/incident-detection-rule-based)
+// sobre la que el Risk Engine (src/domain/risk-engine.js, en main vía #36)
 // solo puede subir la prioridad, nunca bajarla.
 const SEVERITY_BY_TYPE = Object.freeze({
   PANICO: 'critical',
@@ -43,11 +43,10 @@ function severityForType(type) {
  * Prioridad efectiva de una emergencia (tarea #63/visibilidad del motor de
  * incidentes): el máximo entre su severity individual y la priority del
  * incidente al que pertenece, si pertenece a alguno. Mismo criterio que
- * risk-engine.applyPriorityInvariant (branch feature/incident-detection-rule-based:
- * la prioridad agrupada nunca puede bajar la de una emergencia individual),
- * pero sin lanzar si incidentPriority es null/undefined: acá "todavía sin
- * incidente" es el caso normal (la mayoría de las emergencias), no un dato
- * corrupto.
+ * risk-engine.applyPriorityInvariant: la prioridad agrupada nunca puede bajar
+ * la de una emergencia individual, pero sin lanzar si incidentPriority es
+ * null/undefined: acá "todavía sin incidente" es el caso normal (la mayoría
+ * de las emergencias), no un dato corrupto.
  * @param {'low'|'medium'|'high'|'critical'} severity
  * @param {'low'|'medium'|'high'|'critical'|null|undefined} incidentPriority
  * @returns {'low'|'medium'|'high'|'critical'}

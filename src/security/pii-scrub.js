@@ -1,0 +1,49 @@
+/** Longitud máxima de description libre en emergencias. */
+const MAX_DESCRIPTION_LENGTH = 280;
+
+/**
+ * Patrones típicos de PII en texto libre (AR / genérico).
+ * Se reemplazan por placeholders para no persistir ni emitir datos sensibles.
+ */
+const PII_PATTERNS = [
+  { re: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, label: '[email]' },
+  // CUIL/CUIT antes que teléfonos (si no, 20-12345678-9 queda como [tel]-9)
+  { re: /\b\d{2}[-\s]?\d{7,8}[-\s]?\d\b/g, label: '[id]' },
+  // Tarjeta (13–19 dígitos agrupados)
+  { re: /\b(?:\d[ -]*?){13,19}\b/g, label: '[card]' },
+  // Teléfonos AR / internacionales (7+ dígitos con separadores)
+  { re: /(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{2,4}\)?[\s.-]?)?\d{3,4}[\s.-]?\d{3,4}\b/g, label: '[tel]' },
+];
+
+/**
+ * Sanitiza texto libre: normaliza espacios, redacta PII y trunca.
+ * @param {unknown} raw
+ * @param {{ maxLength?: number, fallback?: string }} [options]
+ * @returns {string}
+ */
+function scrubFreeText(raw, options = {}) {
+  const maxLength = options.maxLength ?? MAX_DESCRIPTION_LENGTH;
+  const fallback = options.fallback ?? '';
+
+  if (typeof raw !== 'string') return fallback;
+
+  let text = raw.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!text) return fallback;
+
+  for (const { re, label } of PII_PATTERNS) {
+    re.lastIndex = 0;
+    text = text.replace(re, label);
+  }
+
+  if (text.length > maxLength) {
+    text = text.slice(0, maxLength).trimEnd();
+  }
+
+  return text || fallback;
+}
+
+module.exports = {
+  scrubFreeText,
+  MAX_DESCRIPTION_LENGTH,
+  PII_PATTERNS,
+};

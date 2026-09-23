@@ -12,11 +12,13 @@ function emergencyData(emergency) {
     updatedAt,
   } = emergency;
 
+  // No publicar description en el bus: es texto libre y puede contener PII.
+  // Queda en Postgres para el dispatcher autenticado (API HTTP).
   return {
     id,
     correlationId: correlationId || id,
     userId,
-    description,
+    hasDescription: Boolean(description && String(description).trim()),
     severity,
     status,
     assignedOfficerId,

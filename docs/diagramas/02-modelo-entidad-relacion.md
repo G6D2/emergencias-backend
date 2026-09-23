@@ -1,8 +1,9 @@
 # Modelo entidad-relación
 
-Para qué sirve: mostrar el schema real de Postgres tal como queda después de aplicar las 14
-migraciones Flyway (`db/migrations/V1__...` a `V14__...`), con tipos, PK/FK y los `CHECK` que
-importan para entender las reglas de negocio.
+Para qué sirve: mostrar el schema real de Postgres tal como queda después de aplicar las
+migraciones Flyway (`db/migrations/V1__...` en adelante; incidentes en V12/V14, perfil en V15,
+auth local en V16), con tipos, PK/FK y los `CHECK` que importan para entender las reglas de
+negocio.
 
 ```mermaid
 erDiagram
@@ -96,15 +97,16 @@ erDiagram
 | `severity` (emergencies) | `CHECK (severity IS NULL OR severity IN ('low','medium','high','critical'))` (V7). Se deriva del `emergency_type` en el controller (`src/domain/severity.js`), no la elige el cliente. |
 | `emergency_type` (emergencies e incidents) | Catálogo cerrado igual en ambas tablas: `MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO` (V10, V12). `PANICO` representa el botón SOS y conceptualmente es un "origen", no un tipo — queda así hasta que se modele el origen aparte. |
 | `assigned_officer_id` → `officers.id` | **No hay FK real en la base** (columna `TEXT` agregada en V4, `officers` recién nace en V11): la relación es solo aplicativa, resuelta con un `LEFT JOIN` en `emergency.repository.js`. Por eso el diagrama la marca con línea punteada. |
-| `incident_id` → `incidents.id` | Sí es FK real (`ON DELETE SET NULL`, V12). Desde los PRs #36/#39/#41 (mergeados a `main`) el job `incident-detection-job.js` sí escribe acá: agrupa emergencias del mismo tipo y cercanas entre sí cada 60s y crea/actualiza filas de `incidents` vía `IncidentRepository.create`/`applyScoringDecision`. |
+| `incident_id` → `incidents.id` | Sí es FK real (`ON DELETE SET NULL`, V12). Desde los PRs #36/#39/#41 (mergeados a `main`) el job `incident-detection-job.js` sí escribe acá: agrupa emergencias del mismo tipo y cercanas entre sí cada 60s y crea/actualiza filas de `incidents` vía `IncidentRepository.create`/`applyScoringDecision`. La prioridad efectiva de cada emergencia es `max(severity, incident.priority)` (`effectivePriority`, #41). |
 | `incidents.factors` (V14) | JSON con el snapshot de features que usó el Risk Engine para ese score: `reportCount`, `uniqueCitizenCount`, `minDistanceMeters`, `maxDistanceMeters`, `recencyMinutes`, `maxSeverity` (`src/domain/incident-detector.js`). Se sobrescribe en cada corrida del job que reevalúa el incidente, no es un historial. |
 | `outbox_events` | Desacoplada a propósito: no tiene FK a `emergencies`. Ver `05-secuencias.md` y `06-eventos.md` para el ciclo de vida completo (`PENDING → PROCESSING → PUBLISHED/FAILED`). |
 
 ## Fuente en el código
 
-- `db/migrations/V1__create_emergencias.sql` … `V14__add_incident_factors.sql`
+- `db/migrations/V1__create_emergencias.sql` … `V16__create_auth_users.sql`
 - `src/security/location-crypto.js`, `src/security/location-retention.js`
 - `src/repositories/emergency.repository.js` (mapeo de columnas, `LEFT JOIN officers`, `LEFT JOIN incidents`)
 - `src/repositories/incident.repository.js` (`create`, `addMember`, `applyScoringDecision`)
-- `src/domain/emergency-type.js`, `src/domain/severity.js`, `src/domain/incident-detector.js`
+- `src/services/incident-detection-job.js`, `src/domain/risk-engine.js`, `src/domain/incident-detector.js`
+- `src/domain/emergency-type.js`, `src/domain/severity.js`
 - `db/README.md` (decisiones de diseño del schema)

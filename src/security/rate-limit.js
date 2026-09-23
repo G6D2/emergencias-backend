@@ -67,9 +67,22 @@ function createCitizenProfileMutationRateLimiter(env = process.env) {
   );
 }
 
+/** POST /auth/login y /auth/register: 20 req/min por IP. */
+function createAuthCredentialRateLimiter(env = process.env) {
+  return buildLimiter(
+    {
+      windowMs: 60 * 1000,
+      max: 20,
+      message: 'Demasiados intentos. Probá de nuevo en un minuto.',
+    },
+    env
+  );
+}
+
 module.exports = {
   isRateLimitEnabled,
   createDevLoginRateLimiter,
   createPanicButtonRateLimiter,
   createCitizenProfileMutationRateLimiter,
+  createAuthCredentialRateLimiter,
 };

@@ -242,6 +242,54 @@ class CitizenProfileRepository {
     );
     return result.rowCount > 0;
   }
+
+  /**
+   * Minimización: borra ciphertext sensible de perfiles no actualizados
+   * en `retentionDays` días (display_name se conserva).
+   */
+  async anonymizeStaleProfiles(retentionDays) {
+    const days = Number(retentionDays);
+    if (!Number.isFinite(days) || days <= 0) {
+      throw new Error('retentionDays must be a positive number');
+    }
+
+    const result = await this.pool.query(
+      `UPDATE citizen_profiles
+       SET sensitive_encrypted = NULL,
+           updated_at = now()
+       WHERE sensitive_encrypted IS NOT NULL
+         AND updated_at < now() - make_interval(days => $1::int)
+       RETURNING user_id`,
+      [Math.floor(days)]
+    );
+
+    return {
+      anonymizedCount: result.rowCount,
+      userIds: result.rows.map((r) => r.user_id),
+    };
+  }
+
+  /**
+   * Minimización: elimina ubicaciones guardadas sin tocar en `retentionDays`.
+   */
+  async deleteStaleSavedLocations(retentionDays) {
+    const days = Number(retentionDays);
+    if (!Number.isFinite(days) || days <= 0) {
+      throw new Error('retentionDays must be a positive number');
+    }
+
+    const result = await this.pool.query(
+      `DELETE FROM citizen_saved_locations
+       WHERE updated_at < now() - make_interval(days => $1::int)
+       RETURNING id`,
+      [Math.floor(days)]
+    );
+
+    return {
+      deletedCount: result.rowCount,
+      ids: result.rows.map((r) => r.id),
+    };
+  }
 }
 
 module.exports = {

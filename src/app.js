@@ -48,7 +48,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   });
 
   if (options.devAuthRouter) {
-    app.use('/auth/dev', options.devAuthRouter);
+    app.use('/auth', options.devAuthRouter);
   }
 
   /**

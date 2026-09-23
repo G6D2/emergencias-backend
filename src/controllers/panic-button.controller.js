@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { ValidationError } = require('../errors/app-errors');
 const { secureLog } = require('../security/secure-log');
+const { scrubFreeText } = require('../security/pii-scrub');
 const { buildEmergencyCreatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { severityForType } = require('../domain/severity');
@@ -88,7 +89,9 @@ class PanicButtonController {
       latitude,
       longitude,
       address,
-      description: payload.description || 'Botón de pánico activado',
+      description: scrubFreeText(payload.description, {
+        fallback: 'Botón de pánico activado',
+      }),
       severity,
       emergencyType,
       status: 'PENDING',

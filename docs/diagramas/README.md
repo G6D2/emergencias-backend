@@ -17,7 +17,7 @@ de lo que aparece como implementado es especulación.
 
 1. [Contexto (C4 nivel 1)](00-contexto.md) — el módulo en el mapa de CityPass+: actores, sistemas propios y externos, qué está conectado hoy
 2. [Casos de uso](01-casos-de-uso.md) — actores, épicas y qué caso de uso está implementado vs. planificado
-3. [Modelo entidad-relación](02-modelo-entidad-relacion.md) — schema completo de las 14 migraciones Flyway
+3. [Modelo entidad-relación](02-modelo-entidad-relacion.md) — schema Flyway (V1…V16: emergencias, outbox, officers, incidents, perfil, auth local)
 4. [Arquitectura](03-arquitectura.md) — contenedores (estilo C4) y componentes internos del backend, incluido el motor de incidentes con `IncidentDetectionStrategy` (`DbscanGrouper` primaria, `RuleBasedGrouper` fallback)
 5. [Máquina de estados](04-maquina-de-estados.md) — transiciones de una emergencia, con y sin endpoint
 6. [Secuencias](05-secuencias.md) — SOS del ciudadano, flujo del dispatcher, cancelación + outbox→Kafka, job de detección de incidentes (DBSCAN con fallback a reglas)
@@ -33,7 +33,8 @@ de commitear: todos generan SVG sin errores de sintaxis.
 
 ## Cómo se generaron
 
-A partir de: migraciones (`db/migrations/V*.sql`, incluida V14 del motor de incidentes),
+A partir de: migraciones (`db/migrations/V*.sql`, incluida V14 del motor de incidentes,
+V15 de perfil ciudadano y V16 de auth local),
 dominio (`src/domain/*.js`, incluidos `rule-based-grouper.js`, `dbscan-grouper.js`,
 `incident-detection-strategy.js`, `risk-engine.js`, `incident-detector.js`), `scripts/demo-dbscan.js`
 (dataset sintético de demo), rutas (`src/routes/*.js`, incluido `incidents.routes.js`), servicios y

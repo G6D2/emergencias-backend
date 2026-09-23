@@ -111,8 +111,17 @@ Los endpoints bajo `/api/*` exigen `Authorization: Bearer <access_token>`.
 
 Funcionás solos con JWT local que **respeta el mismo contrato** que CityPass+ (claims, RS256, `verify()`).
 
-1. `POST /auth/dev/login` → devuelve `access_token` (mismo shape que el IdP)
-2. Mandá ese token en `Authorization: Bearer …` al resto de la API
+1. `POST /auth/register` — alta email+password (tabla `auth_users`, bcrypt)
+2. `POST /auth/login` — login email+password → `access_token`
+3. `POST /auth/dev/login` — token inventando `sub` (tests / atajos demo)
+4. Mandá ese token en `Authorization: Bearer …` al resto de la API
+
+Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipánico) y `luciatranquila@gmail.com`.
+
+**Ejemplo register/login:**
+```json
+{ "email": "nuevo@example.com", "password": "secreto12", "preferred_username": "nuevo" }
+```
 
 **Ejemplo dev login:**
 ```json
@@ -295,6 +304,7 @@ El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `c
 | Endpoint | Límite | Respuesta al exceder |
 |----------|--------|-----------------------|
 | `POST /auth/dev/login` | 10 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
+| `POST /auth/login` / `POST /auth/register` | 20 req/min por IP | idem |
 | `POST /api/panic-button` | 5 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
 
 ### Pool de conexiones (`pg`)
@@ -384,7 +394,9 @@ Decisión de producto: "la severidad no la elige quien reporta". Tabla en `src/d
 | `INFRAESTRUCTURA` | `medium` |
 | `OTRO` | `low` |
 
-Es la base sobre la que el Risk Engine (branch `feature/incident-detection-rule-based`) solo puede **subir** la prioridad, nunca bajarla.
+Es la base sobre la que el Risk Engine en `main` (`src/domain/risk-engine.js`, job
+`incident-detection-job`, merge #36) solo puede **subir** la prioridad, nunca bajarla
+(`effectivePriority` / invariante en `severity.js`).
 
 ### GET `/api/panic-button/:id`
 
