@@ -991,7 +991,9 @@ describe('Emergencies API', () => {
     expect(response.body.error).toBe('ConflictError');
   });
 
-  it('returns 403 when citizen tries to cancel another user emergency', async () => {
+  // 403 vs 404 unificado: cancelar una emergencia ajena responde 404 (no 403)
+  // para no revelar que el id existe, igual que GET /api/emergencies/:id.
+  it('returns 404 (not 403) when citizen tries to cancel another user emergency', async () => {
     const sharedRepo = createMockEmergencyRepository();
     const ownerApp = createTestApp({
       sub: 'U000042',
@@ -1010,9 +1012,9 @@ describe('Emergencies API', () => {
     const response = await request(otherApp)
       .patch(`/api/emergencies/${createResponse.body.emergencyId}/cancel`)
       .send({ reason: 'No soy el dueño' })
-      .expect(403);
+      .expect(404);
 
-    expect(response.body.error).toBe('ForbiddenError');
+    expect(response.body.error).toBe('NotFoundError');
   });
 
   it('allows a dispatcher to close a resolved emergency and stores EmergenciaCerrada', async () => {
