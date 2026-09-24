@@ -69,3 +69,34 @@ describe('app error middleware (5xx sanitization)', () => {
     });
   });
 });
+
+// Ruta o método no soportado: 404 en JSON con el shape { error, message },
+// no el 404 HTML por defecto de Express (hallazgo de la regresión 23/09).
+describe('unknown route/method 404 (JSON, not HTML)', () => {
+  it('devuelve 404 JSON para una ruta inexistente', async () => {
+    const app = createApp(mockKafkaService, {}, {
+      authenticate: stubAuthenticate(DISPATCHER),
+    });
+
+    const response = await request(app)
+      .get('/api/ruta-que-no-existe')
+      .expect(404)
+      .expect('Content-Type', /json/);
+
+    expect(response.body.error).toBe('NotFoundError');
+    expect(typeof response.body.message).toBe('string');
+  });
+
+  it('devuelve 404 JSON para un método no soportado sobre una ruta conocida', async () => {
+    const app = createApp(mockKafkaService, {}, {
+      authenticate: stubAuthenticate(DISPATCHER),
+    });
+
+    const response = await request(app)
+      .delete('/health')
+      .expect(404)
+      .expect('Content-Type', /json/);
+
+    expect(response.body.error).toBe('NotFoundError');
+  });
+});

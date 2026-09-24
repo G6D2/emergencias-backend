@@ -96,6 +96,15 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
     app.use('/api/citizen', createCitizenProfileRoutes(citizenProfileRepository, authenticate));
   }
 
+  // Ruta o método no soportado: 404 en JSON con el mismo shape { error, message }
+  // que el resto de la API, en vez del 404 HTML por defecto de Express.
+  app.use((req, res) => {
+    res.status(404).json({
+      error: 'NotFoundError',
+      message: `Cannot ${req.method} ${req.path}`,
+    });
+  });
+
   app.use((err, req, res, next) => {
     const statusCode = err.statusCode || 500;
 

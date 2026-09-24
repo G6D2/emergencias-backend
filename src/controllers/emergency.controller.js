@@ -1,4 +1,4 @@
-const { NotFoundError, ForbiddenError, ValidationError } = require('../errors/app-errors');
+const { NotFoundError, ValidationError } = require('../errors/app-errors');
 const { canCancelEmergency, canViewEmergency, userHasGroup } = require('../auth/authorize');
 const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
@@ -193,8 +193,11 @@ class EmergencyController {
       throw new NotFoundError(`Emergency with ID ${id} not found`);
     }
 
+    // Emergencia ajena: 404 (no 403) para no revelar que el id existe, misma
+    // regla que GET /api/emergencies/:id. Un no-citizen ya cortó con 403 en la
+    // ruta (requireCitizen), así que acá solo llega un citizen que no es dueño.
     if (!canCancelEmergency(user, emergency)) {
-      throw new ForbiddenError('You cannot cancel this emergency');
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
     }
 
     assertTransition(emergency.status, 'CANCELLED');
