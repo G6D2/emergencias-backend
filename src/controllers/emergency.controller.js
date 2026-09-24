@@ -140,6 +140,46 @@ class EmergencyController {
     return { success: true, data: updated };
   }
 
+  /**
+   * Devuelve una emergencia DISPATCHED a VALIDATED (devolución para
+   * reasignar). Libera al oficial asignado —el repository lo pone
+   * `disponible` en la misma transacción al pasar a VALIDATED—, de modo que
+   * un despacho equivocado no deje al oficial ocupado sin salida por API.
+   * Dispatcher-only. La transición DISPATCHED → VALIDATED ya vive en la
+   * máquina de estados del dominio.
+   */
+  async returnEmergency(id, { reason = null } = {}, user) {
+    assertUuid(id);
+
+    const actor = user.sub;
+    const emergency = await this.emergencyRepository.findById(id);
+
+    if (!emergency) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    assertTransition(emergency.status, 'VALIDATED');
+
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
+      newStatus: 'VALIDATED',
+      actor,
+      reason,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            reason,
+            eventId,
+          }),
+      },
+    });
+
+    return { success: true, data: updated };
+  }
+
   async discardEmergency(id, { reason } = {}, user) {
     assertUuid(id);
 

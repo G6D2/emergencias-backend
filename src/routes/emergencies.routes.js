@@ -318,6 +318,62 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
 
   /**
    * @openapi
+   * /api/emergencies/{id}/return:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: Devuelve una emergencia despachada para reasignar
+   *     description: |
+   *       Requiere grupo `dispatcher`. Pasa una emergencia de DISPATCHED a
+   *       VALIDATED (devolución para reasignar) y libera al oficial asignado,
+   *       que vuelve a `disponible`. Útil cuando un despacho fue equivocado.
+   *       El actor se toma del JWT (claim `sub`).
+   *     security:
+   *       - bearerAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *           format: uuid
+   *     requestBody:
+   *       required: false
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               reason:
+   *                 type: string
+   *                 description: Motivo de la devolución (opcional).
+   *     responses:
+   *       200:
+   *         description: Emergencia devuelta a VALIDATED; oficial liberado
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 success:
+   *                   type: boolean
+   *                 data:
+   *                   $ref: '#/components/schemas/Emergency'
+   *       401:
+   *         description: Token ausente o inválido
+   *       403:
+   *         description: Grupo insuficiente
+   *       404:
+   *         description: Emergencia no encontrada
+   *       409:
+   *         description: La emergencia no está en un estado que permita la devolución
+   */
+  router.patch('/:id/return', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.returnEmergency(req.params.id, req.body || {}, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
    * /api/emergencies/{id}/cancel:
    *   patch:
    *     tags: [Emergencies]
