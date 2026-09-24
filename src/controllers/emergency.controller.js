@@ -110,10 +110,13 @@ class EmergencyController {
     };
   }
 
-  async validateEmergency(id, user) {
-    assertUuid(id);
-
-    const actor = user.sub;
+  /**
+   * Transición compartida a VALIDATED. La usan validateEmergency (PENDING →
+   * VALIDATED) y returnEmergency (DISPATCHED → VALIDATED, devolución para
+   * reasignar). En ambos casos el repository libera al oficial asignado si lo
+   * hubiera, al pasar a VALIDATED, dentro de la misma transacción.
+   */
+  async transitionToValidated(id, { actor, reason = null }) {
     const emergency = await this.emergencyRepository.findById(id);
 
     if (!emergency) {
@@ -125,6 +128,7 @@ class EmergencyController {
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'VALIDATED',
       actor,
+      reason,
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
         payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
@@ -132,12 +136,28 @@ class EmergencyController {
             emergency: savedEmergency,
             history: savedHistory,
             actor,
+            reason,
             eventId,
           }),
       },
     });
 
     return { success: true, data: updated };
+  }
+
+  async validateEmergency(id, user) {
+    assertUuid(id);
+    return this.transitionToValidated(id, { actor: user.sub });
+  }
+
+  /**
+   * Devuelve una emergencia DISPATCHED a VALIDATED (devolución para
+   * reasignar). Libera al oficial asignado, de modo que un despacho
+   * equivocado no lo deje ocupado sin salida por API. Dispatcher-only.
+   */
+  async returnEmergency(id, { reason = null } = {}, user) {
+    assertUuid(id);
+    return this.transitionToValidated(id, { actor: user.sub, reason });
   }
 
   async discardEmergency(id, { reason } = {}, user) {

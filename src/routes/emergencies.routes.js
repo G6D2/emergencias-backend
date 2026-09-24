@@ -318,6 +318,28 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
 
   /**
    * @openapi
+   * /api/emergencies/{id}/return:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: Devuelve una emergencia despachada para reasignar (DISPATCHED → VALIDATED)
+   *     description: Dispatcher-only. Libera al oficial asignado. `reason` opcional en el body.
+   *     security: [{ bearerAuth: [] }]
+   *     parameters:
+   *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+   *     responses:
+   *       200: { description: Emergencia devuelta a VALIDATED; oficial liberado }
+   *       401: { description: Token ausente o inválido }
+   *       403: { description: Grupo insuficiente }
+   *       404: { description: Emergencia no encontrada }
+   *       409: { description: La emergencia no permite la devolución desde su estado actual }
+   */
+  router.patch('/:id/return', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
+    const result = await controller.returnEmergency(req.params.id, req.body || {}, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
    * /api/emergencies/{id}/cancel:
    *   patch:
    *     tags: [Emergencies]
