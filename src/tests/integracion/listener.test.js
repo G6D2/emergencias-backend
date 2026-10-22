@@ -266,4 +266,67 @@ describe('Listener', () => {
       }));
     });
   });
+
+  describe('filtro de auto-consumo (#37)', () => {
+    it('descarta eventos del propio namespace por eventType', async () => {
+      const listener = new Listener(makeBusStub(), new MapperRegistry(), {
+        ownNamespace: 'com.citypass.emergencias',
+      });
+      const result = await listener.handleEvent('com.citypass.emergencias.EmergenciaCreada', {
+        metadata: {
+          eventId: 'e1',
+          eventType: 'com.citypass.emergencias.EmergenciaCreada',
+          source: 'grupo5',
+        },
+        data: {},
+      });
+      expect(result).toEqual({ discarded: true, reason: 'own-namespace' });
+    });
+
+    it('descarta eventos del propio namespace por metadata.source', async () => {
+      const listener = new Listener(makeBusStub(), new MapperRegistry(), {
+        ownNamespace: 'com.citypass.emergencias',
+      });
+      const result = await listener.handleEvent('otro.topico', {
+        metadata: {
+          eventId: 'e1',
+          source: 'com.citypass.emergencias',
+        },
+        data: {},
+      });
+      expect(result).toEqual({ discarded: true, reason: 'own-namespace' });
+    });
+
+    it('no filtra eventos de otros namespaces aunque arranquen parecido', async () => {
+      const registry = new MapperRegistry();
+      registry.register('X', jest.fn().mockResolvedValue([]));
+      const client = makeClientStub();
+      const pool = makePoolStub(client);
+      const repo = makeRepoStub(true);
+
+      const listener = new Listener(makeBusStub(), registry, {
+        ownNamespace: 'com.citypass.emergencias',
+        pool,
+        eventosProcesadosRepo: repo,
+      });
+      // Un namespace que empieza con "com.citypass.emergencia" pero no es el propio.
+      const result = await listener.handleEvent('com.citypass.emergenciaslike.X', {
+        metadata: { eventId: 'e1', source: 'grupo6', eventType: 'com.citypass.emergenciaslike.X' },
+        data: {},
+      });
+      expect(result.discarded).toBeUndefined();
+    });
+
+    it('respeta env EDA_OWN_NAMESPACE si no se pasa option', () => {
+      const prev = process.env.EDA_OWN_NAMESPACE;
+      process.env.EDA_OWN_NAMESPACE = 'ns.custom';
+      try {
+        const listener = new Listener(makeBusStub(), new MapperRegistry());
+        expect(listener.ownNamespace).toBe('ns.custom');
+      } finally {
+        if (prev === undefined) delete process.env.EDA_OWN_NAMESPACE;
+        else process.env.EDA_OWN_NAMESPACE = prev;
+      }
+    });
+  });
 });

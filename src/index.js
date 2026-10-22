@@ -14,6 +14,7 @@ const { startIncidentDetectionJob } = require('./services/incident-detection-job
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher } = require('./services/outbox-publisher');
+const { buildIntegracionListener } = require('./integracion/bootstrap');
 
 const PORT = process.env.PORT || 3000;
 
@@ -37,6 +38,16 @@ async function start() {
     secureLog('error', 'Initial Kafka connection failed', { message: err.message });
   });
   outboxPublisher.start();
+
+  // Listener de integracion EDA (ADR #25). Deshabilitado por default:
+  // KAFKA_CONSUMER_ENABLED=true + EDA_TOPIC_EVENTO_PUBLICADO/CANCELADO
+  // lo prenden. Fuera de la ventana, es no-op.
+  const integracionListener = buildIntegracionListener({ pool, kafkaService, locationCrypto });
+  if (integracionListener.enabled) {
+    integracionListener.start().catch((err) => {
+      secureLog('error', 'Integracion listener fallo al arrancar', { message: err.message });
+    });
+  }
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
   const citizenPiiRetentionJob = startCitizenProfileRetentionJob(citizenProfileRepository);
@@ -71,6 +82,7 @@ async function start() {
     keepWarmJob.stop();
     outboxPublisher.stop();
     server.close();
+    await integracionListener.stop().catch(() => {});
     await kafkaService.disconnect().catch(() => {});
     process.exit(0);
   };

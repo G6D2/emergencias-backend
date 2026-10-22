@@ -21,6 +21,9 @@ class Listener {
     this.eventosProcesadosRepo = options.eventosProcesadosRepo;
     this.topics = Array.isArray(options.topics) ? [...options.topics] : [];
     this.groupId = options.groupId || process.env.KAFKA_GROUP_ID || 'emergencias-integracion';
+    // Issue #37: evita que el modulo consuma sus propios eventos como insumo
+    // para generar nuevas emergencias (loop infinito).
+    this.ownNamespace = options.ownNamespace || process.env.EDA_OWN_NAMESPACE || 'com.citypass.emergencias';
   }
 
   async start() {
@@ -34,11 +37,32 @@ class Listener {
     return this.eventBus.stopConsumers();
   }
 
+  isOwnEvent(eventTypeFqn, source) {
+    if (!this.ownNamespace) return false;
+    if (typeof eventTypeFqn === 'string' && eventTypeFqn.startsWith(`${this.ownNamespace}.`)) {
+      return true;
+    }
+    if (typeof source === 'string' && source === this.ownNamespace) {
+      return true;
+    }
+    return false;
+  }
+
   async handleEvent(topic, message) {
     const metadata = (message && message.metadata) || {};
     const data = (message && message.data) || {};
     const eventTypeFqn = metadata.eventType || topic;
     const shortName = MapperRegistry.shortNameFromTopic(eventTypeFqn);
+
+    // Issue #37: no auto-consumir eventos propios (serian bucle infinito).
+    if (this.isOwnEvent(eventTypeFqn, metadata.source)) {
+      secureLog('info', 'Evento del propio namespace — descartado para evitar auto-consumo', {
+        topic,
+        eventTypeFqn,
+        source: metadata.source,
+      });
+      return { discarded: true, reason: 'own-namespace' };
+    }
 
     const mapper = this.registry.lookup(shortName);
     if (!mapper) {
