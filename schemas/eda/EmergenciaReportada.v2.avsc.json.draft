@@ -1,0 +1,44 @@
+{
+  "name": "EmergenciaReportada",
+  "fields": [
+    { "name": "emergenciaId", "type": "string" },
+    { "name": "correlationId", "type": "string" },
+    {
+      "name": "tipo",
+      "type": {
+        "type": "enum",
+        "name": "TipoEmergencia",
+        "symbols": ["MEDICA", "INCENDIO", "INFRAESTRUCTURA", "DISTURBIO_EVENTO_MASIVO", "OTRO", "PANICO"]
+      }
+    },
+    {
+      "name": "prioridad",
+      "type": {
+        "type": "enum",
+        "name": "Prioridad",
+        "symbols": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+      }
+    },
+    { "name": "actorSub", "type": ["null", "string"], "default": null },
+    { "name": "direccion", "type": ["null", "string"], "default": null },
+    { "name": "barrio", "type": ["null", "string"], "default": null },
+    { "name": "lat", "type": ["null", "double"], "default": null },
+    { "name": "lng", "type": ["null", "double"], "default": null },
+    {
+      "name": "severidad",
+      "type": [
+        "null",
+        {
+          "type": "enum",
+          "name": "Severidad",
+          "symbols": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+        }
+      ],
+      "default": null
+    },
+    {
+      "name": "reportadoEn",
+      "type": { "type": "long", "logicalType": "timestamp-millis" }
+    }
+  ]
+}
