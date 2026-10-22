@@ -26,8 +26,17 @@ describe('buildIntegracionListener', () => {
     ...overrides,
   });
 
+  // El pool devuelve una fila existente en listener_activation para que el
+  // fast-path de activateAndDiscardStalePending retorne sin tocar nada; los
+  // tests de #71 viven en listener-activation.test.js.
   const makeDeps = () => ({
-    pool: { connect: jest.fn(), query: jest.fn() },
+    pool: {
+      connect: jest.fn(),
+      query: jest.fn().mockResolvedValue({
+        rows: [{ first_activated_at: new Date('2024-01-01'), discarded_count: 0 }],
+        rowCount: 1,
+      }),
+    },
     kafkaService: { publishEvent: jest.fn() },
     locationCrypto: { encryptLocation: jest.fn() },
   });

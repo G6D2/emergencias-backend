@@ -5,6 +5,7 @@ const { EdaAuthClient } = require('./eda-auth-client');
 const { EventosProcesadosRepository } = require('../repositories/eventos-procesados.repository');
 const { createEventoComunitarioPublicadoMapper } = require('./mappers/evento-comunitario-publicado');
 const { createEventoCanceladoMapper } = require('./mappers/evento-cancelado');
+const { activateAndDiscardStalePending } = require('./listener-activation');
 const { secureLog } = require('../security/secure-log');
 
 const DEFAULT_UMBRAL_CAPACIDAD = 500;
@@ -84,6 +85,10 @@ function buildIntegracionListener({ pool, kafkaService, locationCrypto, env = pr
     enabled: true,
     async start() {
       try {
+        // Issue #71: antes de levantar los consumers, descarta las PENDING
+        // externas que quedaron colgadas antes de que exista bus. Idempotente
+        // entre reinicios: solo la primera corrida toca emergencias.
+        await activateAndDiscardStalePending({ pool });
         return await listener.start();
       } catch (error) {
         secureLog('error', 'Listener EDA fallo al arrancar — queda apagado', { message: error.message });
