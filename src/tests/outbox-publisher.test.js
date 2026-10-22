@@ -130,6 +130,82 @@ describe('OutboxPublisher', () => {
     jest.useRealTimers();
   });
 
+  describe('publisher inyectado (feature flag EDA_PUBLISHER_MODE=gateway)', () => {
+    it('runOnce usa options.publisher en vez de kafkaService', async () => {
+      const pool = createPool({ events: [{
+        id: 'event-10', topic: 'com.citypass.emergencias.X', payload: { data: { a: 1 } }, attempts: 1,
+      }] });
+      const kafkaSpy = { isEnabled: jest.fn().mockReturnValue(false), publishEvent: jest.fn() };
+      const gateway = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        publishEvent: jest.fn().mockResolvedValue({ ok: true, eventId: '11111111-1111-4111-8111-111111111111', payloadHash: 'sha-xyz' }),
+      };
+      const publisher = new OutboxPublisher(pool, kafkaSpy, { publisher: gateway, maxAttempts: 3 });
+
+      await expect(publisher.runOnce()).resolves.toBe(1);
+      expect(gateway.publishEvent).toHaveBeenCalledWith('com.citypass.emergencias.X', { data: { a: 1 } });
+      expect(kafkaSpy.publishEvent).not.toHaveBeenCalled();
+    });
+
+    it('markPublished persiste payloadHash y gatewayEventId cuando el publisher devuelve objeto', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true });
+      await publisher.markPublished('event-x', { ok: true, eventId: '11111111-1111-4111-8111-111111111111', payloadHash: 'sha-abc' });
+
+      const call = pool.queries.at(-1);
+      expect(call.sql).toMatch(/payload_hash = COALESCE/);
+      expect(call.sql).toMatch(/gateway_event_id = COALESCE/);
+      expect(call.params).toEqual(['event-x', 'sha-abc', '11111111-1111-4111-8111-111111111111']);
+    });
+
+    it('markPublished sin result deja payloadHash y gatewayEventId en NULL (backward compat Kafka)', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true });
+      await publisher.markPublished('event-y');
+      const call = pool.queries.at(-1);
+      expect(call.params).toEqual(['event-y', null, null]);
+    });
+
+    it('markFailed honra error.retryAfterMs en vez del backoff exponencial', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, { maxAttempts: 10 });
+
+      const err = new Error('rate limited');
+      err.retryAfterMs = 7500;
+      await publisher.markFailed('event-r', 1, err);
+
+      const call = pool.queries.at(-1);
+      expect(call.params).toEqual(['event-r', 'PENDING', 7500, 'rate limited']);
+    });
+
+    it('markFailed con isPermanent marca FAILED inmediato aunque queden intentos', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, { maxAttempts: 10 });
+
+      const err = new Error('schema invalid');
+      err.isPermanent = true;
+      await publisher.markFailed('event-p', 1, err);
+
+      const call = pool.queries.at(-1);
+      expect(call.params).toEqual(['event-p', 'FAILED', 0, 'schema invalid']);
+    });
+
+    it('markFailed cap-ea retryAfterMs al maxBackoffMs', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, {
+        maxAttempts: 10,
+        maxBackoffMs: 5000,
+      });
+
+      const err = new Error('rate limited');
+      err.retryAfterMs = 999999;
+      await publisher.markFailed('event-cap', 1, err);
+
+      const call = pool.queries.at(-1);
+      expect(call.params[2]).toBe(5000);
+    });
+  });
+
   it('start registra el error si runOnce falla', async () => {
     jest.useFakeTimers();
     const pool = createPool();

@@ -14,6 +14,8 @@ const { startIncidentDetectionJob } = require('./services/incident-detection-job
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher } = require('./services/outbox-publisher');
+const { GatewayPublisher } = require('./services/gateway-publisher');
+const { EdaAuthClient } = require('./integracion/eda-auth-client');
 const { buildIntegracionListener } = require('./integracion/bootstrap');
 
 const PORT = process.env.PORT || 3000;
@@ -31,7 +33,23 @@ async function start() {
   const officerRepository = new OfficerRepository(pool);
   const incidentRepository = new IncidentRepository(pool, emergencyRepository);
   const citizenProfileRepository = new CitizenProfileRepository(pool, { locationCrypto });
-  const outboxPublisher = new OutboxPublisher(pool, kafkaService);
+  // ADR #25: EDA_PUBLISHER_MODE=gateway levanta un publisher HTTP contra el
+  // gateway (POST /api/v1/event-types/{fqn}/events). Default sigue siendo
+  // publicacion directa al broker Kafka (compatibilidad previa). El flip solo
+  // tiene sentido una vez que esten los topics renombrados a FQN y los
+  // payloads adaptados a {data} — hasta entonces el gateway responde 403/400.
+  const publisherMode = (process.env.EDA_PUBLISHER_MODE || 'kafka').toLowerCase();
+  let outboxActivePublisher = kafkaService;
+  if (publisherMode === 'gateway') {
+    const edaAuthClient = new EdaAuthClient();
+    if (!edaAuthClient.isConfigured()) {
+      secureLog('warn', 'EDA_PUBLISHER_MODE=gateway pero EdaAuthClient no configurado — fallback a Kafka');
+    } else {
+      outboxActivePublisher = new GatewayPublisher({ edaAuthClient });
+      secureLog('info', 'OutboxPublisher usando GatewayPublisher (EDA_PUBLISHER_MODE=gateway)');
+    }
+  }
+  const outboxPublisher = new OutboxPublisher(pool, kafkaService, { publisher: outboxActivePublisher });
 
   // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
   kafkaService.connect().catch((err) => {

@@ -4,6 +4,10 @@ class OutboxPublisher {
   constructor(pool, kafkaService, options = {}) {
     this.pool = pool;
     this.kafkaService = kafkaService;
+    // Feature flag EDA_PUBLISHER_MODE=gateway (ADR #25): index.js inyecta un
+    // GatewayPublisher como options.publisher. Default = KafkaService (sin
+    // cambios respecto al comportamiento previo al PR del gateway publisher).
+    this.publisher = options.publisher || kafkaService;
     this.batchSize = options.batchSize || 50;
     this.intervalMs = options.intervalMs || 5000;
     this.maxAttempts = options.maxAttempts || Number(process.env.OUTBOX_MAX_ATTEMPTS || 10);
@@ -42,24 +46,41 @@ class OutboxPublisher {
     }
   }
 
-  async markPublished(id) {
+  async markPublished(id, result = null) {
+    // result opcional: GatewayPublisher devuelve { payloadHash, eventId }.
+    // KafkaService devuelve true/false — no hay payloadHash y los campos
+    // quedan NULL (comportamiento previo al PR del gateway publisher).
+    const payloadHash = result && result.payloadHash ? result.payloadHash : null;
+    const gatewayEventId = result && result.eventId ? result.eventId : null;
     await this.pool.query(
       `UPDATE outbox_events
-       SET status = 'PUBLISHED', published_at = now(), locked_at = NULL, last_error = NULL
+       SET status = 'PUBLISHED', published_at = now(), locked_at = NULL, last_error = NULL,
+           payload_hash = COALESCE($2, payload_hash),
+           gateway_event_id = COALESCE($3::uuid, gateway_event_id)
        WHERE id = $1`,
-      [id]
+      [id, payloadHash, gatewayEventId]
     );
   }
 
   async markFailed(id, attempts, error) {
-    const failed = attempts >= this.maxAttempts;
-    const backoffMs = Math.min(30_000 * (2 ** Math.max(attempts - 1, 0)), this.maxBackoffMs);
+    // error.isPermanent (400/404/413 del gateway, FQN invalido): no reintentar.
+    // error.retryAfterMs (429 Retry-After): respetar el backoff del gateway.
+    const permanent = Boolean(error && error.isPermanent);
+    const failed = permanent || attempts >= this.maxAttempts;
+    let backoffMs;
+    if (failed) {
+      backoffMs = 0;
+    } else if (error && Number.isFinite(error.retryAfterMs) && error.retryAfterMs >= 0) {
+      backoffMs = Math.min(error.retryAfterMs, this.maxBackoffMs);
+    } else {
+      backoffMs = Math.min(30_000 * (2 ** Math.max(attempts - 1, 0)), this.maxBackoffMs);
+    }
     await this.pool.query(
       `UPDATE outbox_events
        SET status = $2, available_at = now() + ($3::double precision * interval '1 millisecond'),
            locked_at = NULL, last_error = $4
        WHERE id = $1`,
-      [id, failed ? 'FAILED' : 'PENDING', failed ? 0 : backoffMs, String(error.message || error).slice(0, 2000)]
+      [id, failed ? 'FAILED' : 'PENDING', backoffMs, String(error.message || error).slice(0, 2000)]
     );
   }
 
@@ -78,13 +99,16 @@ class OutboxPublisher {
     this.running = true;
     let published = 0;
     try {
-      if (this.kafkaService.isEnabled()) {
+      if (this.publisher.isEnabled()) {
         const events = await this.claimBatch();
         for (const event of events) {
           try {
-            const sent = await this.kafkaService.publishEvent(event.topic, event.payload);
-            if (!sent) throw new Error('Kafka disabled or not connected');
-            await this.markPublished(event.id);
+            const sent = await this.publisher.publishEvent(event.topic, event.payload);
+            if (!sent) throw new Error('Publisher disabled or not connected');
+            // GatewayPublisher devuelve objeto con payloadHash/eventId; KafkaService
+            // devuelve true. markPublished tolera ambos.
+            const result = typeof sent === 'object' ? sent : null;
+            await this.markPublished(event.id, result);
             published += 1;
           } catch (error) {
             await this.markFailed(event.id, event.attempts, error);
