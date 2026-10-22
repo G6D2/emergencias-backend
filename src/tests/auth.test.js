@@ -97,12 +97,17 @@ describe('createJwtVerifier', () => {
     await expect(verifyAccessToken(token)).rejects.toBeInstanceOf(UnauthorizedError);
   });
 
-  it('rejects aud as string instead of array', async () => {
+  it('accepts aud as string (IdP externo — interoperabilidad con Grupo 2)', async () => {
+    // El IdP del Grupo 2 (citypass-login.pp.ua) puede emitir aud como string.
+    // A partir de la integración LDAP, esto es válido siempre que el valor coincida.
     const token = await signToken(validClaims({ aud: AUDIENCE }));
-    await expect(verifyAccessToken(token)).rejects.toMatchObject({
-      name: 'UnauthorizedError',
-      message: 'Invalid token audience claim',
-    });
+    const user = await verifyAccessToken(token);
+    expect(user.sub).toBe('U000042');
+  });
+
+  it('rejects aud as string with wrong value', async () => {
+    const token = await signToken(validClaims({ aud: 'citypass-other-api' }));
+    await expect(verifyAccessToken(token)).rejects.toBeInstanceOf(UnauthorizedError);
   });
 
   it('rejects wrong issuer', async () => {
