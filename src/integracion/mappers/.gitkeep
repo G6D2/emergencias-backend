@@ -1,0 +1,2 @@
+# Mappers por (modulo de origen, tipo de evento). Un archivo por par.
+# Se pueblan en PR 3 (mapper de EventoComunitarioPublicado/EventoCancelado).
