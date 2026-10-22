@@ -2,7 +2,14 @@ const { UnauthorizedError, ForbiddenError } = require('../errors/app-errors');
 const { GROUPS } = require('./groups');
 
 function userHasGroup(user, group) {
-  return Array.isArray(user?.groups) && user.groups.includes(group);
+  if (!Array.isArray(user?.groups)) return false;
+  return user.groups.some((g) => {
+    if (typeof g !== 'string') return false;
+    const lower = g.toLowerCase();
+    if (lower === group.toLowerCase()) return true;
+    if (group === GROUPS.DISPATCHER && lower === 'delegados') return true;
+    return false;
+  });
 }
 
 function userHasAnyGroup(user, allowedGroups) {
