@@ -92,3 +92,31 @@ describe('mapper EventoComunitarioPublicado', () => {
     expect(cmds).toHaveLength(1);
   });
 });
+
+describe('mapper EventoComunitarioPublicado con disparador', () => {
+  const { EjecutarDisparadorCommand } = require('../../integracion/commands/ejecutar-disparador');
+  const disparador = { responder: jest.fn() };
+  const makeMapper = () => createEventoComunitarioPublicadoMapper({
+    umbralCapacidad: 500,
+    locationCrypto: { encryptLocation: jest.fn() },
+    disparador,
+  });
+
+  it('bajo el umbral emite solo el comando del disparador', () => {
+    const evento = { metadata: { eventId: 'e1' }, data: { capacidad: 10 } };
+    const cmds = makeMapper()(evento);
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0]).toBeInstanceOf(EjecutarDisparadorCommand);
+    expect(cmds[0].evento).toEqual(evento);
+  });
+
+  it('sobre el umbral emite cobertura y despues el disparador', () => {
+    const cmds = makeMapper()({
+      metadata: { eventId: 'e2' },
+      data: { capacidad: 1000, latitud: 0, longitud: 0 },
+    });
+    expect(cmds).toHaveLength(2);
+    expect(cmds[0]).toBeInstanceOf(ProgramarCoberturaPreventivaCommand);
+    expect(cmds[1]).toBeInstanceOf(EjecutarDisparadorCommand);
+  });
+});

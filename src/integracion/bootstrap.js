@@ -5,6 +5,7 @@ const { EdaAuthClient } = require('./eda-auth-client');
 const { EventosProcesadosRepository } = require('../repositories/eventos-procesados.repository');
 const { createEventoComunitarioPublicadoMapper } = require('./mappers/evento-comunitario-publicado');
 const { createEventoCanceladoMapper } = require('./mappers/evento-cancelado');
+const { crearRegistroDisparadores } = require('../disparadores/registry');
 const { activateAndDiscardStalePending } = require('./listener-activation');
 const { secureLog } = require('../security/secure-log');
 
@@ -47,6 +48,7 @@ function buildIntegracionListener({ pool, kafkaService, locationCrypto, env = pr
     secureLog('warn', 'EdaAuthClient sin credenciales (EDA_AUTH_URL/EDA_CLIENT_ID/SECRET) — consumer sin SASL');
   }
 
+  const disparadores = crearRegistroDisparadores();
   const registry = new MapperRegistry();
   registry.register(
     'EventoComunitarioPublicado',
@@ -54,6 +56,7 @@ function buildIntegracionListener({ pool, kafkaService, locationCrypto, env = pr
       umbralCapacidad,
       locationCrypto,
       userIdForExternal: env.EDA_EXTERNAL_USER_ID || 'eda-bus',
+      disparador: disparadores.get('EventoComunitarioPublicado'),
     })
   );
   registry.register('EventoCancelado', createEventoCanceladoMapper());

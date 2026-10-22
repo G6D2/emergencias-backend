@@ -1,4 +1,5 @@
 const { ProgramarCoberturaPreventivaCommand } = require('../commands/programar-cobertura-preventiva');
+const { EjecutarDisparadorCommand } = require('../commands/ejecutar-disparador');
 
 // Mapper puro de EventoComunitarioPublicado (Espacios Publicos).
 //
@@ -16,7 +17,11 @@ const { ProgramarCoberturaPreventivaCommand } = require('../commands/programar-c
 // locationCrypto) para que el mapper quede puro (recibe evento, devuelve
 // comandos). Esto respeta el ADR #25: "los mappers no contienen reglas de
 // negocio ni acceden a tablas".
-function createEventoComunitarioPublicadoMapper({ umbralCapacidad, locationCrypto, userIdForExternal }) {
+//
+// disparador (opcional): reglas de negocio propias de Emergencias para este
+// evento (src/disparadores/evento-publico). Si viene, se emite siempre un
+// EjecutarDisparadorCommand, independiente del umbral de cobertura.
+function createEventoComunitarioPublicadoMapper({ umbralCapacidad, locationCrypto, userIdForExternal, disparador = null }) {
   if (!Number.isFinite(umbralCapacidad)) {
     throw new Error('createEventoComunitarioPublicadoMapper requiere umbralCapacidad (number)');
   }
@@ -25,16 +30,22 @@ function createEventoComunitarioPublicadoMapper({ umbralCapacidad, locationCrypt
   }
 
   return function mapEventoComunitarioPublicado({ metadata, data }) {
+    const disparadorCommands = disparador
+      ? [new EjecutarDisparadorCommand({ disparador, evento: { metadata, data } })]
+      : [];
+
     const capacidadRaw = data && data.capacidad;
     const capacidad = Number.isFinite(capacidadRaw) ? capacidadRaw : 0;
 
     if (capacidad < umbralCapacidad) {
-      return [];
+      return disparadorCommands;
     }
 
     const latitud = typeof data.latitud === 'number' ? data.latitud : null;
     const longitud = typeof data.longitud === 'number' ? data.longitud : null;
 
+    // Cobertura primero: un disparador que eleve prioridad ya la ve creada
+    // dentro de la misma transaccion.
     return [
       new ProgramarCoberturaPreventivaCommand({
         nombre: data.nombre,
@@ -45,6 +56,7 @@ function createEventoComunitarioPublicadoMapper({ umbralCapacidad, locationCrypt
         locationCrypto,
         userIdForExternal,
       }),
+      ...disparadorCommands,
     ];
   };
 }
