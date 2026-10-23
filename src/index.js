@@ -16,7 +16,7 @@ const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher } = require('./services/outbox-publisher');
 const { GatewayPublisher } = require('./services/gateway-publisher');
 const { EdaAuthClient } = require('./integracion/eda-auth-client');
-const { buildIntegracionListener } = require('./integracion/bootstrap');
+const { buildIntegracionListener, buildIntegracionManual } = require('./integracion/bootstrap');
 
 const PORT = process.env.PORT || 3000;
 
@@ -80,6 +80,7 @@ async function start() {
     officerRepository,
     incidentRepository,
     citizenProfileRepository,
+    integracionHandler: buildIntegracionManual({ pool, locationCrypto }),
   });
 
   const server = app.listen(PORT, () => {

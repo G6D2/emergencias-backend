@@ -9,6 +9,7 @@ const { createOutboxRoutes } = require('./routes/outbox.routes');
 const { createOfficerRoutes } = require('./routes/officer.routes');
 const { createIncidentsRoutes } = require('./routes/incidents.routes');
 const { createCitizenProfileRoutes } = require('./routes/citizen-profile.routes');
+const { createIntegracionRoutes } = require('./routes/integracion.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
 const { secureLog } = require('./security/secure-log');
@@ -24,6 +25,7 @@ const { resolveCorsOrigins } = require('./security/cors');
  *   officerRepository?: object|null,
  *   incidentRepository?: object|null,
  *   citizenProfileRepository?: object|null,
+ *   integracionHandler?: { handleEvent: Function }|null,
  * }} [options]
  */
 function createApp(kafkaService, emergencyRepository, options = {}) {
@@ -32,6 +34,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   const officerRepository = options.officerRepository || null;
   const incidentRepository = options.incidentRepository || null;
   const citizenProfileRepository = options.citizenProfileRepository || null;
+  const integracionHandler = options.integracionHandler || null;
 
   app.set('trust proxy', 1);
   app.use(createSecurityMiddleware());
@@ -94,6 +97,9 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   }
   if (citizenProfileRepository) {
     app.use('/api/citizen', createCitizenProfileRoutes(citizenProfileRepository, authenticate));
+  }
+  if (integracionHandler) {
+    app.use('/api/integracion', createIntegracionRoutes(integracionHandler, authenticate));
   }
 
   // Ruta o método no soportado: 404 en JSON con el mismo shape { error, message }
