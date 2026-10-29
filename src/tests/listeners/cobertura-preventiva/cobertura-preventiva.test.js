@@ -1,16 +1,15 @@
-jest.mock('../../security/secure-log', () => ({ secureLog: jest.fn() }));
+jest.mock('../../../security/secure-log', () => ({ secureLog: jest.fn() }));
 
-const { secureLog } = require('../../security/secure-log');
+const { secureLog } = require('../../../security/secure-log');
+const { EventListener, createListeners } = require('../../../listeners');
 const {
-  EventListener,
   EventoComunitarioPublicadoListener,
   EventoCanceladoListener,
-  createListeners,
-} = require('../../listeners');
+} = require('../../../listeners/cobertura-preventiva');
 
 const kafka = { consumer: jest.fn() };
 
-describe('listeners concretos', () => {
+describe('listeners/cobertura-preventiva', () => {
   const env = { ...process.env };
 
   beforeEach(() => {
@@ -23,7 +22,7 @@ describe('listeners concretos', () => {
     process.env = env;
   });
 
-  it('createListeners devuelve un listener por tipo de evento', () => {
+  it('createListeners instancia los listeners de cada subpaquete', () => {
     const listeners = createListeners(kafka);
     expect(listeners.map((l) => l.constructor)).toEqual([
       EventoComunitarioPublicadoListener,

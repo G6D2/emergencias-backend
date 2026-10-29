@@ -1,19 +1,19 @@
 const { EventListener } = require('./event-listener');
-const { EventoComunitarioPublicadoListener } = require('./evento-comunitario-publicado.listener');
-const { EventoCanceladoListener } = require('./evento-cancelado.listener');
+const coberturaPreventiva = require('./cobertura-preventiva');
 
-// Para suscribirse a un evento nuevo: crear una subclase de EventListener y
-// agregarla aca.
+// Paquete de listeners de eventos externos.
+//
+// Cada caso de negocio es un subpaquete (carpeta) con sus listeners concretos
+// (subclases de EventListener) y un index.js que los exporta en `listeners`.
+// Para sumar un caso nuevo: crear la carpeta y agregarla a PACKAGES.
+const PACKAGES = [coberturaPreventiva];
+
 function createListeners(kafka) {
-  return [
-    new EventoComunitarioPublicadoListener(kafka),
-    new EventoCanceladoListener(kafka),
-  ];
+  return PACKAGES.flatMap((pkg) => pkg.listeners.map((Listener) => new Listener(kafka)));
 }
 
 module.exports = {
   EventListener,
-  EventoComunitarioPublicadoListener,
-  EventoCanceladoListener,
+  coberturaPreventiva,
   createListeners,
 };

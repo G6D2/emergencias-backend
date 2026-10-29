@@ -1,5 +1,5 @@
-const { EventListener } = require('./event-listener');
-const { secureLog } = require('../security/secure-log');
+const { EventListener } = require('../event-listener');
+const { secureLog } = require('../../security/secure-log');
 
 // EventoCancelado (Espacios Publicos): se cancelo un evento comunitario
 // publicado previamente.

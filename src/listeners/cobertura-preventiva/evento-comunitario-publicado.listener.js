@@ -1,5 +1,5 @@
-const { EventListener } = require('./event-listener');
-const { secureLog } = require('../security/secure-log');
+const { EventListener } = require('../event-listener');
+const { secureLog } = require('../../security/secure-log');
 
 // EventoComunitarioPublicado (Espacios Publicos): se publico un evento
 // comunitario que puede requerir cobertura preventiva.
