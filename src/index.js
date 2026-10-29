@@ -14,6 +14,7 @@ const { startIncidentDetectionJob } = require('./services/incident-detection-job
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher } = require('./services/outbox-publisher');
+const { createListeners } = require('./listeners');
 
 const PORT = process.env.PORT || 3000;
 
@@ -37,6 +38,15 @@ async function start() {
     secureLog('error', 'Initial Kafka connection failed', { message: err.message });
   });
   outboxPublisher.start();
+
+  // Listeners de eventos externos. Apagados por default: se prenden con
+  // KAFKA_CONSUMER_ENABLED=true (cada uno necesita ademas su topic).
+  const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true' ? createListeners(kafkaService.kafka) : [];
+  for (const listener of listeners) {
+    listener.start().catch((err) => {
+      secureLog('error', 'Listener fallo al arrancar', { listener: listener.constructor.name, message: err.message });
+    });
+  }
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
   const citizenPiiRetentionJob = startCitizenProfileRetentionJob(citizenProfileRepository);
@@ -71,6 +81,7 @@ async function start() {
     keepWarmJob.stop();
     outboxPublisher.stop();
     server.close();
+    await Promise.all(listeners.map((l) => l.stop().catch(() => {})));
     await kafkaService.disconnect().catch(() => {});
     process.exit(0);
   };
