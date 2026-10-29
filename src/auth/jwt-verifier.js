@@ -10,28 +10,36 @@ const { UnauthorizedError } = require('../errors/app-errors');
  *   - token_use y ver son opcionales (el IdP externo puede no emitirlos).
  *   - La firma RS256, issuer y audience SIEMPRE son obligatorios.
  */
-function createJwtVerifier(config, jwks = null) {
+function createJwtVerifier(config, jwks = null, localJwks = null) {
   const keySet = jwks || createRemoteJWKSet(new URL(config.jwksUri));
+
+  const verifyOptions = {
+    issuer: config.issuer,
+    audience: config.audience,
+    algorithms: ['RS256'],
+    clockTolerance: config.clockTolerance,
+    requiredClaims: ['exp', 'sub', 'iss', 'aud', 'token_use', 'ver'],
+  };
 
   async function verifyAccessToken(token) {
     let payload;
 
     try {
-      ({ payload } = await jwtVerify(token, keySet, {
-        issuer: config.issuer,
-        audience: config.audience,
-        algorithms: ['RS256'],
-        clockTolerance: config.clockTolerance,
-        // token_use y ver no son claims estándar OIDC: el IdP del Grupo 2
-        // puede no incluirlos. Solo exigimos los claims RFC obligatorios.
-        requiredClaims: ['exp', 'sub', 'iss', 'aud'],
-      }));
+      ({ payload } = await jwtVerify(token, keySet, verifyOptions));
     } catch {
-      throw new UnauthorizedError('Invalid or expired token');
+      if (localJwks) {
+        try {
+          ({ payload } = await jwtVerify(token, localJwks, verifyOptions));
+        } catch {
+          throw new UnauthorizedError('Invalid or expired token');
+        }
+      } else {
+        throw new UnauthorizedError('Invalid or expired token');
+      }
     }
 
-    // aud puede ser string (IdP externo) o array (contrato interno).
-    // jose ya validó que config.audience está incluido; aceptamos ambas formas.
+    // El IdP de CityPass+ (Grupo 2) emite aud como string o array según RFC 7519 §4.1.3.
+    // Validamos que contenga exactamente la audience del módulo:
     const audArray = Array.isArray(payload.aud)
       ? payload.aud
       : typeof payload.aud === 'string'
@@ -42,14 +50,12 @@ function createJwtVerifier(config, jwks = null) {
       throw new UnauthorizedError('Invalid token audience');
     }
 
-    // token_use: si el IdP lo incluye, debe ser el valor esperado.
-    // Si no lo incluye (IdP externo), se permite para interoperabilidad.
-    if (payload.token_use !== undefined && payload.token_use !== config.expectedTokenUse) {
+    // token_use = human es obligatorio para endpoints de personal / usuarios
+    if (payload.token_use !== config.expectedTokenUse) {
       throw new UnauthorizedError('Invalid token_use');
     }
 
-    // ver: ídem — opcional para IdPs externos.
-    if (payload.ver !== undefined && payload.ver !== config.expectedVer) {
+    if (payload.ver !== config.expectedVer) {
       throw new UnauthorizedError('Unsupported token version');
     }
 
@@ -57,8 +63,7 @@ function createJwtVerifier(config, jwks = null) {
       throw new UnauthorizedError('Invalid token subject');
     }
 
-    // groups: ausente → [] (ciudadano sin rol asignado todavía).
-    // Tipo incorrecto (no array) → rechazar.
+    // groups: nombres de grupo tal cual sin prefijos; vacío es válido; no array se rechaza
     if (payload.groups !== undefined && !Array.isArray(payload.groups)) {
       throw new UnauthorizedError('Invalid groups claim');
     }

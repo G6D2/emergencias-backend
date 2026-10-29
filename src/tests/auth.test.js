@@ -97,9 +97,7 @@ describe('createJwtVerifier', () => {
     await expect(verifyAccessToken(token)).rejects.toBeInstanceOf(UnauthorizedError);
   });
 
-  it('accepts aud as string (IdP externo — interoperabilidad con Grupo 2)', async () => {
-    // El IdP del Grupo 2 (citypass-login.pp.ua) puede emitir aud como string.
-    // A partir de la integración LDAP, esto es válido siempre que el valor coincida.
+  it('accepts aud as string matching expected audience', async () => {
     const token = await signToken(validClaims({ aud: AUDIENCE }));
     const user = await verifyAccessToken(token);
     expect(user.sub).toBe('U000042');

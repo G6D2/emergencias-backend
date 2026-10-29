@@ -5,10 +5,7 @@ function userHasGroup(user, group) {
   if (!Array.isArray(user?.groups)) return false;
   return user.groups.some((g) => {
     if (typeof g !== 'string') return false;
-    const lower = g.toLowerCase();
-    if (lower === group.toLowerCase()) return true;
-    if (group === GROUPS.DISPATCHER && lower === 'delegados') return true;
-    return false;
+    return g.trim().toLowerCase() === group.toLowerCase();
   });
 }
 

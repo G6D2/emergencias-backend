@@ -15,11 +15,19 @@ async function createAuthSetup(options = {}) {
   const env = options.env || process.env;
   const config = options.config || loadAuthConfig(env);
 
-  if (config.mode === 'local') {
+  const isDev = env.NODE_ENV !== 'production';
+  let devAuthRouter = null;
+  let localJwks = null;
+
+  if (config.mode === 'local' || isDev) {
     const keys = await createLocalKeySet(env.LOCAL_JWT_PRIVATE_KEY_PEM || null);
-    const jwks = options.jwks || createLocalJWKSet({ keys: [keys.publicJwk] });
-    const verifier = createJwtVerifier(config, jwks);
+    localJwks = options.jwks || createLocalJWKSet({ keys: [keys.publicJwk] });
     const issuer = createLocalTokenIssuer(keys.privateKey, config);
+    devAuthRouter = createDevAuthRoutes(issuer);
+  }
+
+  if (config.mode === 'local') {
+    const verifier = createJwtVerifier(config, localJwks);
 
     return {
       mode: 'local',
@@ -28,18 +36,20 @@ async function createAuthSetup(options = {}) {
         config,
         verifyAccessToken: verifier.verifyAccessToken,
       }),
-      devAuthRouter: createDevAuthRoutes(issuer),
+      devAuthRouter,
     };
   }
+
+  const verifier = createJwtVerifier(config, options.jwks, isDev ? localJwks : null);
 
   return {
     mode: 'idp',
     config,
     authenticate: createAuthenticateMiddleware({
       config,
-      jwks: options.jwks,
+      verifyAccessToken: verifier.verifyAccessToken,
     }),
-    devAuthRouter: null,
+    devAuthRouter,
   };
 }
 

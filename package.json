@@ -14,7 +14,10 @@
     "test:integration": "jest --config jest.integration.config.js --runInBand",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "security:anonymize-undecryptable": "node scripts/anonymize-locations.js --undecryptable"
+    "security:anonymize-undecryptable": "node scripts/anonymize-locations.js --undecryptable",
+    "token:dispatcher": "node scripts/generate-dev-token.js dispatcher",
+    "token:delegado": "node scripts/generate-dev-token.js delegado",
+    "token:citizen": "node scripts/generate-dev-token.js citizen"
   },
   "keywords": [
     "emergencies",
