@@ -41,7 +41,11 @@ src/listeners/eventos-publicos/
 | Registrar / actualizar | lat/lng numéricos en rango, inicio y fin válidos, fin > inicio, fin no pasado, timestamp de origen válido | `{ type: 'ActualizarZonaPrioritaria', payload: { publicEventId, latitude, longitude, radiusMeters, startsAt, endsAt, sourceUpdatedAt } }` |
 | Cancelar | `publicEventId` y timestamp de origen válidos | `{ type: 'CancelarZonaPrioritaria', payload: { publicEventId, sourceUpdatedAt } }` |
 
-`radiusMeters` sale de configuración (`PUBLIC_EVENT_RADIUS_METERS`), no del evento.
+**Radio por regla.** No hay un radio global por default: cada regla define el suyo según el
+tipo de evento que cubre (p. ej. un recital 800 m, una feria 300 m) y lo manda en
+`radiusMeters`. Tipos de evento distintos son reglas distintas, cada una con su radio. La zona
+guarda el radio con el que se creó, así que cambiar una regla solo afecta a las zonas nuevas o
+actualizadas.
 
 ### 2. Persistir la zona (factory)
 
@@ -129,7 +133,8 @@ job o dejarse: inactivas se ignoran.
 - **Contrato del payload** con el equipo productor: id del evento, coordenadas, inicio y fin,
   nombres de campo, y el **timestamp/versión de origen en cada mensaje** (alta, modificación
   y cancelación).
-- **Radio** de "cercanía" en metros; ¿fijo o según el tamaño del evento?
+- **Radio en metros de cada tipo de evento** (uno por regla), y qué campo del payload indica
+  el tipo de evento.
 - **Qué emergencias suben:** solo las creadas durante el evento (lectura actual de "nuevas")
   o cualquier emergencia abierta cerca de él. El diseño soporta ambas: cambia el criterio de
   candidatas en el paso 2 (`created_at` vs. estado no cerrado).
