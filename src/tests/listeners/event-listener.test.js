@@ -1,6 +1,7 @@
 jest.mock('../../security/secure-log', () => ({ secureLog: jest.fn() }));
 
 const { EventListener } = require('../../listeners/event-listener');
+const { BusinessRule } = require('../../listeners/business-rule');
 
 class TestListener extends EventListener {
   constructor(kafka, options) {
@@ -8,8 +9,43 @@ class TestListener extends EventListener {
     this.handled = [];
   }
 
+  rules() {
+    return [];
+  }
+
   async handle(event) {
     this.handled.push(event);
+  }
+}
+
+class RuleListener extends EventListener {
+  constructor(rules) {
+    super(buildKafka().kafka, { topic: 't' });
+    this.ruleList = rules;
+  }
+
+  rules() {
+    return this.ruleList;
+  }
+}
+
+class CapacidadAlta extends BusinessRule {
+  appliesTo({ data }) {
+    return data.capacidad >= 500;
+  }
+
+  apply({ metadata, data }) {
+    return { type: 'CoberturaPreventiva', payload: { eventId: metadata.eventId, capacidad: data.capacidad } };
+  }
+}
+
+class SiempreAplica extends BusinessRule {
+  appliesTo() {
+    return true;
+  }
+
+  async apply() {
+    return { type: 'Auditoria', payload: {} };
   }
 }
 
@@ -34,10 +70,33 @@ describe('EventListener', () => {
     expect(() => new TestListener(null, { topic: 't' })).toThrow(/Kafka/);
   });
 
-  it('una subclase sin handle() falla al recibir un evento', async () => {
-    class SinHandle extends EventListener {}
-    const listener = new SinHandle(buildKafka().kafka, { topic: 't' });
-    await expect(listener.onMessage(toMessage({ a: 1 }))).rejects.toThrow(/implementar handle/);
+  it('una subclase sin rulesDir ni rules() falla al recibir un evento', async () => {
+    class SinRules extends EventListener {}
+    const listener = new SinRules(buildKafka().kafka, { topic: 't' });
+    await expect(listener.onMessage(toMessage({ a: 1 }))).rejects.toThrow(/debe definir rulesDir o implementar rules/);
+  });
+
+  it('carga las reglas de rulesDir una sola vez y las aplica', async () => {
+    const path = require('path');
+    class ConCarpeta extends EventListener {}
+    const listener = new ConCarpeta(buildKafka().kafka, {
+      topic: 't',
+      rulesDir: path.join(__dirname, 'fixtures', 'rules'),
+    });
+
+    const outcomes = await listener.handle({ metadata: { eventId: 'e1' }, data: { capacidad: 900 } });
+    expect(outcomes.map((o) => o.type)).toEqual(['CapacidadAlta', 'Siempre']);
+    expect(listener.rules()).toBe(listener.rules());
+  });
+
+  it('start falla sin conectar si una regla de rulesDir es invalida', async () => {
+    const path = require('path');
+    class Rota extends EventListener {}
+    const { kafka } = buildKafka();
+    const listener = new Rota(kafka, { topic: 't', rulesDir: path.join(__dirname, 'fixtures', 'rules-invalidas') });
+
+    await expect(listener.start()).rejects.toThrow(/BusinessRule/);
+    expect(kafka.consumer).not.toHaveBeenCalled();
   });
 
   it('usa un groupId por listener por default', () => {
@@ -94,7 +153,7 @@ describe('EventListener', () => {
 
   it('descarta mensajes con JSON invalido sin llamar a handle', async () => {
     const listener = new TestListener(buildKafka().kafka, { topic: 't' });
-    await expect(listener.onMessage(toMessage('{no-json'))).resolves.toBeUndefined();
+    await expect(listener.onMessage(toMessage('{no-json'))).resolves.toBeNull();
     expect(listener.handled).toEqual([]);
   });
 
@@ -117,5 +176,71 @@ describe('EventListener', () => {
     await listener.stop();
     expect(consumer.disconnect).toHaveBeenCalledTimes(1);
     expect(listener.consumer).toBeNull();
+  });
+});
+
+describe('EventListener.handle (template method)', () => {
+  const evento = { metadata: { eventId: 'e1' }, data: { capacidad: 800 } };
+
+  it('sin reglas no devuelve resultados', async () => {
+    await expect(new RuleListener([]).handle(evento)).resolves.toEqual([]);
+  });
+
+  it('devuelve los resultados de las reglas que aplican, en orden', async () => {
+    const listener = new RuleListener([new CapacidadAlta(), new SiempreAplica()]);
+    await expect(listener.handle(evento)).resolves.toEqual([
+      { type: 'CoberturaPreventiva', payload: { eventId: 'e1', capacidad: 800 } },
+      { type: 'Auditoria', payload: {} },
+    ]);
+  });
+
+  it('omite las reglas que no aplican', async () => {
+    const listener = new RuleListener([new CapacidadAlta(), new SiempreAplica()]);
+    const outcomes = await listener.handle({ metadata: {}, data: { capacidad: 10 } });
+    expect(outcomes.map((o) => o.type)).toEqual(['Auditoria']);
+  });
+
+  it('buildContext tolera eventos sin metadata/data', async () => {
+    const listener = new RuleListener([new SiempreAplica()]);
+    expect(listener.buildContext(null)).toEqual({ metadata: {}, data: {} });
+    await expect(listener.handle(undefined)).resolves.toHaveLength(1);
+  });
+
+  it('las subclases pueden sobreescribir buildContext', async () => {
+    class Normaliza extends RuleListener {
+      buildContext(event) {
+        const ctx = super.buildContext(event);
+        return { ...ctx, data: { capacidad: Number(ctx.data.capacidad) } };
+      }
+    }
+    const outcomes = await new Normaliza([new CapacidadAlta()]).handle({ data: { capacidad: '900' } });
+    expect(outcomes[0].payload.capacidad).toBe(900);
+  });
+
+  it('falla si una regla devuelve un resultado sin type', async () => {
+    class SinType extends SiempreAplica {
+      apply() {
+        return { payload: {} };
+      }
+    }
+    await expect(new RuleListener([new SinType()]).handle(evento)).rejects.toThrow(/SinType.apply\(\) debe devolver/);
+  });
+
+  it('onMessage devuelve los resultados del template', async () => {
+    const listener = new RuleListener([new SiempreAplica()]);
+    await expect(listener.onMessage(toMessage(evento))).resolves.toEqual([{ type: 'Auditoria', payload: {} }]);
+  });
+});
+
+describe('BusinessRule', () => {
+  it('no se puede instanciar directamente', () => {
+    expect(() => new BusinessRule()).toThrow(/abstracta/);
+  });
+
+  it('una subclase debe implementar appliesTo y apply', () => {
+    class Vacia extends BusinessRule {}
+    const rule = new Vacia();
+    expect(() => rule.appliesTo({})).toThrow(/implementar appliesTo/);
+    expect(() => rule.apply({})).toThrow(/implementar apply/);
   });
 });
