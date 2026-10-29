@@ -9,6 +9,10 @@ class TestListener extends EventListener {
     this.handled = [];
   }
 
+  rules() {
+    return [];
+  }
+
   async handle(event) {
     this.handled.push(event);
   }
@@ -66,10 +70,33 @@ describe('EventListener', () => {
     expect(() => new TestListener(null, { topic: 't' })).toThrow(/Kafka/);
   });
 
-  it('una subclase sin rules() falla al recibir un evento', async () => {
+  it('una subclase sin rulesDir ni rules() falla al recibir un evento', async () => {
     class SinRules extends EventListener {}
     const listener = new SinRules(buildKafka().kafka, { topic: 't' });
-    await expect(listener.onMessage(toMessage({ a: 1 }))).rejects.toThrow(/implementar rules/);
+    await expect(listener.onMessage(toMessage({ a: 1 }))).rejects.toThrow(/debe definir rulesDir o implementar rules/);
+  });
+
+  it('carga las reglas de rulesDir una sola vez y las aplica', async () => {
+    const path = require('path');
+    class ConCarpeta extends EventListener {}
+    const listener = new ConCarpeta(buildKafka().kafka, {
+      topic: 't',
+      rulesDir: path.join(__dirname, 'fixtures', 'rules'),
+    });
+
+    const outcomes = await listener.handle({ metadata: { eventId: 'e1' }, data: { capacidad: 900 } });
+    expect(outcomes.map((o) => o.type)).toEqual(['CapacidadAlta', 'Siempre']);
+    expect(listener.rules()).toBe(listener.rules());
+  });
+
+  it('start falla sin conectar si una regla de rulesDir es invalida', async () => {
+    const path = require('path');
+    class Rota extends EventListener {}
+    const { kafka } = buildKafka();
+    const listener = new Rota(kafka, { topic: 't', rulesDir: path.join(__dirname, 'fixtures', 'rules-invalidas') });
+
+    await expect(listener.start()).rejects.toThrow(/BusinessRule/);
+    expect(kafka.consumer).not.toHaveBeenCalled();
   });
 
   it('usa un groupId por listener por default', () => {

@@ -1,4 +1,5 @@
 const { secureLog } = require('../security/secure-log');
+const { loadRules } = require('./load-rules');
 
 // Listener abstracto de eventos externos (Kafka).
 //
@@ -9,7 +10,9 @@ const { secureLog } = require('../security/secure-log');
 //
 // handle() es un template method (no sobreescribir). Las subclases definen
 // los pasos:
-//   - rules()               obligatorio: reglas (BusinessRule) a evaluar.
+//   - rulesDir (option)     carpeta con las reglas: cada *.rule.js se carga
+//                           solo (ver load-rules.js). Alternativa: sobreescribir
+//                           rules().
 //   - buildContext(event)   opcional: normaliza el evento antes de evaluar.
 // Devuelve los resultados { type, payload } de las reglas que aplican, que
 // despues procesa la factory de cada caso de negocio.
@@ -19,7 +22,7 @@ const { secureLog } = require('../security/secure-log');
 class EventListener {
   constructor(kafka, options = {}) {
     if (new.target === EventListener) {
-      throw new Error('EventListener es abstracto: extender e implementar rules()');
+      throw new Error('EventListener es abstracto: extender y definir rulesDir');
     }
     if (!kafka) {
       throw new Error(`${this.constructor.name} requiere una instancia de Kafka`);
@@ -28,6 +31,8 @@ class EventListener {
     this.topic = options.topic;
     this.groupId = options.groupId || `emergencias-backend.${this.constructor.name}`;
     this.fromBeginning = options.fromBeginning === true;
+    this.rulesDir = options.rulesDir;
+    this.loadedRules = null;
     this.consumer = null;
   }
 
@@ -57,7 +62,13 @@ class EventListener {
   }
 
   rules() {
-    throw new Error(`${this.constructor.name} debe implementar rules()`);
+    if (!this.rulesDir) {
+      throw new Error(`${this.constructor.name} debe definir rulesDir o implementar rules()`);
+    }
+    if (!this.loadedRules) {
+      this.loadedRules = loadRules(this.rulesDir);
+    }
+    return this.loadedRules;
   }
 
   async start() {
@@ -66,6 +77,9 @@ class EventListener {
       return false;
     }
     if (this.consumer) return true;
+    // Carga las reglas antes de conectar: una regla rota falla el arranque
+    // en vez de cada mensaje.
+    this.rules();
 
     this.consumer = this.kafka.consumer({ groupId: this.groupId });
     try {

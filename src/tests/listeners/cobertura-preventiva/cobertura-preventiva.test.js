@@ -39,6 +39,13 @@ describe('listeners/cobertura-preventiva', () => {
     expect(new EventoCanceladoListener(kafka).topic).toBe('espacios.EventoCancelado');
   });
 
+  it('cada listener carga las reglas de su carpeta rules/', () => {
+    const path = require('path');
+    const base = path.join(__dirname, '../../../listeners/cobertura-preventiva');
+    expect(new EventoComunitarioPublicadoListener(kafka).rulesDir).toBe(path.join(base, 'evento-comunitario-publicado', 'rules'));
+    expect(new EventoCanceladoListener(kafka).rulesDir).toBe(path.join(base, 'evento-cancelado', 'rules'));
+  });
+
   it('todavia no tienen reglas: procesan el evento sin resultados', async () => {
     const evento = { metadata: { eventId: 'e1' }, data: { nombre: 'Recital', capacidad: 800 } };
     await expect(new EventoComunitarioPublicadoListener(kafka).handle(evento)).resolves.toEqual([]);
