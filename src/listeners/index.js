@@ -1,4 +1,5 @@
 const { EventListener } = require('./event-listener');
+const { BusinessRule } = require('./business-rule');
 const coberturaPreventiva = require('./cobertura-preventiva');
 
 // Paquete de listeners de eventos externos.
@@ -14,6 +15,7 @@ function createListeners(kafka) {
 
 module.exports = {
   EventListener,
+  BusinessRule,
   coberturaPreventiva,
   createListeners,
 };
