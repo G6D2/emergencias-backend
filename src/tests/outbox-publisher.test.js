@@ -1,4 +1,4 @@
-const { OutboxPublisher } = require('../services/outbox-publisher');
+const { OutboxPublisher, resolvePublishSince } = require('../services/outbox-publisher');
 
 function createPool({ events = [], claimError = null } = {}) {
   const queries = [];
@@ -146,5 +146,104 @@ describe('OutboxPublisher', () => {
     publisher.stop();
     errorSpy.mockRestore();
     jest.useRealTimers();
+  });
+
+  // Issue #71: descartar PENDING previos al activar el bus.
+  describe('publishSince (issue #71)', () => {
+    it('resolvePublishSince devuelve null para vacio/undefined/null', () => {
+      expect(resolvePublishSince(undefined)).toBeNull();
+      expect(resolvePublishSince(null)).toBeNull();
+      expect(resolvePublishSince('')).toBeNull();
+    });
+
+    it('resolvePublishSince parsea ISO 8601 y preserva Date valido', () => {
+      const iso = '2026-11-02T00:00:00.000Z';
+      expect(resolvePublishSince(iso)).toEqual(new Date(iso));
+      const d = new Date('2026-11-02T12:00:00.000Z');
+      expect(resolvePublishSince(d)).toBe(d);
+    });
+
+    it('resolvePublishSince lanza si el string no es parseable', () => {
+      expect(() => resolvePublishSince('no-es-fecha')).toThrow(/OUTBOX_PUBLISH_SINCE/);
+    });
+
+    it('publishSince default es null (comportamiento previo intacto)', () => {
+      const prev = process.env.OUTBOX_PUBLISH_SINCE;
+      delete process.env.OUTBOX_PUBLISH_SINCE;
+      try {
+        const publisher = new OutboxPublisher(createPool(), { isEnabled: () => false });
+        expect(publisher.publishSince).toBeNull();
+      } finally {
+        if (prev !== undefined) process.env.OUTBOX_PUBLISH_SINCE = prev;
+      }
+    });
+
+    it('skipPendingBefore no corre query si publishSince es null', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => false });
+      await expect(publisher.skipPendingBefore()).resolves.toBe(0);
+      expect(pool.queries).toHaveLength(0);
+    });
+
+    it('skipPendingBefore marca PENDING < since como SKIPPED y devuelve rowCount', async () => {
+      const since = new Date('2026-11-02T00:00:00.000Z');
+      const pool = {
+        queries: [],
+        connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
+        query: async function query(sql, params) {
+          this.queries.push({ sql, params });
+          if (sql.includes("SET status = 'SKIPPED'")) return { rowCount: 7 };
+          return { rowCount: 0, rows: [] };
+        },
+      };
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => false }, { publishSince: since });
+
+      await expect(publisher.skipPendingBefore()).resolves.toBe(7);
+
+      const skipQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'SKIPPED'"));
+      expect(skipQ).toBeDefined();
+      expect(skipQ.sql).toMatch(/status = 'PENDING' AND created_at < \$1/);
+      expect(skipQ.params).toEqual([since.toISOString()]);
+    });
+
+    it('claimBatch pasa null como 2do param cuando no hay publishSince', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true });
+      await publisher.claimBatch();
+      const claimQ = pool.queries.find(({ sql }) => sql.includes('RETURNING id, topic, payload, attempts'));
+      expect(claimQ.params[1]).toBeNull();
+    });
+
+    it('claimBatch pasa el ISO como 2do param cuando hay publishSince', async () => {
+      const since = new Date('2026-11-02T00:00:00.000Z');
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, { publishSince: since });
+      await publisher.claimBatch();
+      const claimQ = pool.queries.find(({ sql }) => sql.includes('RETURNING id, topic, payload, attempts'));
+      expect(claimQ.params[1]).toBe(since.toISOString());
+      expect(claimQ.sql).toMatch(/created_at >= \$2::timestamptz/);
+    });
+
+    it('start corre skipPendingBefore antes de runOnce', async () => {
+      jest.useFakeTimers();
+      const since = new Date('2026-11-02T00:00:00.000Z');
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => false }, { publishSince: since });
+      const skipSpy = jest.spyOn(publisher, 'skipPendingBefore').mockResolvedValue(0);
+      const runOnceSpy = jest.spyOn(publisher, 'runOnce').mockResolvedValue(0);
+
+      publisher.start();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(skipSpy).toHaveBeenCalledTimes(1);
+      expect(runOnceSpy).toHaveBeenCalledTimes(1);
+      const skipOrder = skipSpy.mock.invocationCallOrder[0];
+      const runOrder = runOnceSpy.mock.invocationCallOrder[0];
+      expect(skipOrder).toBeLessThan(runOrder);
+
+      publisher.stop();
+      jest.useRealTimers();
+    });
   });
 });
