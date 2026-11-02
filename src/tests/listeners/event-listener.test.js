@@ -1,5 +1,6 @@
 jest.mock('../../security/secure-log', () => ({ secureLog: jest.fn() }));
 
+const { secureLog } = require('../../security/secure-log');
 const { EventListener } = require('../../listeners/event-listener');
 const { BusinessRule } = require('../../listeners/business-rule');
 
@@ -19,8 +20,8 @@ class TestListener extends EventListener {
 }
 
 class RuleListener extends EventListener {
-  constructor(rules) {
-    super(buildKafka().kafka, { topic: 't' });
+  constructor(rules, options = {}) {
+    super(buildKafka().kafka, { topic: 't', ...options });
     this.ruleList = rules;
   }
 
@@ -226,9 +227,48 @@ describe('EventListener.handle (template method)', () => {
     await expect(new RuleListener([new SinType()]).handle(evento)).rejects.toThrow(/SinType.apply\(\) debe devolver/);
   });
 
-  it('onMessage devuelve los resultados del template', async () => {
-    const listener = new RuleListener([new SiempreAplica()]);
+  it('onMessage le pasa los resultados y el contexto a la factory, y los devuelve', async () => {
+    const factory = { process: jest.fn().mockResolvedValue(undefined) };
+    const listener = new RuleListener([new SiempreAplica()], { factory });
+
     await expect(listener.onMessage(toMessage(evento))).resolves.toEqual([{ type: 'Auditoria', payload: {} }]);
+
+    expect(factory.process).toHaveBeenCalledWith([{ type: 'Auditoria', payload: {} }], {
+      metadata: evento.metadata,
+      data: evento.data,
+    });
+  });
+
+  it('onMessage no llama a la factory si no hay resultados', async () => {
+    const factory = { process: jest.fn() };
+    const listener = new RuleListener([], { factory });
+
+    await expect(listener.onMessage(toMessage(evento))).resolves.toEqual([]);
+
+    expect(factory.process).not.toHaveBeenCalled();
+  });
+
+  it('onMessage sin resultados funciona sin factory', async () => {
+    await expect(new RuleListener([]).onMessage(toMessage(evento))).resolves.toEqual([]);
+  });
+
+  it('onMessage con resultados y sin factory falla: el resultado no se pierde', async () => {
+    const listener = new RuleListener([new SiempreAplica()]);
+
+    await expect(listener.onMessage(toMessage(evento))).rejects.toThrow(/tiene resultados y no tiene factory/);
+
+    expect(secureLog).toHaveBeenCalledWith('error', 'RuleListener no pudo aplicar los resultados', {
+      eventId: evento.metadata.eventId,
+      outcomes: ['Auditoria'],
+      message: expect.stringMatching(/no tiene factory/),
+    });
+  });
+
+  it('onMessage propaga el error de la factory para que Kafka reentregue', async () => {
+    const factory = { process: jest.fn().mockRejectedValue(new Error('boom')) };
+    const listener = new RuleListener([new SiempreAplica()], { factory });
+
+    await expect(listener.onMessage(toMessage(evento))).rejects.toThrow('boom');
   });
 });
 

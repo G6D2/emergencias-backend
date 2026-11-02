@@ -14,7 +14,7 @@ const { startIncidentDetectionJob } = require('./services/incident-detection-job
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher } = require('./services/outbox-publisher');
-const { createListeners } = require('./listeners');
+const { createListeners, createOutcomeFactory } = require('./listeners');
 
 const PORT = process.env.PORT || 3000;
 
@@ -41,7 +41,9 @@ async function start() {
 
   // Listeners de eventos externos. Apagados por default: se prenden con
   // KAFKA_CONSUMER_ENABLED=true (cada uno necesita ademas su topic).
-  const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true' ? createListeners(kafkaService.kafka) : [];
+  const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true'
+    ? createListeners(kafkaService.kafka, { factory: createOutcomeFactory({ pool, emergencyRepository }) })
+    : [];
   for (const listener of listeners) {
     listener.start().catch((err) => {
       secureLog('error', 'Listener fallo al arrancar', { listener: listener.constructor.name, message: err.message });

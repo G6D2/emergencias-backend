@@ -2,8 +2,8 @@
 //
 // Cada regla decide si aplica al evento (appliesTo) y, si aplica, devuelve
 // un resultado (apply) con la forma { type, payload }. Los resultados son la
-// salida del listener: los va a consumir una factory que, segun el type,
-// arma los POST y las escrituras en base de cada caso de negocio. Las reglas
+// salida del listener: los ejecuta la factory (outcome-factory.js), que segun
+// el type llama al handler que escribe en la base y en el outbox. Las reglas
 // no tienen side effects.
 class BusinessRule {
   constructor() {

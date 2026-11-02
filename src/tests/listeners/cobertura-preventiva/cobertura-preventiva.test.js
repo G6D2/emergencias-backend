@@ -1,7 +1,7 @@
 jest.mock('../../../security/secure-log', () => ({ secureLog: jest.fn() }));
 
 const { secureLog } = require('../../../security/secure-log');
-const { EventListener, createListeners } = require('../../../listeners');
+const { EventListener, OutcomeFactory, createListeners, createOutcomeFactory } = require('../../../listeners');
 const {
   EventoComunitarioPublicadoListener,
   EventoCanceladoListener,
@@ -29,6 +29,26 @@ describe('listeners/cobertura-preventiva', () => {
       EventoCanceladoListener,
     ]);
     listeners.forEach((l) => expect(l).toBeInstanceOf(EventListener));
+  });
+
+  it('createListeners le pasa la factory a cada listener', () => {
+    const factory = { process: jest.fn() };
+    createListeners(kafka, { factory }).forEach((l) => expect(l.factory).toBe(factory));
+  });
+
+  it('createOutcomeFactory registra PublicarEvento', async () => {
+    const client = { query: jest.fn().mockResolvedValue({ rows: [] }), release: jest.fn() };
+    const pool = { connect: jest.fn().mockResolvedValue(client) };
+    const emergencyRepository = { insertOutboxEvent: jest.fn().mockResolvedValue(undefined) };
+    const factory = createOutcomeFactory({ pool, emergencyRepository });
+
+    expect(factory).toBeInstanceOf(OutcomeFactory);
+    await factory.process([{ type: 'PublicarEvento', payload: { topic: 't', event: { type: 'E' } } }], { metadata: { eventId: 'e1' } });
+
+    expect(emergencyRepository.insertOutboxEvent).toHaveBeenCalledWith(client, {
+      topic: 't',
+      payload: { type: 'E', causationId: 'e1' },
+    });
   });
 
   it('EventoComunitarioPublicadoListener toma su topic del env', () => {

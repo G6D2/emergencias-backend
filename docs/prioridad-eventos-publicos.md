@@ -140,5 +140,6 @@ job o dejarse: inactivas se ignoran.
   candidatas en el paso 2 (`created_at` vs. estado no cerrado).
 - **Eventos superpuestos:** se asume que suben un solo nivel, no uno por evento.
 - Las emergencias `PANICO` ya son `critical`: el aumento solo afecta a los demás tipos.
-- La factory (despacho de resultados `{ type, payload }` a escrituras) todavía no existe;
-  `EventListener.onMessage` hoy solo devuelve los resultados.
+- La factory ya existe (`src/listeners/outcome-factory.js`), con el handler `PublicarEvento`.
+  Faltan los handlers `ActualizarZonaPrioritaria` y `CancelarZonaPrioritaria`, que escriben
+  las zonas con el client de su transacción.

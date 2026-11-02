@@ -14,11 +14,12 @@ const { loadRules } = require('./load-rules');
 //                           solo (ver load-rules.js). Alternativa: sobreescribir
 //                           rules().
 //   - buildContext(event)   opcional: normaliza el evento antes de evaluar.
-// Devuelve los resultados { type, payload } de las reglas que aplican, que
-// despues procesa la factory de cada caso de negocio.
+// Devuelve los resultados { type, payload } de las reglas que aplican.
+// onMessage() se los pasa a la factory (option), que los ejecuta en una sola
+// transaccion. Un resultado sin factory que lo procese falla: no se pierde.
 //
-// Si handle() lanza, el error se propaga a kafkajs: no se confirma el offset
-// y el mensaje se reentrega.
+// Si handle() o la factory lanzan, el error se propaga a kafkajs: no se
+// confirma el offset y el mensaje se reentrega.
 class EventListener {
   constructor(kafka, options = {}) {
     if (new.target === EventListener) {
@@ -32,6 +33,7 @@ class EventListener {
     this.groupId = options.groupId || `emergencias-backend.${this.constructor.name}`;
     this.fromBeginning = options.fromBeginning === true;
     this.rulesDir = options.rulesDir;
+    this.factory = options.factory || null;
     this.loadedRules = null;
     this.consumer = null;
   }
@@ -109,7 +111,27 @@ class EventListener {
       });
       return null;
     }
-    return this.handle(event);
+    const outcomes = await this.handle(event);
+    if (!outcomes || outcomes.length === 0) return outcomes;
+    await this.applyOutcomes(outcomes, event);
+    return outcomes;
+  }
+
+  async applyOutcomes(outcomes, event) {
+    const context = this.buildContext(event);
+    try {
+      if (!this.factory) {
+        throw new Error(`${this.constructor.name} tiene resultados y no tiene factory`);
+      }
+      await this.factory.process(outcomes, context);
+    } catch (error) {
+      secureLog('error', `${this.constructor.name} no pudo aplicar los resultados`, {
+        eventId: context.metadata.eventId,
+        outcomes: outcomes.map((o) => o.type),
+        message: error.message,
+      });
+      throw error;
+    }
   }
 
   async stop() {
