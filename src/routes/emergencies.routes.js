@@ -1,7 +1,12 @@
 const express = require('express');
 const { EmergencyController } = require('../controllers/emergency.controller');
 const { asyncHandler } = require('../utils/async-handler');
-const { requireCitizen, requireDispatcher, requireCitizenOrDispatcher } = require('../auth/authorize');
+const {
+  requireCitizen,
+  requireDispatcher,
+  requireOfficer,
+  requireCitizenOrDispatcher,
+} = require('../auth/authorize');
 
 function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
   const router = express.Router();
@@ -335,6 +340,85 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    */
   router.patch('/:id/return', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
     const result = await controller.returnEmergency(req.params.id, req.body || {}, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
+   * /api/emergencies/{id}/en-route:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: El oficial asignado sale hacia la emergencia (DISPATCHED → EN_ROUTE)
+   *     description: |
+   *       Requiere grupo `officer`, y que el `sub` del token sea el oficial
+   *       asignado a la emergencia. Registra el cambio en el historial y
+   *       publica `EmergenciaEstadoActualizado`. Una emergencia inexistente o
+   *       asignada a otro oficial responde 404.
+   *     security: [{ bearerAuth: [] }]
+   *     parameters:
+   *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+   *     responses:
+   *       200: { description: Emergencia en EN_ROUTE }
+   *       400: { description: id inválido }
+   *       401: { description: Token ausente o inválido }
+   *       403: { description: Se requiere grupo officer }
+   *       404: { description: Emergencia no encontrada o no asignada a este oficial }
+   *       409: { description: La emergencia no está DISPATCHED }
+   */
+  router.patch('/:id/en-route', authenticate, requireOfficer, asyncHandler(async (req, res) => {
+    const result = await controller.markEnRoute(req.params.id, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
+   * /api/emergencies/{id}/on-scene:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: El oficial asignado llegó al lugar (EN_ROUTE → ON_SCENE)
+   *     description: |
+   *       Requiere grupo `officer`, y que el `sub` del token sea el oficial
+   *       asignado a la emergencia. No se puede saltear el estado EN_ROUTE.
+   *       Publica `EmergenciaEstadoActualizado`.
+   *     security: [{ bearerAuth: [] }]
+   *     parameters:
+   *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+   *     responses:
+   *       200: { description: Emergencia en ON_SCENE }
+   *       400: { description: id inválido }
+   *       401: { description: Token ausente o inválido }
+   *       403: { description: Se requiere grupo officer }
+   *       404: { description: Emergencia no encontrada o no asignada a este oficial }
+   *       409: { description: La emergencia no está EN_ROUTE }
+   */
+  router.patch('/:id/on-scene', authenticate, requireOfficer, asyncHandler(async (req, res) => {
+    const result = await controller.markOnScene(req.params.id, req.user);
+    res.json(result);
+  }));
+
+  /**
+   * @openapi
+   * /api/emergencies/{id}/resolve:
+   *   patch:
+   *     tags: [Emergencies]
+   *     summary: El oficial asignado resolvió la emergencia (ON_SCENE → RESOLVED)
+   *     description: |
+   *       Requiere grupo `officer`, y que el `sub` del token sea el oficial
+   *       asignado a la emergencia. El cierre definitivo (RESOLVED → CLOSED)
+   *       sigue siendo del dispatcher. Publica `EmergenciaEstadoActualizado`.
+   *     security: [{ bearerAuth: [] }]
+   *     parameters:
+   *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+   *     responses:
+   *       200: { description: Emergencia en RESOLVED }
+   *       400: { description: id inválido }
+   *       401: { description: Token ausente o inválido }
+   *       403: { description: Se requiere grupo officer }
+   *       404: { description: Emergencia no encontrada o no asignada a este oficial }
+   *       409: { description: La emergencia no está ON_SCENE }
+   */
+  router.patch('/:id/resolve', authenticate, requireOfficer, asyncHandler(async (req, res) => {
+    const result = await controller.markResolved(req.params.id, req.user);
     res.json(result);
   }));
 

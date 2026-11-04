@@ -1,5 +1,10 @@
 const { NotFoundError, ValidationError } = require('../errors/app-errors');
-const { canCancelEmergency, canViewEmergency, userHasGroup } = require('../auth/authorize');
+const {
+  canAdvanceEmergencyStatus,
+  canCancelEmergency,
+  canViewEmergency,
+  userHasGroup,
+} = require('../auth/authorize');
 const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
@@ -315,6 +320,63 @@ class EmergencyController {
     });
 
     return { success: true, data: updated };
+  }
+
+  /**
+   * Avance del estado operativo por el oficial asignado (HU-08, issue #21):
+   * DISPATCHED → EN_ROUTE → ON_SCENE → RESOLVED. Las tres acciones comparten
+   * este método; solo cambia el estado destino.
+   *
+   * - Una emergencia inexistente, sin oficial o asignada a OTRO oficial
+   *   responde 404 (no 403), igual que cancelar una emergencia ajena: no se
+   *   revela que el id existe.
+   * - Saltear un estado, o repetir uno ya aplicado, responde 409 (el dominio
+   *   decide en assertTransition).
+   * - El oficial se vuelve a comprobar bajo el lock de la fila
+   *   (requireAssignedOfficerId), por si el dispatcher devolvió y reasignó
+   *   entre la lectura y el UPDATE.
+   */
+  async advanceOperationalStatus(id, newStatus, user) {
+    assertUuid(id);
+
+    const actor = user.sub;
+    const emergency = await this.emergencyRepository.findById(id);
+    if (!emergency || !canAdvanceEmergencyStatus(user, emergency)) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+
+    assertTransition(emergency.status, newStatus);
+
+    const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
+      newStatus,
+      actor,
+      requireAssignedOfficerId: actor,
+      outboxEvent: {
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyStatusUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            reason: null,
+            eventId,
+          }),
+      },
+    });
+
+    return { success: true, data: updated };
+  }
+
+  async markEnRoute(id, user) {
+    return this.advanceOperationalStatus(id, 'EN_ROUTE', user);
+  }
+
+  async markOnScene(id, user) {
+    return this.advanceOperationalStatus(id, 'ON_SCENE', user);
+  }
+
+  async markResolved(id, user) {
+    return this.advanceOperationalStatus(id, 'RESOLVED', user);
   }
 }
 
