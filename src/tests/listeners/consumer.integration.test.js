@@ -4,7 +4,6 @@
 // Esto valida que el triangulo OutcomeFactory + dedup + INSERT funcione de punta
 // a punta sin depender de que Kafka este disponible en el agente de CI.
 
-const path = require('path');
 const { getPool } = require('../../../db/pool');
 const { EmergencyRepository } = require('../../../repositories/emergency.repository');
 const { EventosProcesadosRepository } = require('../../../repositories/eventos-procesados.repository');
