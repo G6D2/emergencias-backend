@@ -94,7 +94,8 @@ describe('consumer pipeline — EventoComunitarioPublicado → emergencia PENDIN
     expect(rows).toHaveLength(1);
     const payload = rows[0].payload;
     expect(payload.type).toBe('EmergenciaCreada');
-    expect(payload.data.categoria).toBe('DISTURBIO_EVENTO_MASIVO');
+    // correlationId en el envelope: estable en ambas versiones del contrato.
+    expect(payload.correlationId).toBe(BASE_EVENT.metadata.eventId);
   });
 
   it('marca el eventId en eventos_procesados', async () => {
