@@ -32,6 +32,7 @@ class EventListener {
     this.groupId = options.groupId || `emergencias-backend.${this.constructor.name}`;
     this.fromBeginning = options.fromBeginning === true;
     this.rulesDir = options.rulesDir;
+    this.factory = options.factory || null;
     this.loadedRules = null;
     this.consumer = null;
   }
@@ -109,7 +110,11 @@ class EventListener {
       });
       return null;
     }
-    return this.handle(event);
+    const outcomes = await this.handle(event);
+    if (this.factory) {
+      await this.factory.process(outcomes, this.buildContext(event));
+    }
+    return outcomes;
   }
 
   async stop() {
