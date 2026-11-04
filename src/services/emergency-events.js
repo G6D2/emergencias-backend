@@ -44,7 +44,7 @@ function buildEmergencyCreatedEvent(emergency, eventId) {
       prioridad: toPrioridad(emergency.severity),
       estado: toEstado(emergency.status),
       // #76: hasta que el ingreso resuelva barrio desde lat/lng va null.
-      barrio: emergency.barrio ?? null,
+      ubicacion: { barrio: emergency.barrio ?? null },
       // Hasta #76/#85 publicamos false. Analitica, Reclamos, Espacios,
       // Movilidad y Residuos lo esperan boolean, no undefined.
       afectaCirculacion: false,

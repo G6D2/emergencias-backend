@@ -49,7 +49,7 @@ describe('emergency-events', () => {
     it('publica los campos nuevos del contrato con default null/false hasta que se desbloqueen', () => {
       const event = buildEmergencyCreatedEvent(baseEmergency, 'evt-3');
       // Null hasta #76 (barrio) y hasta que Juani/Valen cierren la regla de lat/lng.
-      expect(event.data.barrio).toBeNull();
+      expect(event.data.ubicacion.barrio).toBeNull();
       expect(event.data.latitud).toBeNull();
       expect(event.data.longitud).toBeNull();
       // Null hasta que se consuman eventos de otros modulos (#77/#79/#80).
