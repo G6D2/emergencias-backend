@@ -1,5 +1,5 @@
-const { getPool } = require('../../db/pool');
-const { EventosProcesadosRepository } = require('../../repositories/eventos-procesados.repository');
+const { getPool } = require('../db/pool');
+const { EventosProcesadosRepository } = require('../repositories/eventos-procesados.repository');
 
 let pool;
 let repo;

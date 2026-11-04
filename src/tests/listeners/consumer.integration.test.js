@@ -4,13 +4,13 @@
 // Esto valida que el triangulo OutcomeFactory + dedup + INSERT funcione de punta
 // a punta sin depender de que Kafka este disponible en el agente de CI.
 
-const { getPool } = require('../../../db/pool');
-const { EmergencyRepository } = require('../../../repositories/emergency.repository');
-const { EventosProcesadosRepository } = require('../../../repositories/eventos-procesados.repository');
-const { OutcomeFactory } = require('../../../listeners/outcome-factory');
-const { EventoComunitarioPublicadoListener } = require('../../../listeners/cobertura-preventiva/evento-comunitario-publicado/evento-comunitario-publicado.listener');
-const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('../../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
-const { createLocationCrypto } = require('../../../security/location-crypto');
+const { getPool } = require('../../db/pool');
+const { EmergencyRepository } = require('../../repositories/emergency.repository');
+const { EventosProcesadosRepository } = require('../../repositories/eventos-procesados.repository');
+const { OutcomeFactory } = require('../../listeners/outcome-factory');
+const { EventoComunitarioPublicadoListener } = require('../../listeners/cobertura-preventiva/evento-comunitario-publicado/evento-comunitario-publicado.listener');
+const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
+const { createLocationCrypto } = require('../../security/location-crypto');
 
 function fakeKafka() {
   return { consumer: jest.fn(() => ({ connect: jest.fn(), subscribe: jest.fn(), run: jest.fn(), disconnect: jest.fn() })) };
