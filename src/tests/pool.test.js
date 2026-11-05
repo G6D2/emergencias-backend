@@ -1,11 +1,19 @@
 const mockEnd = jest.fn().mockResolvedValue(undefined);
+const mockOn = jest.fn();
 
 jest.mock('pg', () => ({
   Pool: jest.fn().mockImplementation((config) => ({
     config,
     end: mockEnd,
+    on: mockOn,
   })),
 }));
+
+// Handler registrado con pool.on(evento, handler) en el último getPool().
+function poolHandler(event) {
+  const call = mockOn.mock.calls.find(([name]) => name === event);
+  return call && call[1];
+}
 
 describe('db/pool', () => {
   const ORIGINAL_ENV = process.env;
@@ -53,6 +61,70 @@ describe('db/pool', () => {
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 5000,
     });
+  });
+
+  it('manda keepAlive y los timeouts de sesión con un Postgres directo', () => {
+    process.env.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5434/emergencias_dev';
+    const { getPool } = require('../db/pool');
+    const { Pool } = require('pg');
+
+    getPool();
+
+    expect(Pool.mock.calls[0][0]).toMatchObject({
+      keepAlive: true,
+      statement_timeout: 10000,
+      idle_in_transaction_session_timeout: 15000,
+    });
+  });
+
+  it('contra el pooler de Neon no manda los timeouts como startup parameters (PgBouncer los rechaza)', () => {
+    process.env.DATABASE_URL = 'postgresql://u:p@ep-cool-name-123456-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require';
+    const { getPool } = require('../db/pool');
+    const { Pool } = require('pg');
+
+    getPool();
+
+    const config = Pool.mock.calls[0][0];
+    expect(config.keepAlive).toBe(true);
+    expect(config).not.toHaveProperty('statement_timeout');
+    expect(config).not.toHaveProperty('idle_in_transaction_session_timeout');
+  });
+
+  it('resolveSessionTimeouts: URL directa de Neon sí lleva timeouts; una URL inválida no rompe', () => {
+    const { resolveSessionTimeouts } = require('../db/pool');
+
+    expect(resolveSessionTimeouts('postgresql://u:p@ep-cool-name-123456.us-east-2.aws.neon.tech/neondb'))
+      .toEqual({ statement_timeout: 10000, idle_in_transaction_session_timeout: 15000 });
+    expect(resolveSessionTimeouts('no-es-una-url'))
+      .toEqual({ statement_timeout: 10000, idle_in_transaction_session_timeout: 15000 });
+  });
+
+  it("registra pool.on('error'): un client ocioso que se corta se loguea y no tira el proceso", () => {
+    process.env.DATABASE_URL = 'postgresql://localhost/test';
+    const { getPool } = require('../db/pool');
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    getPool();
+    const onError = poolHandler('error');
+
+    expect(typeof onError).toBe('function');
+    expect(() => onError(new Error('Connection terminated unexpectedly'))).not.toThrow();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('se cortó una conexión ociosa del pool'));
+    errorSpy.mockRestore();
+  });
+
+  it("a cada client nuevo le agrega un listener de 'error' para cuando se corta estando prestado", () => {
+    process.env.DATABASE_URL = 'postgresql://localhost/test';
+    const { getPool } = require('../db/pool');
+    const { EventEmitter } = require('events');
+
+    getPool();
+    const client = new EventEmitter();
+    poolHandler('connect')(client);
+
+    expect(client.listenerCount('error')).toBe(1);
+    // Sin ese listener, emit('error') lanzaría y tiraría el proceso.
+    expect(() => client.emit('error', new Error('Connection terminated unexpectedly'))).not.toThrow();
   });
 
   it('usa DB_POOL_MAX cuando está definida', () => {
