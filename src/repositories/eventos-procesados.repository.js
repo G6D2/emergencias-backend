@@ -26,9 +26,25 @@ class EventosProcesadosRepository {
     return result.rowCount === 1;
   }
 
+  // Un evento descartado por un error permanente queda registrado con su
+  // motivo: no se vuelve a procesar aunque Kafka lo reentregue.
+  async markDiscarded(executor, { eventId, source, eventType, causationId = null, reason }) {
+    if (!eventId) throw new Error('markDiscarded requiere eventId');
+    if (!reason) throw new Error('markDiscarded requiere reason');
+
+    const client = executor || this.pool;
+    const result = await client.query(
+      `INSERT INTO eventos_procesados (event_id, source, event_type, causation_id, status, discard_reason)
+       VALUES ($1, $2, $3, $4, 'DISCARDED', $5)
+       ON CONFLICT (event_id) DO NOTHING`,
+      [eventId, source || 'unknown', eventType || 'unknown', causationId, reason]
+    );
+    return result.rowCount === 1;
+  }
+
   async findById(eventId) {
     const result = await this.pool.query(
-      `SELECT event_id, source, event_type, causation_id, processed_at
+      `SELECT event_id, source, event_type, causation_id, status, discard_reason, processed_at
        FROM eventos_procesados
        WHERE event_id = $1`,
       [eventId]
@@ -40,6 +56,8 @@ class EventosProcesadosRepository {
       source: row.source,
       eventType: row.event_type,
       causationId: row.causation_id,
+      status: row.status,
+      discardReason: row.discard_reason,
       processedAt: row.processed_at,
     };
   }

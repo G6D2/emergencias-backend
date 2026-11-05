@@ -9,6 +9,10 @@ const { ValidationError } = require('../errors/app-errors');
 // PANICO representa hoy el botón SOS (sin categoría declarada). Conceptualmente
 // es un "origen" de la emergencia y no un tipo: cuando se modele el origen como
 // campo propio, PANICO se separa de este catálogo.
+//
+// PREVENTIVA la crea solo el sistema: despliegue preventivo ante un evento
+// público masivo (cobertura preventiva del listener de Espacios). No se puede
+// reportar desde el botón de pánico.
 const EMERGENCY_TYPES = Object.freeze([
   'MEDICA',
   'INCENDIO',
@@ -16,6 +20,7 @@ const EMERGENCY_TYPES = Object.freeze([
   'DISTURBIO_EVENTO_MASIVO',
   'OTRO',
   'PANICO',
+  'PREVENTIVA',
 ]);
 
 // Alias que manda el frontend hoy (en inglés, minúscula). Se aceptan por

@@ -119,7 +119,9 @@ function startIncidentDetectionJob(emergencyRepository, incidentRepository, opti
           // lo solicito, asi que varias activaciones agrupadas en el tiempo y el
           // espacio son una senal MAS fuerte de incidente real, no ruido a
           // filtrar.
-          for (const emergencyType of EMERGENCY_TYPES) {
+          // PREVENTIVA no es un reporte ciudadano: la crea el listener ante un
+          // evento publico, asi que no se agrupa en incidentes.
+          for (const emergencyType of EMERGENCY_TYPES.filter((type) => type !== 'PREVENTIVA')) {
             const candidates = await emergencyRepository.findRecentByType({ emergencyType, since });
             const decisions = await processEmergencyTypeCandidates(candidates, {
               radiusMeters,

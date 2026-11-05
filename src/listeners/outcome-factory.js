@@ -7,8 +7,8 @@
 // sin side effects (idempotencia garantizada).
 //
 // Un type sin handler falla antes de abrir la transaccion, sin escribir nada.
-// Cualquier error se propaga al listener: no se confirma el offset y el
-// mensaje se reentrega.
+// Cualquier error se propaga al listener, que decide si es transitorio
+// (reentrega) o permanente (recordDiscard y el offset avanza).
 class OutcomeFactory {
   constructor(pool, options = {}) {
     if (!pool) throw new Error('OutcomeFactory requiere un pool');
@@ -73,6 +73,21 @@ class OutcomeFactory {
     } finally {
       client.release();
     }
+  }
+
+  // Registra un evento descartado por un error permanente, fuera de la
+  // transaccion que hizo ROLLBACK. Sin dedupRepo o sin eventId no hay donde
+  // anotarlo. Devuelve true si quedo registrado.
+  async recordDiscard(context = {}, reason) {
+    const metadata = context.metadata || {};
+    if (!this.dedupRepo || !metadata.eventId) return false;
+    return this.dedupRepo.markDiscarded(null, {
+      eventId: metadata.eventId,
+      source: metadata.source || 'unknown',
+      eventType: metadata.eventType || 'unknown',
+      causationId: metadata.causationId || null,
+      reason: String(reason || 'sin motivo').slice(0, 500),
+    });
   }
 }
 

@@ -1,5 +1,16 @@
 const { secureLog } = require('../security/secure-log');
 const { loadRules } = require('./load-rules');
+const { createEventDecoder } = require('./event-decoder');
+const { isTransientError } = require('./error-classifier');
+
+// El broker solo acepta consumer groups que empiecen con el namespace propio
+// (sección 6 del README del gateway).
+const NAMESPACE = 'com.citypass.emergencias';
+
+function groupIdFor(listenerName) {
+  const prefix = process.env.KAFKA_CONSUMER_GROUP_PREFIX || NAMESPACE;
+  return `${prefix}.${listenerName}`;
+}
 
 // Listener abstracto de eventos externos (Kafka).
 //
@@ -15,10 +26,11 @@ const { loadRules } = require('./load-rules');
 //                           rules().
 //   - buildContext(event)   opcional: normaliza el evento antes de evaluar.
 // Devuelve los resultados { type, payload } de las reglas que aplican, que
-// despues procesa la factory de cada caso de negocio.
+// despues ejecuta el OutcomeFactory en una transaccion con dedup.
 //
-// Si handle() lanza, el error se propaga a kafkajs: no se confirma el offset
-// y el mensaje se reentrega.
+// Errores (ver error-classifier.js): uno transitorio se propaga a kafkajs, que
+// no confirma el offset y reentrega el mensaje. Uno permanente se registra como
+// descartado y el offset avanza: nunca hay reentrega infinita.
 class EventListener {
   constructor(kafka, options = {}) {
     if (new.target === EventListener) {
@@ -29,10 +41,14 @@ class EventListener {
     }
     this.kafka = kafka;
     this.topic = options.topic;
-    this.groupId = options.groupId || `emergencias-backend.${this.constructor.name}`;
+    this.groupId = options.groupId || groupIdFor(this.constructor.name);
+    if (!this.groupId.startsWith(`${NAMESPACE}.`)) {
+      throw new Error(`${this.constructor.name}: el group.id "${this.groupId}" tiene que empezar con ${NAMESPACE}.`);
+    }
     this.fromBeginning = options.fromBeginning === true;
     this.rulesDir = options.rulesDir;
     this.factory = options.factory || null;
+    this.decoder = options.decoder || createEventDecoder();
     this.loadedRules = null;
     this.consumer = null;
   }
@@ -102,19 +118,49 @@ class EventListener {
   async onMessage(message) {
     let event;
     try {
-      event = JSON.parse(message.value.toString());
+      event = await this.decoder.decode(message.value);
     } catch (error) {
-      secureLog('warn', `${this.constructor.name} descarto mensaje con JSON invalido`, {
+      if (isTransientError(error)) throw error;
+      // Sin poder leerlo no hay eventId para registrarlo: se loguea y sigue.
+      secureLog('warn', `${this.constructor.name} descarto un mensaje ilegible`, {
         topic: this.topic,
         message: error.message,
       });
       return null;
     }
-    const outcomes = await this.handle(event);
-    if (this.factory) {
-      await this.factory.process(outcomes, this.buildContext(event));
+
+    const context = this.buildContext(event);
+    try {
+      const outcomes = await this.handle(event);
+      if (this.factory) {
+        await this.factory.process(outcomes, context);
+      }
+      return outcomes;
+    } catch (error) {
+      if (isTransientError(error)) throw error;
+      secureLog('error', `${this.constructor.name} descarto el evento`, {
+        topic: this.topic,
+        eventId: context.metadata.eventId,
+        message: error.message,
+      });
+      await this.recordDiscard(context, error);
+      return null;
     }
-    return outcomes;
+  }
+
+  // Deja constancia del descarte en eventos_procesados. Si la base no
+  // responde, el error es transitorio y el evento se reentrega.
+  async recordDiscard(context, error) {
+    if (!this.factory || typeof this.factory.recordDiscard !== 'function') return;
+    try {
+      await this.factory.recordDiscard(context, error.message);
+    } catch (recordError) {
+      if (isTransientError(recordError)) throw recordError;
+      secureLog('warn', `${this.constructor.name} no pudo registrar el descarte`, {
+        eventId: context.metadata.eventId,
+        message: recordError.message,
+      });
+    }
   }
 
   async stop() {
@@ -127,4 +173,4 @@ class EventListener {
   }
 }
 
-module.exports = { EventListener };
+module.exports = { EventListener, NAMESPACE };
