@@ -17,7 +17,7 @@ jest.mock('kafkajs', () => ({
 }));
 
 const { Kafka } = require('kafkajs');
-const { KafkaService, saslFromEnv } = require('../services/kafka.service');
+const { KafkaService, saslFromEnv, edaAuthClientFromEnv } = require('../services/kafka.service');
 const { ServiceUnavailableError } = require('../errors/app-errors');
 
 describe('KafkaService', () => {
@@ -175,3 +175,15 @@ describe('saslFromEnv (SASL/OAUTHBEARER contra el broker del gateway)', () => {
   });
 });
 
+describe('edaAuthClientFromEnv', () => {
+  it('sin secreto no arma cliente', () => {
+    expect(edaAuthClientFromEnv({})).toBeNull();
+  });
+
+  it('con secreto usa el Login Federado y grupo5 por default', () => {
+    const client = edaAuthClientFromEnv({ EDA_OAUTH_CLIENT_SECRET: 'x' });
+    expect(client.isConfigured()).toBe(true);
+    expect(client.tokenUrl).toBe('https://api.citypass-login.pp.ua/oauth/token');
+    expect(client.clientId).toBe('grupo5');
+  });
+});

@@ -31,7 +31,20 @@ function isRegistryUnavailable(error) {
   return Boolean(error.code) || /fetch failed|timeout|ECONN|socket/i.test(String(error.message));
 }
 
-function registryFromEnv(env = process.env) {
+// El registry del gateway pide el mismo token Bearer que el broker
+// (responde 401 con WWW-Authenticate: Bearer). Se agrega en cada pedido;
+// EdaAuthClient lo renueva antes de que venza.
+function bearerMiddleware(authClient) {
+  return () => ({
+    async prepareRequest(next) {
+      const request = await next();
+      const token = await authClient.getToken();
+      return request.enhance({ headers: { Authorization: `Bearer ${token}` } });
+    },
+  });
+}
+
+function registryFromEnv(env = process.env, { authClient = null } = {}) {
   const host = env.EDA_SCHEMA_REGISTRY_URL;
   if (!host) return null;
   const options = { host };
@@ -40,6 +53,8 @@ function registryFromEnv(env = process.env) {
       username: env.EDA_SCHEMA_REGISTRY_USERNAME,
       password: env.EDA_SCHEMA_REGISTRY_PASSWORD,
     };
+  } else if (authClient) {
+    options.middlewares = [bearerMiddleware(authClient)];
   }
   return new SchemaRegistry(options);
 }
@@ -76,4 +91,4 @@ function createEventDecoder({ registry = null } = {}) {
   };
 }
 
-module.exports = { createEventDecoder, registryFromEnv, MAGIC_BYTE };
+module.exports = { createEventDecoder, registryFromEnv, bearerMiddleware, MAGIC_BYTE };

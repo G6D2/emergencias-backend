@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { KafkaService } = require('./services/kafka.service');
+const { KafkaService, edaAuthClientFromEnv } = require('./services/kafka.service');
 const { getPool } = require('./db/pool');
 const { EmergencyRepository } = require('./repositories/emergency.repository');
 const { OfficerRepository } = require('./repositories/officer.repository');
@@ -13,7 +13,7 @@ const { startCitizenProfileRetentionJob } = require('./security/citizen-profile-
 const { startIncidentDetectionJob } = require('./services/incident-detection-job');
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
-const { OutboxPublisher } = require('./services/outbox-publisher');
+const { OutboxPublisher, isOutboxPublisherEnabled } = require('./services/outbox-publisher');
 const { createListeners, OutcomeFactory } = require('./listeners');
 const { createEventDecoder, registryFromEnv } = require('./listeners/event-decoder');
 const { EventosProcesadosRepository } = require('./repositories/eventos-procesados.repository');
@@ -30,7 +30,8 @@ async function start() {
   const authUserRepository = new AuthUserRepository(pool);
 
   const auth = await createAuthSetup({ authUserRepository });
-  const kafkaService = new KafkaService();
+  const edaAuthClient = edaAuthClientFromEnv();
+  const kafkaService = new KafkaService({ authClient: edaAuthClient });
   const emergencyRepository = new EmergencyRepository(pool, { locationCrypto });
   const officerRepository = new OfficerRepository(pool);
   const incidentRepository = new IncidentRepository(pool, emergencyRepository);
@@ -41,7 +42,11 @@ async function start() {
   kafkaService.connect().catch((err) => {
     secureLog('error', 'Initial Kafka connection failed', { message: err.message });
   });
-  outboxPublisher.start();
+  if (isOutboxPublisherEnabled()) {
+    outboxPublisher.start();
+  } else {
+    secureLog('info', 'Outbox publisher apagado (OUTBOX_PUBLISHER_ENABLED=false)');
+  }
 
   // Listeners de eventos externos. Apagados por default: se prenden con
   // KAFKA_CONSUMER_ENABLED=true (cada uno necesita ademas su topic).
@@ -53,7 +58,7 @@ async function start() {
   const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true'
     ? createListeners(kafkaService.kafka, {
       factory: outcomeFactory,
-      decoder: createEventDecoder({ registry: registryFromEnv() }),
+      decoder: createEventDecoder({ registry: registryFromEnv(process.env, { authClient: edaAuthClient }) }),
     })
     : [];
   for (const listener of listeners) {
