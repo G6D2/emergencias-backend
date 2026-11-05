@@ -27,8 +27,10 @@ function mockFetch({ status, body = '{}', retryAfter = null, calls = [] } = {}) 
 
 describe('GatewayPublisher (issue #74)', () => {
   const BASE_URL = 'https://gateway.example';
-  const TOPIC = 'com.citypass.emergencias.EmergenciaCreada';
-  const PAYLOAD = { metadata: { type: 'EmergenciaCreada' }, data: { emergenciaId: 'em-1' } };
+  const TOPIC = 'emergencias.boton-panico';
+  const PAYLOAD = { type: 'EmergenciaCreada', eventId: 'evt-src-1', correlationId: 'em-1', data: { emergenciaId: 'em-1' } };
+  const FQN = 'com.citypass.emergencias.EmergenciaCreada';
+  const EXPECTED_URL = `${BASE_URL}/api/v1/event-types/${encodeURIComponent(FQN)}/events`;
 
   describe('isEnabled', () => {
     const prev = process.env.EDA_PUBLISHER_MODE;
@@ -49,23 +51,23 @@ describe('GatewayPublisher (issue #74)', () => {
   });
 
   describe('publishEvent — happy path', () => {
-    it('POST a ${baseUrl}/events/${topic} con Bearer y JSON body', async () => {
+    it('POST a /api/v1/event-types/{fqn}/events con Bearer y solo payload.data en el body', async () => {
       const calls = [];
       const auth = createAuthClient();
       const pub = new GatewayPublisher(auth, {
         baseUrl: BASE_URL,
-        fetch: mockFetch({ status: 202, body: '{"eventId":"evt-gw-1","payloadHash":"abc123"}', calls }),
+        fetch: mockFetch({ status: 202, body: '{"metadata":{"eventId":"evt-gw-1","payloadHash":"abc123"}}', calls }),
       });
 
       const result = await pub.publishEvent(TOPIC, PAYLOAD);
 
       expect(auth.getToken).toHaveBeenCalledTimes(1);
       expect(calls).toHaveLength(1);
-      expect(calls[0].url).toBe(`${BASE_URL}/events/${encodeURIComponent(TOPIC)}`);
+      expect(calls[0].url).toBe(EXPECTED_URL);
       expect(calls[0].init.method).toBe('POST');
       expect(calls[0].init.headers.Authorization).toBe('Bearer tok-1');
       expect(calls[0].init.headers['Content-Type']).toBe('application/json');
-      expect(JSON.parse(calls[0].init.body)).toEqual(PAYLOAD);
+      expect(JSON.parse(calls[0].init.body)).toEqual(PAYLOAD.data);
       expect(result).toEqual({ eventId: 'evt-gw-1', payloadHash: 'abc123' });
     });
 
@@ -92,7 +94,7 @@ describe('GatewayPublisher (issue #74)', () => {
         fetch: mockFetch({ status: 202, body: '{}', calls }),
       });
       await pub.publishEvent(TOPIC, PAYLOAD);
-      expect(calls[0].url).toBe(`${BASE_URL}/events/${encodeURIComponent(TOPIC)}`);
+      expect(calls[0].url).toBe(EXPECTED_URL);
     });
   });
 
@@ -115,7 +117,7 @@ describe('GatewayPublisher (issue #74)', () => {
           }
           return {
             status: 202, ok: true,
-            json: async () => ({ eventId: 'evt-gw-2' }), text: async () => '',
+            json: async () => ({ metadata: { eventId: 'evt-gw-2' } }), text: async () => '',
             headers: { get: () => null },
           };
         },
@@ -157,8 +159,8 @@ describe('GatewayPublisher (issue #74)', () => {
       expect(err.message).toMatch(/400.*schema mismatch/);
     });
 
-    it('404 y 413 tambien son permanentes', async () => {
-      for (const status of [404, 413]) {
+    it('403, 404 y 413 tambien son permanentes', async () => {
+      for (const status of [403, 404, 413]) {
         const pub = new GatewayPublisher(createAuthClient(), {
           baseUrl: BASE_URL,
           fetch: mockFetch({ status, body: 'nope' }),
