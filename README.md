@@ -40,7 +40,9 @@ Editá `.env` según cómo quieras la base:
 ### 2a. Con Neon (Kafka en Docker, DB en la nube)
 
 ```bash
-# Pegá la URL de Neon en .env (DATABASE_SSL=true)
+# Pegá la URL de Neon en .env (DATABASE_SSL=true). Para publicar en el Kafka
+# local: KAFKA_ENABLED=true y OUTBOX_PUBLISHER_ENABLED=true (en .env.example
+# vienen apagados)
 docker-compose up -d kafka zookeeper
 npm install
 npm run migrate
@@ -54,7 +56,10 @@ npm run dev
 # si las dependencias se instalaron desde el contenedor (Linux), en el host faltan o no sirven.
 npm install
 
-# En .env: apuntar Kafka al listener del host (NO al de Docker, ver sección Kafka más abajo)
+# En .env: prender Kafka y el outbox (en .env.example vienen apagados) y apuntar
+# al listener del host (NO al de Docker, ver sección Kafka más abajo)
+#   KAFKA_ENABLED=true
+#   OUTBOX_PUBLISHER_ENABLED=true
 #   KAFKA_BROKER=localhost:9092
 # Si 3000/3001 están ocupados, elegir otro puerto:
 #   PORT=4000
@@ -295,7 +300,7 @@ Cada `GET /api/panic-button/:id` autorizado deja un registro en `emergency_acces
 | `DB_POOL_MAX` | Máximo de conexiones del pool de `pg` (default 10) |
 | `RATE_LIMIT_ENABLED` | `false` apaga el rate limiting (default: activo) |
 
-El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `connected` solo indica que el producer se conectó — ver la sección de Kafka para una trampa conocida al publicar desde el host.
+El health check reporta el estado de Kafka (`connected`/`disconnected`/`disabled`) con lo que el proceso ya sabe, sin conectarse al broker: `connected` si el producer (cuando el outbox publica) y cada listener con topic están arriba. Ojo: que el producer esté conectado no garantiza que publicar ande — ver la sección de Kafka para una trampa conocida al publicar desde el host.
 
 ### Rate limiting
 
@@ -309,7 +314,16 @@ El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `c
 
 ### Pool de conexiones (`pg`)
 
-`src/db/pool.js`: `max` = `DB_POOL_MAX` (default 10), `idleTimeoutMillis` 30000, `connectionTimeoutMillis` 5000. Sin límites explícitos el pool crece sin cota y agota las conexiones del Postgres compartido ante un pico de tráfico.
+`src/db/pool.js`: `max` = `DB_POOL_MAX` (default 10), `idleTimeoutMillis` 30000, `connectionTimeoutMillis` 5000, `keepAlive`. Sin límites explícitos el pool crece sin cota y agota las conexiones del Postgres compartido ante un pico de tráfico.
+
+Contra un Postgres directo también manda `statement_timeout` (10 s) e `idle_in_transaction_session_timeout` (15 s). Contra el pooler de Neon (host `-pooler`) no: PgBouncer rechaza esos startup parameters y cortaría todas las conexiones. Ahí se configuran por rol, una vez, desde la consola de Neon:
+
+```sql
+ALTER ROLE <rol> SET statement_timeout = '10s';
+ALTER ROLE <rol> SET idle_in_transaction_session_timeout = '15s';
+```
+
+Un client ocioso que se corta (Neon suspende el compute) se loguea con `pool.on('error')` en vez de tirar el proceso.
 
 ### Errores 5xx sanitizados
 
@@ -446,7 +460,21 @@ Con `AUTH_MODE=local` + `ALLOW_LOCAL_AUTH=true` cualquiera puede pedir un token 
 Si quedó un PostgreSQL de Render sin uso (tras migrar a Neon), borrarlo desde el dashboard de Render para no seguir pagando. No es un cambio de código.
 ### GET `/health`
 
-Estado del servicio y conectividad Kafka (público).
+Estado del servicio (público). Responde con lo que el proceso tiene en memoria, sin conectarse al broker ni a la base:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-11-05T15:00:00.000Z",
+  "kafka": "connected",
+  "outbox": { "enabled": false, "lastPollAt": null, "producerConnected": false },
+  "listeners": [
+    { "name": "EventoCanceladoListener", "running": true, "status": "running", "lastPollAt": "2026-11-05T14:59:58.000Z", "nextRetryAt": null }
+  ]
+}
+```
+
+`status` de un listener: `starting`, `running`, `retrying` (no pudo conectarse: se reintenta a los 5 s, 30 s, 2 min y después cada 2 min; `nextRetryAt` dice cuándo), `disabled` (sin topic) o `stopped`. `lastPollAt` es el último fetch al broker (kafkajs hace long polling, así que se actualiza cada pocos segundos aunque no haya mensajes).
 
 ---
 
