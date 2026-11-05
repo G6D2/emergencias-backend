@@ -452,6 +452,18 @@ describe('Panic Button API', () => {
       expect(response.body.error).toBe('ValidationError');
     });
 
+    it('rejects PREVENTIVA: solo la crea el sistema', async () => {
+      const response = await request(app)
+        .post('/api/panic-button')
+        .send({ location: { latitude: -34.6037, longitude: -58.3816 }, emergencyType: 'PREVENTIVA' })
+        .expect(400);
+
+      expect(response.body).toMatchObject({
+        error: 'ValidationError',
+        message: 'emergencyType PREVENTIVA la crea el sistema, no se puede reportar',
+      });
+    });
+
     it('rejects a non-numeric latitude/longitude', async () => {
       const response = await request(app)
         .post('/api/panic-button')

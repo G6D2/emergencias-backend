@@ -47,19 +47,25 @@ describe('listeners/cobertura-preventiva', () => {
   });
 
   it('EventoComunitarioPublicadoListener dispara ProgramarCobertura cuando capacidad >= umbral', async () => {
-    const evento = { metadata: { eventId: 'e1' }, data: { nombre: 'Recital', capacidad: 800 } };
+    const evento = { metadata: { eventId: 'e1' }, data: { eventoId: 'ev-1', titulo: 'Recital', capacidad: 800 } };
     const outcomes = await new EventoComunitarioPublicadoListener(kafka).handle(evento);
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0].type).toBe('ProgramarCobertura');
   });
 
+  it('EventoCanceladoListener dispara CancelarCobertura con el eventoId', async () => {
+    const evento = { metadata: { eventId: 'e3' }, data: { eventoId: 'ev-1', motivo: 'lluvia' } };
+    const outcomes = await new EventoCanceladoListener(kafka).handle(evento);
+    expect(outcomes).toEqual([{ type: 'CancelarCobertura', payload: { eventoId: 'ev-1' } }]);
+  });
+
   it('EventoComunitarioPublicadoListener no dispara cuando capacidad < umbral', async () => {
-    const evento = { metadata: { eventId: 'e2' }, data: { nombre: 'Reunion pequena', capacidad: 10 } };
+    const evento = { metadata: { eventId: 'e2' }, data: { eventoId: 'ev-2', titulo: 'Reunion pequena', capacidad: 10 } };
     const outcomes = await new EventoComunitarioPublicadoListener(kafka).handle(evento);
     expect(outcomes).toEqual([]);
   });
 
-  it('EventoCanceladoListener aun no tiene reglas: procesa sin resultados', async () => {
+  it('EventoCanceladoListener sin eventoId procesa sin resultados', async () => {
     const evento = { metadata: { eventId: 'e1' }, data: { nombre: 'Recital', capacidad: 800 } };
     await expect(new EventoCanceladoListener(kafka).handle(evento)).resolves.toEqual([]);
     expect(secureLog).toHaveBeenCalledWith('info', 'EventoCanceladoListener proceso evento', {

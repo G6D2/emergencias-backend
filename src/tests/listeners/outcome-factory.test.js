@@ -150,4 +150,43 @@ describe('OutcomeFactory', () => {
       expect(dedupRepo.tryMarkProcessed).toHaveBeenCalledWith(client, expect.objectContaining({ causationId: 'cid-1' }));
     });
   });
+
+  describe('recordDiscard', () => {
+    it('registra el descarte con el motivo, fuera de la transacción', async () => {
+      const { pool } = buildPool();
+      const dedupRepo = { markDiscarded: jest.fn().mockResolvedValue(true) };
+      const f = new OutcomeFactory(pool, { dedupRepo });
+
+      await expect(f.recordDiscard(
+        { metadata: { eventId: 'e1', source: 'grupo6', eventType: 'com.citypass.espacios.EventoCancelado' } },
+        'payload invalido'
+      )).resolves.toBe(true);
+
+      expect(dedupRepo.markDiscarded).toHaveBeenCalledWith(null, {
+        eventId: 'e1',
+        source: 'grupo6',
+        eventType: 'com.citypass.espacios.EventoCancelado',
+        causationId: null,
+        reason: 'payload invalido',
+      });
+      expect(pool.connect).not.toHaveBeenCalled();
+    });
+
+    it('sin dedupRepo o sin eventId no registra nada', async () => {
+      const { pool } = buildPool();
+      await expect(new OutcomeFactory(pool).recordDiscard({ metadata: { eventId: 'e1' } }, 'x')).resolves.toBe(false);
+      const dedupRepo = { markDiscarded: jest.fn() };
+      await expect(new OutcomeFactory(pool, { dedupRepo }).recordDiscard({ metadata: {} }, 'x')).resolves.toBe(false);
+      expect(dedupRepo.markDiscarded).not.toHaveBeenCalled();
+    });
+
+    it('recorta motivos largos y completa los campos faltantes', async () => {
+      const dedupRepo = { markDiscarded: jest.fn().mockResolvedValue(true) };
+      await new OutcomeFactory(buildPool().pool, { dedupRepo }).recordDiscard({ metadata: { eventId: 'e1' } }, 'x'.repeat(900));
+      const input = dedupRepo.markDiscarded.mock.calls[0][1];
+      expect(input.reason).toHaveLength(500);
+      expect(input.source).toBe('unknown');
+      expect(input.eventType).toBe('unknown');
+    });
+  });
 });

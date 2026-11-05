@@ -1,7 +1,7 @@
 const { ProgramarCoberturaPreventivaRule } = require('../../listeners/cobertura-preventiva/evento-comunitario-publicado/rules/01-programar-cobertura.rule');
 
 function buildContext(data = {}, metadata = {}) {
-  return { data, metadata };
+  return { data: { eventoId: 'ev-1', ...data }, metadata };
 }
 
 describe('ProgramarCoberturaPreventivaRule', () => {
@@ -13,6 +13,10 @@ describe('ProgramarCoberturaPreventivaRule', () => {
       expect(rule.appliesTo(buildContext({ capacidad: 1000 }))).toBe(true);
     });
 
+    it('usa cupoMaximo si no viene capacidad', () => {
+      expect(rule.appliesTo(buildContext({ cupoMaximo: 700 }))).toBe(true);
+    });
+
     it('no aplica cuando capacidad < umbral', () => {
       expect(rule.appliesTo(buildContext({ capacidad: 499 }))).toBe(false);
       expect(rule.appliesTo(buildContext({ capacidad: 0 }))).toBe(false);
@@ -22,6 +26,11 @@ describe('ProgramarCoberturaPreventivaRule', () => {
       expect(rule.appliesTo(buildContext({ capacidad: null }))).toBe(false);
       expect(rule.appliesTo(buildContext({ capacidad: 'grande' }))).toBe(false);
       expect(rule.appliesTo(buildContext({}))).toBe(false);
+    });
+
+    it('no aplica sin eventoId ni con el evento ya cancelado', () => {
+      expect(rule.appliesTo({ data: { capacidad: 800 }, metadata: {} })).toBe(false);
+      expect(rule.appliesTo(buildContext({ capacidad: 800, estado: 'CANCELLED' }))).toBe(false);
     });
 
     it('respeta UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA del env', () => {
@@ -48,36 +57,37 @@ describe('ProgramarCoberturaPreventivaRule', () => {
   });
 
   describe('apply', () => {
-    it('devuelve type ProgramarCobertura con los campos del evento', () => {
-      const context = buildContext(
-        { nombre: 'Feria del Libro', latitud: -34.6, longitud: -58.4, capacidad: 1500 },
-        { eventId: 'evt-123' }
-      );
-      const outcome = rule.apply(context);
-
-      expect(outcome.type).toBe('ProgramarCobertura');
-      expect(outcome.payload).toEqual({
-        nombre: 'Feria del Libro',
+    it('devuelve ProgramarCobertura con los campos que manda Espacios', () => {
+      const outcome = rule.apply(buildContext({
+        titulo: 'Feria del Libro',
         latitud: -34.6,
         longitud: -58.4,
-        capacidad: 1500,
-        causationEventId: 'evt-123',
+        direccion: 'Av. Sarmiento 2704',
+        capacidad: 800,
+        correlationId: 'evento-ev-1',
+      }, { eventId: 'evt-123' }));
+
+      expect(outcome).toEqual({
+        type: 'ProgramarCobertura',
+        payload: {
+          eventoId: 'ev-1',
+          titulo: 'Feria del Libro',
+          latitud: -34.6,
+          longitud: -58.4,
+          direccion: 'Av. Sarmiento 2704',
+          capacidad: 800,
+          correlationId: 'evento-ev-1',
+        },
       });
     });
 
-    it('lat/lng null cuando no son numeros', () => {
-      const outcome = rule.apply(buildContext(
-        { nombre: 'Evento sin coord', latitud: null, longitud: undefined, capacidad: 600 },
-        { eventId: 'evt-456' }
-      ));
-
-      expect(outcome.payload.latitud).toBeNull();
-      expect(outcome.payload.longitud).toBeNull();
-    });
-
-    it('nombre default cuando no viene', () => {
-      const outcome = rule.apply(buildContext({ capacidad: 600 }, { eventId: 'evt-789' }));
-      expect(outcome.payload.nombre).toBe('Evento comunitario');
+    it('titulo default y coordenadas null cuando no vienen', () => {
+      const { payload } = rule.apply(buildContext({ capacidad: 600, latitud: '-34' }));
+      expect(payload.titulo).toBe('Evento comunitario');
+      expect(payload.latitud).toBeNull();
+      expect(payload.longitud).toBeNull();
+      expect(payload.direccion).toBeNull();
+      expect(payload.correlationId).toBeNull();
     });
   });
 });

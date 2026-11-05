@@ -1,6 +1,27 @@
 const { Kafka } = require('kafkajs');
 const { ServiceUnavailableError } = require('../errors/app-errors');
 const { secureLog, summarizeEventForLog } = require('../security/secure-log');
+const { EdaAuthClient } = require('./eda-auth-client');
+
+const DEFAULT_EDA_TOKEN_URL = 'https://api.citypass-login.pp.ua/oauth/token';
+const DEFAULT_EDA_CLIENT_ID = 'grupo5';
+
+// SASL/OAUTHBEARER contra el broker del Grupo 1 (sección 6 del README del
+// gateway): el token client-credentials sale del Login Federado y kafkajs
+// vuelve a pedir uno al vencer (EdaAuthClient lo renueva antes). Solo se activa
+// si está el secreto: sin él (local, docker-compose) se conecta como siempre.
+function saslFromEnv(env = process.env, authClient = null) {
+  if (!env.EDA_OAUTH_CLIENT_SECRET) return null;
+  const client = authClient || new EdaAuthClient({
+    tokenUrl: env.EDA_OAUTH_TOKEN_URL || DEFAULT_EDA_TOKEN_URL,
+    clientId: env.EDA_OAUTH_CLIENT_ID || DEFAULT_EDA_CLIENT_ID,
+    clientSecret: env.EDA_OAUTH_CLIENT_SECRET,
+  });
+  return {
+    mechanism: 'oauthbearer',
+    oauthBearerProvider: async () => ({ value: await client.getToken() }),
+  };
+}
 
 class KafkaService {
   constructor(options = {}) {
@@ -8,9 +29,13 @@ class KafkaService {
     // sin conectarse y publishEvent registra el evento en lugar de fallar.
     this.enabled =
       options.enabled !== undefined ? Boolean(options.enabled) : process.env.KAFKA_ENABLED !== 'false';
+    const sasl = saslFromEnv(process.env, options.authClient);
     this.kafka = new Kafka({
       clientId: process.env.KAFKA_CLIENT_ID || 'emergencias-backend',
       brokers: [process.env.KAFKA_BROKER || 'kafka:9092'],
+      // En producción el broker del gateway es SASL_SSL.
+      ...(sasl ? { sasl } : {}),
+      ...(process.env.KAFKA_SSL === 'true' ? { ssl: true } : {}),
       connectionTimeout: 10000,
       requestTimeout: 25000,
       retry: {
@@ -112,4 +137,4 @@ class KafkaService {
   }
 }
 
-module.exports = { KafkaService };
+module.exports = { KafkaService, saslFromEnv };

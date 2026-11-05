@@ -107,6 +107,53 @@ describe('EmergencyRepository.create', () => {
     expect(client.release).toHaveBeenCalled();
   });
 
+  it('con client del caller inserta y encola el outbox sin abrir transacción', async () => {
+    const client = createClient((sql) => {
+      if (sql.includes('INSERT INTO emergencies')) {
+        return { rows: [{ id: 'e-3', correlation_id: 'e-3', source: 'EXTERNAL', causa_tipo: 'EVENTO_PUBLICO', causa_id: 'ev-1' }] };
+      }
+      if (sql.includes('INSERT INTO outbox_events')) return { rows: [] };
+      throw new Error(`unexpected sql: ${sql}`);
+    });
+    const pool = createPool({ client });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const created = await repo.create({
+      client,
+      id: 'e-3',
+      userId: null,
+      latitude: null,
+      longitude: null,
+      emergencyType: 'PREVENTIVA',
+      source: 'EXTERNAL',
+      requiresManualValidation: true,
+      causaTipo: 'EVENTO_PUBLICO',
+      causaId: 'ev-1',
+      outboxEvent: { topic: 't', payload: { a: 1 } },
+    });
+
+    expect(pool.connect).not.toHaveBeenCalled();
+    expect(client.calls.map((c) => c.sql)).not.toContain('BEGIN');
+    const insert = client.calls.find((c) => c.sql.includes('INSERT INTO emergencies'));
+    // Sin ubicación no se cifra nada.
+    expect(insert.params[3]).toBeNull();
+    expect(insert.params.slice(8)).toEqual(['EXTERNAL', true, 'EVENTO_PUBLICO', 'ev-1']);
+    expect(created).toMatchObject({ source: 'EXTERNAL', causaTipo: 'EVENTO_PUBLICO', causaId: 'ev-1' });
+    expect(client.release).not.toHaveBeenCalled();
+  });
+
+  it('findByCausa busca con FOR UPDATE en el executor que recibe', async () => {
+    const client = { query: jest.fn(async () => ({ rows: [{ id: 'e-3', status: 'PENDING', emergency_type: 'PREVENTIVA' }] })) };
+    const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+
+    const rows = await repo.findByCausa(client, { causaTipo: 'EVENTO_PUBLICO', causaId: 'ev-1', emergencyType: 'PREVENTIVA' });
+
+    expect(rows).toEqual([{ id: 'e-3', status: 'PENDING', emergencyType: 'PREVENTIVA' }]);
+    const [sql, params] = client.query.mock.calls[0];
+    expect(sql).toMatch(/FOR UPDATE/);
+    expect(params).toEqual(['EVENTO_PUBLICO', 'ev-1', 'PREVENTIVA']);
+  });
+
   it('hace ROLLBACK y repropaga el error si el INSERT falla', async () => {
     const client = createClient((sql) => {
       if (sql.includes('INSERT INTO emergencies')) throw new Error('db down');
@@ -468,6 +515,34 @@ describe('EmergencyRepository.updateStatus', () => {
     expect(result.emergency.status).toBe('CANCELLED');
     expect(client.calls.some((c) => c.sql.includes("UPDATE officers SET status = 'disponible'"))).toBe(true);
     expect(client.calls.some((c) => c.sql === 'COMMIT')).toBe(true);
+  });
+
+  it('con client del caller transiciona sin abrir ni cerrar transacción', async () => {
+    const client = createClient((sql) => {
+      if (sql.includes('SELECT status, assigned_officer_id')) {
+        return { rows: [{ status: 'PENDING', assigned_officer_id: null }] };
+      }
+      if (sql.startsWith('UPDATE emergencies')) return { rows: [{ id: 'e-1', status: 'CANCELLED' }] };
+      if (sql.includes('INSERT INTO emergency_status_history')) {
+        return { rows: [{ id: 1, previous_status: 'PENDING', new_status: 'CANCELLED' }] };
+      }
+      return { rows: [] };
+    });
+    const pool = createPool({ client });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const result = await repo.updateStatus('e-1', {
+      client,
+      newStatus: 'CANCELLED',
+      actor: 'eda:espacios',
+      outboxEvent: { topic: 't', payload: { a: 1 } },
+    });
+
+    expect(result.history.newStatus).toBe('CANCELLED');
+    expect(pool.connect).not.toHaveBeenCalled();
+    expect(client.calls.map((c) => c.sql)).toEqual(expect.not.arrayContaining(['BEGIN', 'COMMIT', 'ROLLBACK']));
+    expect(client.calls.some((c) => c.sql.includes('INSERT INTO outbox_events'))).toBe(true);
+    expect(client.release).not.toHaveBeenCalled();
   });
 
   it('no libera oficial si no hay uno asignado y guarda outbox si se pasa', async () => {

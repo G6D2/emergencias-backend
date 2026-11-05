@@ -70,10 +70,10 @@ describe('EventListener', () => {
     expect(() => new TestListener(null, { topic: 't' })).toThrow(/Kafka/);
   });
 
-  it('una subclase sin rulesDir ni rules() falla al recibir un evento', async () => {
+  it('una subclase sin rulesDir ni rules() falla al evaluar un evento', async () => {
     class SinRules extends EventListener {}
     const listener = new SinRules(buildKafka().kafka, { topic: 't' });
-    await expect(listener.onMessage(toMessage({ a: 1 }))).rejects.toThrow(/debe definir rulesDir o implementar rules/);
+    await expect(listener.handle({ a: 1 })).rejects.toThrow(/debe definir rulesDir o implementar rules/);
   });
 
   it('carga las reglas de rulesDir una sola vez y las aplica', async () => {
@@ -99,9 +99,24 @@ describe('EventListener', () => {
     expect(kafka.consumer).not.toHaveBeenCalled();
   });
 
-  it('usa un groupId por listener por default', () => {
-    expect(new TestListener(buildKafka().kafka, { topic: 't' }).groupId).toBe('emergencias-backend.TestListener');
-    expect(new TestListener(buildKafka().kafka, { topic: 't', groupId: 'g' }).groupId).toBe('g');
+  it('usa un groupId por listener con el prefijo del namespace por default', () => {
+    expect(new TestListener(buildKafka().kafka, { topic: 't' }).groupId)
+      .toBe('com.citypass.emergencias.TestListener');
+    expect(new TestListener(buildKafka().kafka, { topic: 't', groupId: 'com.citypass.emergencias.g' }).groupId)
+      .toBe('com.citypass.emergencias.g');
+  });
+
+  it('el prefijo del groupId se puede cambiar por env, pero tiene que empezar con el namespace', () => {
+    process.env.KAFKA_CONSUMER_GROUP_PREFIX = 'com.citypass.emergencias.staging';
+    try {
+      expect(new TestListener(buildKafka().kafka, { topic: 't' }).groupId)
+        .toBe('com.citypass.emergencias.staging.TestListener');
+      process.env.KAFKA_CONSUMER_GROUP_PREFIX = 'emergencias-backend';
+      expect(() => new TestListener(buildKafka().kafka, { topic: 't' })).toThrow(/tiene que empezar con com\.citypass\.emergencias\./);
+    } finally {
+      delete process.env.KAFKA_CONSUMER_GROUP_PREFIX;
+    }
+    expect(() => new TestListener(buildKafka().kafka, { topic: 't', groupId: 'g' })).toThrow(/group\.id/);
   });
 
   it('start conecta, se suscribe al topic y corre el consumer', async () => {
@@ -110,7 +125,7 @@ describe('EventListener', () => {
 
     await expect(listener.start()).resolves.toBe(true);
 
-    expect(kafka.consumer).toHaveBeenCalledWith({ groupId: 'emergencias-backend.TestListener' });
+    expect(kafka.consumer).toHaveBeenCalledWith({ groupId: 'com.citypass.emergencias.TestListener' });
     expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 'espacios.evento', fromBeginning: false });
     expect(consumer.run).toHaveBeenCalledTimes(1);
   });
@@ -157,14 +172,70 @@ describe('EventListener', () => {
     expect(listener.handled).toEqual([]);
   });
 
-  it('propaga errores de handle para que Kafka reentregue', async () => {
+  it('propaga los errores transitorios para que Kafka reentregue', async () => {
     class Falla extends EventListener {
       async handle() {
-        throw new Error('boom');
+        throw Object.assign(new Error('Connection terminated unexpectedly'), { code: '57P01' });
       }
     }
     const listener = new Falla(buildKafka().kafka, { topic: 't' });
-    await expect(listener.onMessage(toMessage({}))).rejects.toThrow('boom');
+    await expect(listener.onMessage(toMessage({}))).rejects.toThrow('Connection terminated');
+  });
+
+  it('un error permanente se descarta, queda registrado y no se reentrega', async () => {
+    class Falla extends EventListener {
+      async handle() {
+        throw new Error('payload invalido');
+      }
+    }
+    const factory = { process: jest.fn(), recordDiscard: jest.fn().mockResolvedValue(true) };
+    const listener = new Falla(buildKafka().kafka, { topic: 't', factory });
+    const event = { metadata: { eventId: 'e1' }, data: {} };
+
+    await expect(listener.onMessage(toMessage(event))).resolves.toBeNull();
+    expect(factory.recordDiscard).toHaveBeenCalledWith(
+      { metadata: { eventId: 'e1' }, data: {} },
+      'payload invalido'
+    );
+  });
+
+  it('si registrar el descarte falla por un error transitorio, se reentrega', async () => {
+    class Falla extends EventListener {
+      async handle() {
+        throw new Error('payload invalido');
+      }
+    }
+    const factory = {
+      process: jest.fn(),
+      recordDiscard: jest.fn().mockRejectedValue(Object.assign(new Error('db caida'), { code: 'ECONNREFUSED' })),
+    };
+    const listener = new Falla(buildKafka().kafka, { topic: 't', factory });
+    await expect(listener.onMessage(toMessage({ metadata: { eventId: 'e1' } }))).rejects.toThrow('db caida');
+  });
+
+  it('si registrar el descarte falla por un error permanente, igual avanza', async () => {
+    class Falla extends EventListener {
+      async handle() {
+        throw new Error('payload invalido');
+      }
+    }
+    const factory = {
+      process: jest.fn(),
+      recordDiscard: jest.fn().mockRejectedValue(Object.assign(new Error('uuid invalido'), { code: '22P02' })),
+    };
+    const listener = new Falla(buildKafka().kafka, { topic: 't', factory });
+    await expect(listener.onMessage(toMessage({ metadata: { eventId: 'x' } }))).resolves.toBeNull();
+  });
+
+  it('un error transitorio del decoder se propaga y uno permanente se descarta', async () => {
+    const transient = { decode: jest.fn().mockRejectedValue(Object.assign(new Error('registry caido'), { transient: true })) };
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', decoder: transient });
+    await expect(listener.onMessage({ value: Buffer.from([0]) })).rejects.toThrow('registry caido');
+
+    const permanent = { decode: jest.fn().mockRejectedValue(Object.assign(new Error('Avro invalido'), { permanent: true })) };
+    const otro = new TestListener(buildKafka().kafka, { topic: 't', decoder: permanent });
+    await expect(otro.onMessage({ value: Buffer.from([0]) })).resolves.toBeNull();
+    expect(otro.handled).toHaveLength(0);
   });
 
   it('stop desconecta el consumer y es seguro sin start', async () => {

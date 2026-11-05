@@ -55,9 +55,10 @@ function buildEmergencyCreatedEvent(emergency, eventId) {
       // Juani con Valentina (ver memoria project-decision-latlng-bus).
       latitud: null,
       longitud: null,
-      // Hasta #77/#79/#80 (consumo de eventos externos) causa va null.
-      causaId: null,
-      causaTipo: null,
+      // Causa externa (convencion de Analitica). Hoy la completa la cobertura
+      // preventiva (EVENTO_PUBLICO); el resto de las causas llega con #77/#79/#80.
+      causaId: emergency.causaId ?? null,
+      causaTipo: emergency.causaTipo ?? null,
       // Hasta #79/#85 publicamos null; obligatorio solo si causaTipo=EVENTO_CLIMATICO.
       prioridadOriginal: null,
       ciudadanoId: emergency.userId ?? null,
