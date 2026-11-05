@@ -175,8 +175,7 @@ describe('AUTH_MODE=local register/login', () => {
       expect(unknownEmail.body).toEqual(wrongPassword.body);
 
       // Con el correo inexistente igual se paga un bcrypt.compare, y con el
-      // mismo costo que los hashes reales: si cambia BCRYPT_ROUNDS, hay que
-      // regenerar DUMMY_BCRYPT_HASH en auth.controller.js.
+      // mismo costo que los hashes reales.
       expect(verifySpy).toHaveBeenCalledTimes(2);
       const [dummyHash, password] = verifySpy.mock.calls[1];
       expect(password).toBe('otra-cosa');
