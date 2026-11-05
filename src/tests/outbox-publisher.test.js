@@ -345,6 +345,130 @@ describe('OutboxPublisher', () => {
       jest.useRealTimers();
     });
   });
+
+  // Issue #74: publisher inyectado (GatewayPublisher) + clasificacion de errores.
+  describe('publisher inyectado (issue #74)', () => {
+    it('con el GatewayPublisher no conecta el producer de Kafka', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: { type: 'EmergenciaCreada' }, attempts: 1 }] });
+      const kafka = { isEnabled: () => true, isConnected: jest.fn(() => false), connect: jest.fn(async () => false) };
+      const gateway = { isEnabled: () => true, publishEvent: async () => ({ eventId: 'evt-gw-1', payloadHash: 'hash-1' }) };
+      const publisher = new OutboxPublisher(pool, kafka, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(1);
+
+      expect(kafka.connect).not.toHaveBeenCalled();
+    });
+
+    it('con el GatewayPublisher apagado sale sin tocar la base', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: {}, attempts: 1 }] });
+      const gateway = { isEnabled: () => false, publishEvent: jest.fn() };
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(0);
+
+      expect(pool.queries).toHaveLength(0);
+      expect(gateway.publishEvent).not.toHaveBeenCalled();
+    });
+
+    it('usa options.publisher en vez de kafkaService cuando se inyecta', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: {}, attempts: 1 }] });
+      const gatewayCalls = [];
+      const gateway = {
+        isEnabled: () => true,
+        publishEvent: async (topic, payload) => {
+          gatewayCalls.push({ topic, payload });
+          return { eventId: 'evt-gw-1', payloadHash: 'hash-1' };
+        },
+      };
+      const kafka = { isEnabled: () => false, publishEvent: async () => { throw new Error('no debe llamarse'); } };
+      const publisher = new OutboxPublisher(pool, kafka, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(1);
+
+      expect(gatewayCalls).toHaveLength(1);
+    });
+
+    it('un evento que el publisher saltea queda SKIPPED y no cuenta como publicado', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: { type: 'EmergenciaPriorizada' }, attempts: 1 }] });
+      const gateway = { isEnabled: () => true, publishEvent: async () => ({ skipped: true }) };
+      const publisher = new OutboxPublisher(pool, {}, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(0);
+
+      const skipQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'SKIPPED'"));
+      expect(skipQ).toBeDefined();
+      expect(skipQ.params).toEqual(['e1']);
+      expect(pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"))).toBeUndefined();
+    });
+
+    it('markPublished escribe payload_hash y gateway_event_id cuando el publisher devuelve objeto', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: {}, attempts: 1 }] });
+      const gateway = {
+        isEnabled: () => true,
+        publishEvent: async () => ({ eventId: 'evt-gw-1', payloadHash: 'hash-1' }),
+      };
+      const publisher = new OutboxPublisher(pool, {}, { publisher: gateway });
+
+      await publisher.runOnce();
+
+      const markQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"));
+      expect(markQ).toBeDefined();
+      expect(markQ.params).toEqual(['e1', 'hash-1', 'evt-gw-1']);
+    });
+
+    it('markPublished deja payload_hash/gateway_event_id en NULL cuando el publisher devuelve true (KafkaService)', async () => {
+      const pool = createPool({ events: [{ id: 'e2', topic: 't', payload: {}, attempts: 1 }] });
+      const kafka = {
+        isEnabled: () => true,
+        isConnected: () => true,
+        publishEvent: async () => true,
+      };
+      const publisher = new OutboxPublisher(pool, kafka);
+
+      await publisher.runOnce();
+
+      const markQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"));
+      expect(markQ.params).toEqual(['e2', null, null]);
+    });
+
+    it('markFailed con error.isPermanent → FAILED directo sin importar los attempts', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const err = new Error('bad schema');
+      err.isPermanent = true;
+
+      await publisher.markFailed('e1', 1, err);
+
+      const q = pool.queries.at(-1);
+      expect(q.params[0]).toBe('e1');
+      expect(q.params[1]).toBe('FAILED');
+      expect(q.params[2]).toBe(0);
+    });
+
+    it('markFailed con error.retryAfterMs usa ese backoff en vez del exponencial', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const err = new Error('rate limited');
+      err.retryAfterMs = 45_000;
+
+      await publisher.markFailed('e1', 1, err);
+
+      const q = pool.queries.at(-1);
+      expect(q.params[1]).toBe('PENDING');
+      expect(q.params[2]).toBe(45_000);
+    });
+
+    it('markFailed con retryAfterMs > maxBackoffMs se capa al maximo', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10, maxBackoffMs: 60_000 });
+      const err = new Error('too long');
+      err.retryAfterMs = 300_000;
+
+      await publisher.markFailed('e1', 1, err);
+
+      expect(pool.queries.at(-1).params[2]).toBe(60_000);
+    });
+  });
 });
 
 describe('isOutboxPublisherEnabled', () => {

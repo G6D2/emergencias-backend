@@ -6,7 +6,7 @@ incidentes de los PRs #36/#39/#41, `address` cifrado del PR #37 y el workflow `a
 del PR #38; actualizada de nuevo al 2026-09-23 para incorporar `DbscanGrouper` e
 `IncidentDetectionStrategy` del PR #51, verificado en producción ese mismo día; y al
 2026-11-05 para incorporar el rol oficial y sus endpoints, `return`, el contrato de eventos del
-issue #48, el consumer de cobertura preventiva y el schema hasta V24), en
+issue #48, el consumer de cobertura preventiva y el schema hasta V26), en
 [Mermaid](https://mermaid.js.org/) para que GitHub los renderice directo en el repo, sin
 herramientas externas.
 
@@ -19,7 +19,7 @@ de lo que aparece como implementado es especulación.
 
 1. [Contexto (C4 nivel 1)](00-contexto.md) — el módulo en el mapa de CityPass+: actores (ciudadano, dispatcher, oficial), bus del Grupo 1, Espacios y Login Federado, qué está conectado hoy
 2. [Casos de uso](01-casos-de-uso.md) — actores, épicas y qué caso de uso está implementado vs. planificado
-3. [Modelo entidad-relación](02-modelo-entidad-relacion.md) — schema Flyway hasta V24: emergencias (con `source` y causa), outbox (con `SKIPPED`), `eventos_procesados`, officers, incidents, perfil, auth local
+3. [Modelo entidad-relación](02-modelo-entidad-relacion.md) — schema Flyway hasta V26: emergencias (con `source` y causa), outbox (con `SKIPPED`), `eventos_procesados`, officers, incidents, perfil, auth local
 4. [Arquitectura](03-arquitectura.md) — contenedores (estilo C4) y componentes internos del backend, incluido el motor de incidentes con `IncidentDetectionStrategy` (`DbscanGrouper` primaria, `RuleBasedGrouper` fallback)
 5. [Máquina de estados](04-maquina-de-estados.md) — transiciones de una emergencia y el endpoint y rol de cada una
 6. [Secuencias](05-secuencias.md) — SOS del ciudadano, flujo del dispatcher y del oficial, cancelación + outbox, job de detección de incidentes, cobertura preventiva
@@ -37,7 +37,7 @@ de commitear: todos generan SVG sin errores de sintaxis.
 
 A partir de: migraciones (`db/migrations/V*.sql`, incluidas V14 del motor de incidentes,
 V15 de perfil ciudadano, V16 de auth local, V21–V23 del outbox, la dedup y las emergencias
-externas, y V24 de `closed_at` en terminales),
+externas, V24 del tracking del gateway y V26 de `closed_at` en terminales),
 dominio (`src/domain/*.js`, incluidos `rule-based-grouper.js`, `dbscan-grouper.js`,
 `incident-detection-strategy.js`, `risk-engine.js`, `incident-detector.js`), `scripts/demo-dbscan.js`
 (dataset sintético de demo), rutas (`src/routes/*.js`, incluido `incidents.routes.js`), servicios y

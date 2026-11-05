@@ -19,6 +19,10 @@ class OutboxPublisher {
   constructor(pool, kafkaService, options = {}) {
     this.pool = pool;
     this.kafkaService = kafkaService;
+    // Feature flag EDA_PUBLISHER_MODE=gateway (issue #74): index.js inyecta un
+    // GatewayPublisher como options.publisher. Default = KafkaService (sin
+    // cambios respecto al comportamiento previo al PR del gateway publisher).
+    this.publisher = options.publisher || kafkaService;
     this.batchSize = options.batchSize || 50;
     this.intervalMs = options.intervalMs || 5000;
     this.maxAttempts = options.maxAttempts || Number(process.env.OUTBOX_MAX_ATTEMPTS || 10);
@@ -87,24 +91,55 @@ class OutboxPublisher {
     }
   }
 
-  async markPublished(id) {
+  async markPublished(id, result = null) {
+    // result opcional: GatewayPublisher devuelve { eventId, payloadHash } del
+    // response 2xx del gateway. KafkaService devuelve true/false — no hay
+    // eventId ni payloadHash y los campos quedan NULL (comportamiento previo).
+    // Las columnas payload_hash y gateway_event_id vienen de la migracion V24.
+    const payloadHash = result && result.payloadHash ? result.payloadHash : null;
+    const gatewayEventId = result && result.eventId ? result.eventId : null;
     await this.pool.query(
       `UPDATE outbox_events
-       SET status = 'PUBLISHED', published_at = now(), locked_at = NULL, last_error = NULL
+       SET status = 'PUBLISHED', published_at = now(), locked_at = NULL, last_error = NULL,
+           payload_hash = COALESCE($2, payload_hash),
+           gateway_event_id = COALESCE($3::uuid, gateway_event_id)
+       WHERE id = $1`,
+      [id, payloadHash, gatewayEventId]
+    );
+  }
+
+  // Tipo que el publisher no saca al bus (EmergenciaPriorizada con el
+  // gateway): queda SKIPPED y no se reintenta.
+  async markSkipped(id) {
+    await this.pool.query(
+      `UPDATE outbox_events
+       SET status = 'SKIPPED', locked_at = NULL, last_error = 'tipo fuera del contrato del bus'
        WHERE id = $1`,
       [id]
     );
   }
 
   async markFailed(id, attempts, error) {
-    const failed = attempts >= this.maxAttempts;
-    const backoffMs = Math.min(30_000 * (2 ** Math.max(attempts - 1, 0)), this.maxBackoffMs);
+    // Clasificacion de errores del GatewayPublisher (issue #74):
+    //   - error.isPermanent (400/404/413/401-tras-reintento): no reintentar, FAILED directo.
+    //   - error.retryAfterMs (429 Retry-After): respetar el backoff del gateway.
+    //   - resto: backoff exponencial propio.
+    const permanent = Boolean(error && error.isPermanent);
+    const failed = permanent || attempts >= this.maxAttempts;
+    let backoffMs;
+    if (failed) {
+      backoffMs = 0;
+    } else if (error && Number.isFinite(error.retryAfterMs) && error.retryAfterMs >= 0) {
+      backoffMs = Math.min(error.retryAfterMs, this.maxBackoffMs);
+    } else {
+      backoffMs = Math.min(30_000 * (2 ** Math.max(attempts - 1, 0)), this.maxBackoffMs);
+    }
     await this.pool.query(
       `UPDATE outbox_events
        SET status = $2, available_at = now() + ($3::double precision * interval '1 millisecond'),
            locked_at = NULL, last_error = $4
        WHERE id = $1`,
-      [id, failed ? 'FAILED' : 'PENDING', failed ? 0 : backoffMs, String(error.message || error).slice(0, 2000)]
+      [id, failed ? 'FAILED' : 'PENDING', backoffMs, String(error.message || error).slice(0, 2000)]
     );
   }
 
@@ -120,25 +155,36 @@ class OutboxPublisher {
 
   async runOnce() {
     if (this.running) return 0;
-    // Sin Kafka no hay nada que publicar: sale sin tocar la base (cada query
-    // mantiene despierto el compute de Neon) ni gastar intentos de los eventos.
-    if (!this.kafkaService.isEnabled()) return 0;
+    // Sin publisher habilitado (KAFKA_ENABLED para KafkaService,
+    // EDA_PUBLISHER_MODE=gateway para el GatewayPublisher) no hay nada que
+    // publicar: sale sin tocar la base (cada query mantiene despierto el compute
+    // de Neon) ni gastar intentos de los eventos.
+    if (!this.publisher.isEnabled()) return 0;
     this.running = true;
     let published = 0;
     try {
-      // El producer se conecta acá y no al arrancar el proceso: con el
+      // El producer de Kafka se conecta acá y no al arrancar el proceso: con el
       // publisher apagado no queda una conexión ociosa al bus. Si se cae (un
       // send fallido lo marca desconectado), se reintenta en el próximo poll.
-      if (!this.kafkaService.isConnected() && !(await this.kafkaService.connect())) {
+      // Con el GatewayPublisher (HTTP) no hay producer que conectar.
+      if (this.publisher === this.kafkaService
+        && !this.kafkaService.isConnected() && !(await this.kafkaService.connect())) {
         return 0;
       }
       const events = await this.claimBatch();
       this.lastPollAt = new Date();
       for (const event of events) {
         try {
-          const sent = await this.kafkaService.publishEvent(event.topic, event.payload);
-          if (!sent) throw new Error('Kafka disabled or not connected');
-          await this.markPublished(event.id);
+          const sent = await this.publisher.publishEvent(event.topic, event.payload);
+          if (!sent) throw new Error('Publisher disabled or not connected');
+          if (typeof sent === 'object' && sent.skipped) {
+            await this.markSkipped(event.id);
+            continue;
+          }
+          // GatewayPublisher devuelve { eventId, payloadHash }; KafkaService
+          // devuelve true. markPublished tolera ambos.
+          const result = typeof sent === 'object' ? sent : null;
+          await this.markPublished(event.id, result);
           published += 1;
         } catch (error) {
           await this.markFailed(event.id, event.attempts, error);

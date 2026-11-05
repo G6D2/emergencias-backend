@@ -6,8 +6,8 @@
 //
 // validate siempre desde PENDING y return siempre desde DISPATCHED. Lo que
 // agregó el sweep de emergencias (#75: validate/return con estado de origen,
-// assigned_officer_id en NULL al devolver, closed_at en cancel/discard y V24)
-// se verifica en emergency-rules-v24.integration.test.js.
+// assigned_officer_id en NULL al devolver, closed_at en cancel/discard y V26)
+// se verifica en emergency-rules-v26.integration.test.js.
 
 const { getPool, closePool } = require('../db/pool');
 const {
