@@ -6,17 +6,24 @@ const { EdaAuthClient } = require('./eda-auth-client');
 const DEFAULT_EDA_TOKEN_URL = 'https://api.citypass-login.pp.ua/oauth/token';
 const DEFAULT_EDA_CLIENT_ID = 'grupo5';
 
+// Cliente del token client-credentials del Login Federado. Lo comparten el
+// broker (SASL) y el schema registry del gateway (Bearer). null sin secreto.
+function edaAuthClientFromEnv(env = process.env) {
+  if (!env.EDA_OAUTH_CLIENT_SECRET) return null;
+  return new EdaAuthClient({
+    tokenUrl: env.EDA_OAUTH_TOKEN_URL || DEFAULT_EDA_TOKEN_URL,
+    clientId: env.EDA_OAUTH_CLIENT_ID || DEFAULT_EDA_CLIENT_ID,
+    clientSecret: env.EDA_OAUTH_CLIENT_SECRET,
+  });
+}
+
 // SASL/OAUTHBEARER contra el broker del Grupo 1 (sección 6 del README del
 // gateway): el token client-credentials sale del Login Federado y kafkajs
 // vuelve a pedir uno al vencer (EdaAuthClient lo renueva antes). Solo se activa
 // si está el secreto: sin él (local, docker-compose) se conecta como siempre.
 function saslFromEnv(env = process.env, authClient = null) {
   if (!env.EDA_OAUTH_CLIENT_SECRET) return null;
-  const client = authClient || new EdaAuthClient({
-    tokenUrl: env.EDA_OAUTH_TOKEN_URL || DEFAULT_EDA_TOKEN_URL,
-    clientId: env.EDA_OAUTH_CLIENT_ID || DEFAULT_EDA_CLIENT_ID,
-    clientSecret: env.EDA_OAUTH_CLIENT_SECRET,
-  });
+  const client = authClient || edaAuthClientFromEnv(env);
   return {
     mechanism: 'oauthbearer',
     oauthBearerProvider: async () => ({ value: await client.getToken() }),
@@ -137,4 +144,4 @@ class KafkaService {
   }
 }
 
-module.exports = { KafkaService, saslFromEnv };
+module.exports = { KafkaService, saslFromEnv, edaAuthClientFromEnv };

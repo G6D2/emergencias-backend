@@ -1,4 +1,4 @@
-const { createEventDecoder, registryFromEnv } = require('../../listeners/event-decoder');
+const { createEventDecoder, registryFromEnv, bearerMiddleware } = require('../../listeners/event-decoder');
 
 // Mensaje en formato Confluent: [0x00][schemaId: 4 bytes][Avro binario].
 function confluentMessage(schemaId, payload = Buffer.from([1, 2, 3])) {
@@ -79,6 +79,25 @@ describe('registryFromEnv', () => {
       EDA_SCHEMA_REGISTRY_USERNAME: 'u',
       EDA_SCHEMA_REGISTRY_PASSWORD: 'p',
     });
+    expect(typeof registry.decode).toBe('function');
+  });
+});
+
+describe('bearerMiddleware', () => {
+  it('agrega el token del Login Federado a cada pedido al registry', async () => {
+    const authClient = { getToken: jest.fn().mockResolvedValue('tok-1') };
+    const request = { enhance: jest.fn((extras) => ({ enhanced: extras })) };
+
+    const result = await bearerMiddleware(authClient)().prepareRequest(async () => request);
+
+    expect(authClient.getToken).toHaveBeenCalled();
+    expect(request.enhance).toHaveBeenCalledWith({ headers: { Authorization: 'Bearer tok-1' } });
+    expect(result).toEqual({ enhanced: { headers: { Authorization: 'Bearer tok-1' } } });
+  });
+
+  it('registryFromEnv arma el registry con el token si no hay usuario y contraseña', () => {
+    const authClient = { getToken: jest.fn() };
+    const registry = registryFromEnv({ EDA_SCHEMA_REGISTRY_URL: 'https://gw.example.com/api/v1' }, { authClient });
     expect(typeof registry.decode).toBe('function');
   });
 });

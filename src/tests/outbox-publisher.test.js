@@ -1,4 +1,4 @@
-const { OutboxPublisher, resolvePublishSince } = require('../services/outbox-publisher');
+const { OutboxPublisher, resolvePublishSince, isOutboxPublisherEnabled } = require('../services/outbox-publisher');
 
 function createPool({ events = [], claimError = null } = {}) {
   const queries = [];
@@ -245,5 +245,13 @@ describe('OutboxPublisher', () => {
       publisher.stop();
       jest.useRealTimers();
     });
+  });
+});
+
+describe('isOutboxPublisherEnabled', () => {
+  it('publica por default y se apaga solo con OUTBOX_PUBLISHER_ENABLED=false', () => {
+    expect(isOutboxPublisherEnabled({})).toBe(true);
+    expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: 'true' })).toBe(true);
+    expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: 'false' })).toBe(false);
   });
 });

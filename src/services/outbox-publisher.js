@@ -170,4 +170,11 @@ class OutboxPublisher {
   }
 }
 
-module.exports = { OutboxPublisher, resolvePublishSince };
+// OUTBOX_PUBLISHER_ENABLED=false deja Kafka prendido solo para consumir. Hasta
+// que el outbox publique por el gateway (#69), escribir directo en el bus
+// mandaría JSON con los tópicos viejos a tópicos que otros grupos leen en Avro.
+function isOutboxPublisherEnabled(env = process.env) {
+  return env.OUTBOX_PUBLISHER_ENABLED !== 'false';
+}
+
+module.exports = { OutboxPublisher, resolvePublishSince, isOutboxPublisherEnabled };
