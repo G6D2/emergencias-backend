@@ -1,6 +1,12 @@
 # Prioridad elevada cerca de eventos públicos
 
-**Estado:** diseño — pendiente de implementación
+> **Reemplazado por [ADR #28 — Elevar temporalmente la prioridad con contextos de zona](https://github.com/G6D2/ADRs/blob/main/adr/elevar-temporalmente-la-prioridad-con-contextos-de-zona.md) (aceptado 2026-11-05).**
+>
+> El diseño de este documento (tabla `priority_zones` con `latitude`, `longitude`, `radius_meters` y cálculo de distancia Haversine) fue evaluado como **alternativa F** en el ADR y descartado. Las razones principales: descifra ubicaciones en cada lectura, exige definir un radio por tipo de evento que no existe para alertas climáticas, y requiere la misma tabla de barrios que se necesita para los otros módulos de todas formas.
+>
+> El mecanismo adoptado usa una tabla `contexto_zona` indexada por **barrio** (string), sin geometría. El listener y el handler de cobertura preventiva (`src/listeners/cobertura-preventiva/`) siguen la arquitectura del ADR. Este documento queda como registro histórico del diseño descartado.
+
+**Estado:** reemplazado — ver ADR #28
 **Contexto:** primer caso de negocio sobre el paquete `src/listeners/` (EventListener + reglas)
 
 ## Requisito
