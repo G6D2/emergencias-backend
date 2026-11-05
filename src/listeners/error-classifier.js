@@ -41,7 +41,7 @@ const TRANSIENT_NODE_CODES = new Set([
 const SQLSTATE = /^[0-9A-Z]{5}$/;
 
 function errorCodes(error) {
-  return [error.code, error.cause && error.cause.code].filter((code) => typeof code === 'string');
+  return [error.code, error.cause?.code].filter((code) => typeof code === 'string');
 }
 
 function isPermanentCode(code) {

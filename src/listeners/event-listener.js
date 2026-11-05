@@ -136,7 +136,7 @@ class EventListener {
       this.running = false;
       this.consumer = null;
       secureLog('error', `${this.constructor.name} se cayó y kafkajs no lo reinicia`, {
-        message: payload.error && payload.error.message,
+        message: payload.error?.message,
       });
       if (this.onCrash) this.onCrash(payload.error);
     });

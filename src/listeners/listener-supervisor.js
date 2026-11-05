@@ -33,7 +33,7 @@ function superviseListener(listener, { retryDelaysMs = DEFAULT_RETRY_DELAYS_MS }
       listener: name,
       attempt: failures,
       retryInMs: delayMs,
-      message: error && error.message,
+      message: error?.message,
     });
     timer = setTimeout(attempt, delayMs);
     if (typeof timer.unref === 'function') timer.unref();

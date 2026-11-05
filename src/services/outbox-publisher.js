@@ -186,8 +186,8 @@ class OutboxPublisher {
     }, this.intervalMs);
     if (typeof this.timer.unref === 'function') this.timer.unref();
     // Purga al arrancar y después cada hora: Render free reinicia seguido,
-    // así que la del arranque es la que más corre.
-    this.purgeExpired();
+    // así que la del arranque es la que más corre. purgeExpired no rechaza.
+    void this.purgeExpired();
     this.purgeTimer = setInterval(() => this.purgeExpired(), this.purgeIntervalMs);
     if (typeof this.purgeTimer.unref === 'function') this.purgeTimer.unref();
     return this;

@@ -22,6 +22,7 @@ async function gracefulShutdown(steps, { timeoutMs = 10_000 } = {}) {
   });
 
   const run = (async () => {
+    // En serie a propósito: el pool se cierra cuando ya nadie lo usa.
     for (const step of steps) {
       try {
         await step.run();
