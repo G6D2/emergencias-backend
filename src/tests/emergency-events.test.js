@@ -49,6 +49,7 @@ describe('emergency-events', () => {
     it('publica los campos nuevos del contrato con default null/false hasta que se desbloqueen', () => {
       const event = buildEmergencyCreatedEvent(baseEmergency, 'evt-3');
       // Null hasta #76 (barrio) y hasta que Juani/Valen cierren la regla de lat/lng.
+      expect(event.data.barrio).toBeNull();
       expect(event.data.ubicacion.barrio).toBeNull();
       expect(event.data.latitud).toBeNull();
       expect(event.data.longitud).toBeNull();
@@ -56,8 +57,8 @@ describe('emergency-events', () => {
       expect(event.data.causaId).toBeNull();
       expect(event.data.causaTipo).toBeNull();
       expect(event.data.prioridadOriginal).toBeNull();
-      // False por default hasta que #76/#85 pongan la logica real.
-      expect(event.data.afectaCirculacion).toBe(false);
+      // Null hasta que #76/#85 pongan la logica real: false haria que Reclamos descarte el evento.
+      expect(event.data.afectaCirculacion).toBeNull();
     });
 
     it('mapea severity -> prioridad en espanol uppercase', () => {

@@ -570,8 +570,9 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`; pendiente sumar `TRANSITO` y `PREVENTIVA`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
-| `ubicacion.barrio` | string \| null | null hasta #76 |
-| `afectaCirculacion` | boolean | `false` hasta #76/#85 |
+| `barrio` | string \| null | null hasta #76. Lo leen Reclamos y Analítica |
+| `ubicacion.barrio` | string \| null | el mismo valor, anidado para Espacios |
+| `afectaCirculacion` | boolean \| null | null hasta #76/#85 (con `false`, Reclamos descarta el evento) |
 | `latitud`, `longitud` | double \| null | null hasta que cierre la regla "mandar sólo con `afectaCirculacion = true`" (Juani con Valentina) |
 | `causaId`, `causaTipo` | string \| null / enum \| null | null hasta #77/#79/#80 (consumo de eventos externos) |
 | `prioridadOriginal` | enum \| null | null hasta #79/#85 |
