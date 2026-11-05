@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { runFlyway, runFlywayAuto } = require('../../../scripts/lib/flyway');
 const { parseDatabaseUrl } = require('../../../scripts/lib/db-url');
+const { assertSafeTestDatabaseUrl } = require('./test-db-guard');
 
 const STATE_FILE = path.join(os.tmpdir(), 'emergencias-backend-test-db.json');
 const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', '..', 'db', 'migrations').replace(/\\/g, '/');
@@ -30,9 +31,17 @@ async function waitForPostgres(containerName, timeoutMs) {
 }
 
 module.exports = async function globalSetup() {
-  // Si ya apuntás a una base de test propia (ej. un branch de Neon solo para tests),
-  // usamos esa y no levantamos ningún contenedor.
-    if (process.env.TEST_DATABASE_URL) {
+  // Si ya apuntás a una base de test propia, usamos esa y no levantamos ningún
+  // contenedor. Tiene que ser local: los tests borran filas (hay DELETE sin
+  // WHERE). Una base remota descartable (ej. un branch de Neon solo para
+  // tests) solo con ALLOW_REMOTE_TEST_DB=true (ver test-db-guard.js).
+  if (process.env.TEST_DATABASE_URL) {
+    const { host, remote } = assertSafeTestDatabaseUrl(process.env.TEST_DATABASE_URL);
+    if (remote) {
+      console.warn(
+        `\n[global-setup] ALLOW_REMOTE_TEST_DB=true: los tests de integración van a escribir y borrar en ${host}.\n`
+      );
+    }
     process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
     process.env.DATABASE_SSL = process.env.DATABASE_SSL || 'false';
     process.env.LOCATION_ENCRYPTION_KEY =

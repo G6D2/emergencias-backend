@@ -4,20 +4,19 @@ const mockProducer = {
   disconnect: jest.fn(),
 };
 
-const mockAdmin = {
-  connect: jest.fn(),
-  disconnect: jest.fn(),
-};
+const mockAdmin = jest.fn();
 
 jest.mock('kafkajs', () => ({
   Kafka: jest.fn().mockImplementation(() => ({
     producer: jest.fn(() => mockProducer),
-    admin: jest.fn(() => mockAdmin),
+    admin: mockAdmin,
   })),
 }));
 
 const { Kafka } = require('kafkajs');
-const { KafkaService, saslFromEnv, edaAuthClientFromEnv } = require('../services/kafka.service');
+const {
+  KafkaService, saslFromEnv, edaAuthClientFromEnv, kafkaHealth,
+} = require('../services/kafka.service');
 const { ServiceUnavailableError } = require('../errors/app-errors');
 
 describe('KafkaService', () => {
@@ -53,19 +52,17 @@ describe('KafkaService', () => {
     expect(service.isConnected()).toBe(false);
   });
 
-  it('checkHealth devuelve true si el admin conecta', async () => {
-    mockAdmin.connect.mockResolvedValue(undefined);
-    mockAdmin.disconnect.mockResolvedValue(undefined);
+  it('reconectar descarta el producer anterior en vez de dejarlo abierto', async () => {
+    mockProducer.connect.mockResolvedValue(undefined);
+    mockProducer.disconnect.mockRejectedValue(new Error('ya estaba caído'));
     const service = new KafkaService({ enabled: true });
-    await expect(service.checkHealth()).resolves.toBe(true);
-    expect(mockAdmin.disconnect).toHaveBeenCalled();
-  });
+    await service.connect();
+    expect(mockProducer.disconnect).not.toHaveBeenCalled();
 
-  it('checkHealth devuelve false si el admin no conecta y no revienta al desconectar', async () => {
-    mockAdmin.connect.mockRejectedValue(new Error('down'));
-    mockAdmin.disconnect.mockRejectedValue(new Error('already down'));
-    const service = new KafkaService({ enabled: true });
-    await expect(service.checkHealth()).resolves.toBe(false);
+    await expect(service.connect()).resolves.toBe(true);
+
+    expect(mockProducer.disconnect).toHaveBeenCalledTimes(1);
+    expect(service.isConnected()).toBe(true);
   });
 
   it('publishEvent devuelve false sin lanzar si está deshabilitado', async () => {
@@ -119,6 +116,68 @@ describe('KafkaService', () => {
     const service = new KafkaService({ enabled: false });
     await expect(service.disconnect()).resolves.toBeUndefined();
     expect(mockProducer.disconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe('kafkaHealth (estado en memoria para GET /health)', () => {
+  const service = ({ enabled = true, connected = false } = {}) => ({
+    isEnabled: () => enabled,
+    isConnected: () => connected,
+  });
+  const listener = (status, extra = {}) => ({
+    name: 'L', running: status === 'running', status, lastPollAt: null, nextRetryAt: null, ...extra,
+  });
+  const outbox = (enabled, lastPollAt = null) => ({ enabled, lastPollAt });
+
+  it('no abre conexiones: nunca crea un admin del broker', () => {
+    kafkaHealth(new KafkaService({ enabled: true }), { outbox: outbox(true), listeners: [listener('running')] });
+    expect(mockAdmin).not.toHaveBeenCalled();
+  });
+
+  it('KAFKA_ENABLED=false: disabled', () => {
+    expect(kafkaHealth(service({ enabled: false }), { outbox: outbox(true) })).toMatchObject({
+      kafka: 'disabled',
+      outbox: { enabled: true, producerConnected: false },
+    });
+  });
+
+  it('prod hoy (solo consumir): connected si cada listener con topic corre, sin mirar el producer', () => {
+    const health = kafkaHealth(service({ connected: false }), {
+      outbox: outbox(false),
+      listeners: [listener('running'), listener('running'), listener('disabled')],
+    });
+
+    expect(health.kafka).toBe('connected');
+    expect(health.outbox).toEqual({ enabled: false, lastPollAt: null, producerConnected: false });
+    expect(health.listeners).toHaveLength(3);
+  });
+
+  it('un listener reintentando lo deja disconnected', () => {
+    const health = kafkaHealth(service(), {
+      outbox: outbox(false),
+      listeners: [listener('running'), listener('retrying', { nextRetryAt: '2026-11-05T12:00:30.000Z' })],
+    });
+
+    expect(health.kafka).toBe('disconnected');
+    expect(health.listeners[1]).toMatchObject({ status: 'retrying', nextRetryAt: '2026-11-05T12:00:30.000Z' });
+  });
+
+  it('con el outbox publicando, el producer también tiene que estar conectado', () => {
+    const lastPollAt = '2026-11-05T12:00:00.000Z';
+    expect(kafkaHealth(service({ connected: true }), { outbox: outbox(true, lastPollAt) })).toEqual({
+      kafka: 'connected',
+      outbox: { enabled: true, lastPollAt, producerConnected: true },
+      listeners: [],
+    });
+    expect(kafkaHealth(service({ connected: false }), { outbox: outbox(true) }).kafka).toBe('disconnected');
+  });
+
+  it('Kafka prendido sin nada que lo use: disconnected', () => {
+    expect(kafkaHealth(service({ connected: true })).kafka).toBe('disconnected');
+  });
+
+  it('sin kafkaService: disabled', () => {
+    expect(kafkaHealth(null).kafka).toBe('disabled');
   });
 });
 

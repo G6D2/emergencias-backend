@@ -40,7 +40,9 @@ Editá `.env` según cómo quieras la base:
 ### 2a. Con Neon (Kafka en Docker, DB en la nube)
 
 ```bash
-# Pegá la URL de Neon en .env (DATABASE_SSL=true)
+# Pegá la URL de Neon en .env (DATABASE_SSL=true). Para publicar en el Kafka
+# local: KAFKA_ENABLED=true y OUTBOX_PUBLISHER_ENABLED=true (en .env.example
+# vienen apagados)
 docker-compose up -d kafka zookeeper
 npm install
 npm run migrate
@@ -54,7 +56,10 @@ npm run dev
 # si las dependencias se instalaron desde el contenedor (Linux), en el host faltan o no sirven.
 npm install
 
-# En .env: apuntar Kafka al listener del host (NO al de Docker, ver sección Kafka más abajo)
+# En .env: prender Kafka y el outbox (en .env.example vienen apagados) y apuntar
+# al listener del host (NO al de Docker, ver sección Kafka más abajo)
+#   KAFKA_ENABLED=true
+#   OUTBOX_PUBLISHER_ENABLED=true
 #   KAFKA_BROKER=localhost:9092
 # Si 3000/3001 están ocupados, elegir otro puerto:
 #   PORT=4000
@@ -152,7 +157,7 @@ Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipá
 
 ### Producción (Render) sin Grupo 2
 
-Producción corre con `AUTH_MODE=local` (lo dice `authMode` en `GET /health`) y `DEV_LOGIN_STRICT=true`. **No** corre con `NODE_ENV=production`: las respuestas no traen `Strict-Transport-Security` (verificado el 05/11/2026), así que tampoco necesita `ALLOW_LOCAL_AUTH`. La configuración está en [`render.yaml`](render.yaml).
+Producción corre con `AUTH_MODE=local` y `DEV_LOGIN_STRICT=true`. **No** corre con `NODE_ENV=production`: las respuestas no traen `Strict-Transport-Security` (verificado el 05/11/2026), así que tampoco necesita `ALLOW_LOCAL_AUTH`. La configuración está en [`render.yaml`](render.yaml).
 
 Con `DEV_LOGIN_STRICT=true`, `POST /auth/dev/login` solo emite tokens para estos `sub` (`src/auth/dev-login-policy.js`), con groups fijos que el cliente no puede elegir:
 
@@ -229,7 +234,7 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 
 | Endpoint | Acceso | Regla extra |
 |----------|--------|-------------|
-| `GET /health` | público | estado de Kafka (`connected`, `disconnected` o `disabled`) y `authMode` |
+| `GET /health` | público | estado en memoria de Kafka (`connected`, `disconnected` o `disabled`), del outbox y de cada listener |
 | `GET /api-docs`, `GET /api-docs.json` | público | Swagger UI y spec OpenAPI |
 | `POST /auth/register` | público, solo `AUTH_MODE=local` | 20 req/min por IP |
 | `POST /auth/login` | público, solo `AUTH_MODE=local` | 20 req/min por IP |
@@ -325,7 +330,7 @@ Solo `GET /api/panic-button/:id` deja registro: después de autorizar la lectura
 | `DB_POOL_MAX` | Máximo de conexiones del pool de `pg` (default 10) |
 | `RATE_LIMIT_ENABLED` | `false` apaga el rate limiting (default: activo) |
 
-El health check reporta Kafka como `connected`, `disconnected` o `disabled` (`KAFKA_ENABLED=false`). `connected` sale de conectar un admin client al broker en cada llamada: no dice que el outbox esté publicando (en producción no publica). Ver la sección de Kafka para una trampa conocida al publicar desde el host.
+El health check reporta el estado de Kafka (`connected`, `disconnected` o `disabled` con `KAFKA_ENABLED=false`) con lo que el proceso ya sabe, sin conectarse al broker: `connected` si el producer (cuando el outbox publica) y cada listener con topic están arriba. En producción el outbox no publica. Ojo: que el producer esté conectado no garantiza que publicar ande — ver la sección de Kafka para una trampa conocida al publicar desde el host.
 
 ### Rate limiting
 
@@ -334,13 +339,23 @@ El health check reporta Kafka como `connected`, `disconnected` o `disabled` (`KA
 | Endpoint | Límite | Respuesta al exceder |
 |----------|--------|-----------------------|
 | `POST /auth/dev/login` | 10 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
-| `POST /auth/login` / `POST /auth/register` | 20 req/min por IP | idem |
-| `POST /api/panic-button` | 5 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
+| `POST /auth/login` | 20 intentos fallidos/min por IP (los logins exitosos no cuentan) | idem |
+| `POST /auth/register` | 20 req/min por IP, contador propio | idem |
+| `POST /api/panic-button` | 5 activaciones/min por ciudadano (`sub` del token; las que fallan no cuentan), más un tope de 300 req/min por IP antes de autenticar | `429 { "error": "TooManyRequests", "message": "..." }` |
 | `PUT`/`POST`/`PATCH`/`DELETE` en `/api/citizen/*` | 30 req/min por IP | idem |
 
 ### Pool de conexiones (`pg`)
 
-`src/db/pool.js`: `max` = `DB_POOL_MAX` (default 10), `idleTimeoutMillis` 30000, `connectionTimeoutMillis` 5000. Sin límites explícitos el pool crece sin cota y agota las conexiones del Postgres compartido ante un pico de tráfico.
+`src/db/pool.js`: `max` = `DB_POOL_MAX` (default 10), `idleTimeoutMillis` 30000, `connectionTimeoutMillis` 5000, `keepAlive`. Sin límites explícitos el pool crece sin cota y agota las conexiones del Postgres compartido ante un pico de tráfico.
+
+Contra un Postgres directo también manda `statement_timeout` (10 s) e `idle_in_transaction_session_timeout` (15 s). Contra el pooler de Neon (host `-pooler`) no: PgBouncer rechaza esos startup parameters y cortaría todas las conexiones. Ahí se configuran por rol, una vez, desde la consola de Neon:
+
+```sql
+ALTER ROLE <rol> SET statement_timeout = '10s';
+ALTER ROLE <rol> SET idle_in_transaction_session_timeout = '15s';
+```
+
+Un client ocioso que se corta (Neon suspende el compute) se loguea con `pool.on('error')` en vez de tirar el proceso.
 
 ### Errores 5xx sanitizados
 
@@ -502,7 +517,21 @@ Estado de los eventos del outbox para el dispatcher: `id`, `topic`, `status`, `a
 
 ### GET `/health`
 
-Estado del servicio, de Kafka y el `authMode` (público).
+Estado del servicio (público). Responde con lo que el proceso tiene en memoria, sin conectarse al broker ni a la base:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-11-05T15:00:00.000Z",
+  "kafka": "connected",
+  "outbox": { "enabled": false, "lastPollAt": null, "producerConnected": false },
+  "listeners": [
+    { "name": "EventoCanceladoListener", "running": true, "status": "running", "lastPollAt": "2026-11-05T14:59:58.000Z", "nextRetryAt": null }
+  ]
+}
+```
+
+`status` de un listener: `starting` (primer intento), `running`, `retrying` (falló y todavía no volvió a arrancar: se reintenta a los 5 s, 30 s, 2 min y después cada 2 min; `nextRetryAt` dice cuándo es el próximo intento), `disabled` (sin topic) o `stopped`. `lastPollAt` es el último fetch al broker (kafkajs hace long polling, así que se actualiza cada pocos segundos aunque no haya mensajes).
 
 ---
 
@@ -624,7 +653,7 @@ src/
 │   └── uuid.js                   # assertUuid: 400 antes de tocar Postgres
 └── tests/                        # Jest: unit (*.test.js) e integración (*.integration.test.js)
 
-db/migrations/                    # Fuente de verdad del schema (Flyway: V1…V16 y V21…V23)
+db/migrations/                    # Fuente de verdad del schema (Flyway: V1…V16 y V21…V24)
 scripts/                          # migrate (Flyway), seed, anonimización, demo de DBSCAN
 docs/                             # Diagramas y documentos técnicos
 postman/                          # Colección y environment
@@ -736,6 +765,10 @@ No forma parte del contrato del #48: conserva los nombres en inglés y la priori
 - `EmergenciaCerrada` y `EmergenciaReportada.v2` quedaron descartados.
 - Los renombres se hacen al armar el evento. La base de datos sigue en inglés; el issue #63 no es bloqueante para este contrato.
 
+### JSON Schema
+
+Los dos eventos están en [`docs/contratos/emergencia-creada.schema.json`](docs/contratos/emergencia-creada.schema.json) y [`docs/contratos/emergencia-actualizada.schema.json`](docs/contratos/emergencia-actualizada.schema.json) (draft-07, todos los campos `required`, `additionalProperties: false`). `src/tests/outbox-contract.integration.test.js` los valida con `ajv` contra las filas reales que deja en `outbox_events` el ciclo completo por HTTP: si cambia un campo en `emergency-events.js` sin tocar el schema, o al revés, el CI falla.
+
 ---
 
 ## Consumo de eventos externos
@@ -795,7 +828,9 @@ La prioridad de diseño está en la lógica de dominio (transiciones de estado, 
 | **Listeners** | `listeners/*.test.js`, `listeners/cobertura-preventiva/*.test.js` | Decoder Avro/JSON, clasificación de errores, carga de reglas, `OutcomeFactory` con dedup, reglas y handlers de la cobertura preventiva. |
 | **Seguridad** | `security.test.js`, `security-hardening.test.js`, `secure-log.test.js`, `local-keys.test.js` | Headers, sanitización de logs (sin JWT ni lat/lng), rotación de keys. |
 | **Repositories (unit)** | `emergency.repository.test.js`, `incident.repository.test.js`, `officer.repository.test.js` | Queries con `pg` mockeado. |
+| **Autorización** | `authorization-matrix.test.js` | Cada endpoint protegido × {sin token, token sin grupo, citizen, dispatcher, officer} con JWT RS256 real: 401, 403 o pasa, según `src/auth/authorize.js`. Falla si se agrega una ruta y no se suma a la matriz. |
 | **Repositories e integración** | `emergency.repository.integration.test.js`, `incident.repository.integration.test.js`, `incident-detection-job.integration.test.js`, `eventos-procesados.repository.integration.test.js`, `operational-status.integration.test.js`, `listeners/consumer.integration.test.js` | Postgres real (contenedor efímero + Flyway); en CI corren con el service `postgres:15-alpine`. |
+| **Flujos de punta a punta (integración)** | `emergency-lifecycle.integration.test.js`, `emergency-rules-v24.integration.test.js`, `outbox-contract.integration.test.js`, `listeners/consumer-avro.integration.test.js` | Ciclo completo por HTTP con JWT local real (estado, historial, oficial, `closed_at`, outbox) y ramas cancel/discard/return; validate/return con estado de origen, `closed_at` en terminales y V24; el outbox real contra el JSON Schema de `docs/contratos`; el consumer con Avro en formato Confluent y un registry HTTP local. |
 | **Infra** | `flyway.test.js`, `pool.test.js` | Aplicación de migraciones, configuración del pool. |
 
 Último CI de `main` (05/11/2026, [run 42050901474](https://github.com/G6D2/emergencias-backend/actions/runs/42050901474)): 739 tests unitarios y 75 de integración; cobertura statements 95,73 %, branches 84,78 %, functions 95,65 %, lines 96,54 %. El gate interno es 80 % (ver `docs/diagramas/07-ci-cd.md`).

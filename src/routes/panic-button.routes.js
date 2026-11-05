@@ -2,7 +2,10 @@ const express = require('express');
 const { PanicButtonController } = require('../controllers/panic-button.controller');
 const { asyncHandler } = require('../utils/async-handler');
 const { requireCitizen, requireCitizenOrDispatcher } = require('../auth/authorize');
-const { createPanicButtonRateLimiter } = require('../security/rate-limit');
+const {
+  createPanicButtonRateLimiter,
+  createPanicButtonIpRateLimiter,
+} = require('../security/rate-limit');
 
 function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate) {
   const router = express.Router();
@@ -65,9 +68,10 @@ function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate
    */
   router.post(
     '/',
-    createPanicButtonRateLimiter(),
+    createPanicButtonIpRateLimiter(),
     authenticate,
     requireCitizen,
+    createPanicButtonRateLimiter(),
     asyncHandler(async (req, res) => {
       const result = await controller.triggerPanicButton(req.body, req.user);
       res.status(201).json(result);

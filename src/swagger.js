@@ -433,13 +433,33 @@ const options = {
               type: 'string',
               enum: ['connected', 'disconnected', 'disabled'],
               example: 'connected',
-              description: 'disabled con KAFKA_ENABLED=false. connected/disconnected sale de un connect '
-                + 'del admin client contra el broker, no de que el outbox esté publicando.',
+              description: 'disabled con KAFKA_ENABLED=false. connected si el producer (cuando el outbox publica) '
+                + 'y cada listener con topic están arriba. Sale del estado en memoria del proceso, sin conectarse al broker.',
             },
-            authMode: {
-              type: 'string',
-              enum: ['local', 'idp'],
-              example: 'local',
+            outbox: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean', example: false },
+                producerConnected: { type: 'boolean', example: false },
+                lastPollAt: { type: 'string', format: 'date-time', nullable: true },
+              },
+            },
+            listeners: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string', example: 'EventoCanceladoListener' },
+                  running: { type: 'boolean', example: true },
+                  status: {
+                    type: 'string',
+                    enum: ['starting', 'running', 'retrying', 'disabled', 'stopped'],
+                    example: 'running',
+                  },
+                  lastPollAt: { type: 'string', format: 'date-time', nullable: true },
+                  nextRetryAt: { type: 'string', format: 'date-time', nullable: true },
+                },
+              },
             },
           },
         },

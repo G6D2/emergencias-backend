@@ -2,7 +2,8 @@ const express = require('express');
 const { asyncHandler } = require('../utils/async-handler');
 const {
   createDevLoginRateLimiter,
-  createAuthCredentialRateLimiter,
+  createAuthLoginRateLimiter,
+  createAuthRegisterRateLimiter,
 } = require('../security/rate-limit');
 const { AuthController } = require('../controllers/auth.controller');
 const { resolveDevLoginClaims } = require('../auth/dev-login-policy');
@@ -14,7 +15,6 @@ const { resolveDevLoginClaims } = require('../auth/dev-login-policy');
  */
 function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
   const router = express.Router();
-  const credentialLimiter = createAuthCredentialRateLimiter();
   const authController = authUserRepository
     ? new AuthController(authUserRepository, tokenIssuer)
     : null;
@@ -72,8 +72,10 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      *         description: Usuario creado + access_token
      *       409:
      *         description: Email ya registrado
+     *       429:
+     *         description: Rate limit (por IP)
      */
-    router.post('/register', credentialLimiter, asyncHandler(async (req, res) => {
+    router.post('/register', createAuthRegisterRateLimiter(), asyncHandler(async (req, res) => {
       const result = await authController.register(req.body);
       res.status(201).json(result);
     }));
@@ -98,9 +100,11 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      *       200:
      *         description: access_token + user
      *       401:
-     *         description: Credenciales inválidas
+     *         description: Credenciales inválidas (misma respuesta si el correo no existe)
+     *       429:
+     *         description: Rate limit (intentos fallidos por IP)
      */
-    router.post('/login', credentialLimiter, asyncHandler(async (req, res) => {
+    router.post('/login', createAuthLoginRateLimiter(), asyncHandler(async (req, res) => {
       const result = await authController.login(req.body);
       res.json(result);
     }));

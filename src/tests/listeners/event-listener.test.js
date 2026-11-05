@@ -49,8 +49,16 @@ class SiempreAplica extends BusinessRule {
   }
 }
 
+// Consumer falso con los eventos de instrumentación de kafkajs: emit(nombre,
+// payload) llama a los handlers registrados con on().
 function buildKafka() {
+  const handlers = {};
   const consumer = {
+    events: { FETCH_START: 'consumer.fetch_start', CRASH: 'consumer.crash' },
+    on: jest.fn((event, handler) => {
+      handlers[event] = handler;
+    }),
+    emit: (event, payload) => handlers[event] && handlers[event]({ payload }),
     connect: jest.fn().mockResolvedValue(undefined),
     subscribe: jest.fn().mockResolvedValue(undefined),
     run: jest.fn().mockResolvedValue(undefined),
@@ -247,6 +255,57 @@ describe('EventListener', () => {
     await listener.stop();
     expect(consumer.disconnect).toHaveBeenCalledTimes(1);
     expect(listener.consumer).toBeNull();
+    expect(listener.status().running).toBe(false);
+  });
+
+  describe('estado para /health', () => {
+    it('status(): no corre antes de start, corre después y cada fetch marca lastPollAt', async () => {
+      const { kafka, consumer } = buildKafka();
+      const listener = new TestListener(kafka, { topic: 't' });
+      expect(listener.status()).toEqual({ name: 'TestListener', running: false, lastPollAt: null });
+
+      await listener.start();
+      expect(listener.status().running).toBe(true);
+      expect(listener.status().lastPollAt).toBeNull();
+
+      consumer.emit(consumer.events.FETCH_START, {});
+      expect(Date.parse(listener.status().lastPollAt)).not.toBeNaN();
+    });
+
+    it('si start falla, no queda marcado como corriendo', async () => {
+      const { kafka, consumer } = buildKafka();
+      consumer.connect.mockRejectedValue(new Error('no broker'));
+      const listener = new TestListener(kafka, { topic: 't' });
+
+      await expect(listener.start()).rejects.toThrow('no broker');
+      expect(listener.status().running).toBe(false);
+    });
+
+    it('un CRASH sin restart lo marca caído, suelta el consumer y avisa por onCrash', async () => {
+      const { kafka, consumer } = buildKafka();
+      const listener = new TestListener(kafka, { topic: 't' });
+      listener.onCrash = jest.fn();
+      await listener.start();
+
+      const error = new Error('Topic authorization failed');
+      consumer.emit(consumer.events.CRASH, { error, restart: false });
+
+      expect(listener.status().running).toBe(false);
+      expect(listener.consumer).toBeNull();
+      expect(listener.onCrash).toHaveBeenCalledWith(error);
+    });
+
+    it('un CRASH con restart lo deja en manos de kafkajs (sigue corriendo)', async () => {
+      const { kafka, consumer } = buildKafka();
+      const listener = new TestListener(kafka, { topic: 't' });
+      listener.onCrash = jest.fn();
+      await listener.start();
+
+      consumer.emit(consumer.events.CRASH, { error: new Error('KafkaJSNumberOfRetriesExceeded'), restart: true });
+
+      expect(listener.status().running).toBe(true);
+      expect(listener.onCrash).not.toHaveBeenCalled();
+    });
   });
 });
 

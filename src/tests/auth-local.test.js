@@ -36,7 +36,6 @@ describe('AUTH_MODE=local', () => {
     app = createApp(mockKafka, mockRepo, {
       authenticate: auth.authenticate,
       devAuthRouter: auth.devAuthRouter,
-      authMode: auth.mode,
     });
   });
 
@@ -72,9 +71,9 @@ describe('AUTH_MODE=local', () => {
     expect(panic.body.data.userId).toBe('U000099');
   });
 
-  it('reports authMode=local on /health', async () => {
+  it('/health no expone el modo de auth', async () => {
     const res = await request(app).get('/health').expect(200);
-    expect(res.body.authMode).toBe('local');
+    expect(res.body).not.toHaveProperty('authMode');
   });
 
   it('rejects dev login without sub', async () => {

@@ -2,6 +2,14 @@ const { randomUUID } = require('crypto');
 const { getPool, closePool } = require('../db/pool');
 const { EmergencyRepository } = require('../repositories/emergency.repository');
 const { IncidentRepository } = require('../repositories/incident.repository');
+const { buildEmergencyCreatedEvent } = require('../services/emergency-events');
+
+// Mismo outboxEvent que arma PanicButtonController: el builder real del
+// contrato del #48, no un payload inventado.
+const panicOutboxEvent = () => ({
+  topic: 'emergencias.boton-panico',
+  payload: (emergency, eventId) => buildEmergencyCreatedEvent(emergency, eventId),
+});
 
 describe('EmergencyRepository (integración contra Postgres real)', () => {
   let repository;
@@ -66,28 +74,22 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
   it('persiste emergency_type y correlation_id también en la rama con outbox', async () => {
     const input = buildEmergency({ emergencyType: 'MEDICA' });
 
-    const created = await repository.create({
-      ...input,
-      outboxEvent: {
-        topic: 'emergencias.boton-panico',
-        payload: (emergency, eventId) => ({
-          type: 'EmergenciaCreada',
-          eventId,
-          correlationId: emergency.correlationId,
-          data: { id: emergency.id, emergencyType: emergency.emergencyType },
-        }),
-      },
-    });
+    const created = await repository.create({ ...input, outboxEvent: panicOutboxEvent() });
 
     expect(created.emergencyType).toBe('MEDICA');
     expect(created.correlationId).toBe(input.id);
 
     const outbox = await getPool().query(
-      `SELECT payload FROM outbox_events WHERE payload->'data'->>'id' = $1 LIMIT 1`,
+      `SELECT payload FROM outbox_events WHERE payload->'data'->>'emergenciaId' = $1`,
       [input.id]
     );
+    expect(outbox.rows).toHaveLength(1);
     expect(outbox.rows[0].payload.correlationId).toBe(input.id);
-    expect(outbox.rows[0].payload.data.emergencyType).toBe('MEDICA');
+    expect(outbox.rows[0].payload.data).toMatchObject({
+      emergenciaId: input.id,
+      categoria: 'MEDICA',
+      correlationId: input.id,
+    });
   });
 
   it('el CHECK de V10 rechaza un emergency_type fuera del catálogo insertado directo', async () => {
@@ -230,32 +232,30 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
 
   it('crea la emergencia y su evento outbox en la misma transacción', async () => {
     const input = buildEmergency();
-    const created = await repository.create({
-      ...input,
-      outboxEvent: {
-        topic: 'emergencias.boton-panico',
-        payload: (emergency, eventId) => ({
-          type: 'EmergenciaCreada',
-          eventId,
-          correlationId: emergency.id,
-          data: { id: emergency.id, severity: emergency.severity },
-        }),
-      },
-    });
+    const created = await repository.create({ ...input, outboxEvent: panicOutboxEvent() });
 
     const outbox = await getPool().query(
-      `SELECT topic, status, payload
+      `SELECT id, topic, status, payload
        FROM outbox_events
-       WHERE payload->'data'->>'id' = $1
-       ORDER BY created_at DESC
-       LIMIT 1`,
+       WHERE payload->'data'->>'emergenciaId' = $1`,
       [input.id]
     );
 
     expect(created.id).toBe(input.id);
     expect(outbox.rows).toHaveLength(1);
-    expect(outbox.rows[0].status).toBe('PENDING');
-    expect(outbox.rows[0].payload.data.id).toBe(input.id);
+    expect(outbox.rows[0]).toMatchObject({ topic: 'emergencias.boton-panico', status: 'PENDING' });
+    // El eventId que recibe el builder es la PK de la fila.
+    expect(outbox.rows[0].payload.eventId).toBe(outbox.rows[0].id);
+    expect(outbox.rows[0].payload).toMatchObject({
+      type: 'EmergenciaCreada',
+      correlationId: input.id,
+      data: {
+        emergenciaId: input.id,
+        prioridad: 'CRITICA',
+        estado: 'PENDIENTE',
+        ciudadanoId: input.userId,
+      },
+    });
   });
 
   it('rolls back the emergency if the outbox insert fails', async () => {
@@ -598,6 +598,41 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
       });
 
       expect(candidates.some((candidate) => candidate.id === input.id)).toBe(false);
+    });
+
+    it('con emergencyTypes trae varios tipos en una sola query, cada candidato con su emergencyType', async () => {
+      const since = new Date(Date.now() - 60 * 60 * 1000);
+      const panico = buildEmergency({ emergencyType: 'PANICO' });
+      const medica = buildEmergency({ emergencyType: 'MEDICA' });
+      const otro = buildEmergency({ emergencyType: 'OTRO' });
+      await repository.create(panico);
+      await repository.create(medica);
+      await repository.create(otro);
+
+      const candidates = await repository.findRecentByType({
+        emergencyTypes: ['PANICO', 'MEDICA'],
+        since,
+      });
+
+      const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+      expect(byId.get(panico.id).emergencyType).toBe('PANICO');
+      expect(byId.get(medica.id).emergencyType).toBe('MEDICA');
+      expect(byId.has(otro.id)).toBe(false);
+    });
+
+    it.each(['CLOSED', 'CANCELLED', 'DISCARDED'])('no devuelve emergencias en estado terminal (%s)', async (terminalStatus) => {
+      const since = new Date(Date.now() - 60 * 60 * 1000);
+      const terminal = buildEmergency({ emergencyType: 'INCENDIO' });
+      const active = buildEmergency({ emergencyType: 'INCENDIO' });
+      await repository.create(terminal);
+      await repository.create(active);
+      await getPool().query('UPDATE emergencies SET status = $1 WHERE id = $2', [terminalStatus, terminal.id]);
+
+      const candidates = await repository.findRecentByType({ emergencyType: 'INCENDIO', since });
+
+      const ids = candidates.map((candidate) => candidate.id);
+      expect(ids).toContain(active.id);
+      expect(ids).not.toContain(terminal.id);
     });
   });
 });

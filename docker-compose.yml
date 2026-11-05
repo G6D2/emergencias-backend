@@ -45,6 +45,10 @@ services:
       PORT: 3000
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/emergencias_dev
       DATABASE_SSL: 'false'
+      # Explícitas para que un .env copiado de .env.example (KAFKA_ENABLED=false,
+      # outbox apagado) no apague la publicación contra el Kafka local.
+      KAFKA_ENABLED: 'true'
+      OUTBOX_PUBLISHER_ENABLED: 'true'
       KAFKA_BROKER: kafka:29092
       KAFKA_CLIENT_ID: emergencias-backend
       TOPIC_PANIC_BUTTON: emergencias.boton-panico

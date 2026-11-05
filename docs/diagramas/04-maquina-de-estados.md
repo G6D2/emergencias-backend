@@ -49,11 +49,11 @@ stateDiagram-v2
 | — | `PENDING` | `POST /api/panic-button` | `citizen` | `EmergenciaCreada` en el outbox |
 | — | `PENDING` | listener `EventoComunitarioPublicado` | sistema | Emergencia `PREVENTIVA`, `source = EXTERNAL`; `EmergenciaCreada` en el outbox |
 | `PENDING` | `VALIDATED` | `PATCH /api/emergencies/:id/validate` | `dispatcher` | — |
-| `PENDING` | `CANCELLED` | `PATCH /api/emergencies/:id/cancel` | `citizen` (dueño) | `reason` opcional |
-| `PENDING` | `DISCARDED` | `PATCH /api/emergencies/:id/discard` | `dispatcher` | `reason` obligatorio |
+| `PENDING` | `CANCELLED` | `PATCH /api/emergencies/:id/cancel` | `citizen` (dueño) | `reason` opcional; `closed_at = now()` |
+| `PENDING` | `DISCARDED` | `PATCH /api/emergencies/:id/discard` | `dispatcher` | `reason` obligatorio; `closed_at = now()` |
 | `VALIDATED` | `DISPATCHED` | `PATCH /api/emergencies/:id/assign` | `dispatcher` | `officerId` tiene que estar `disponible`; pasa a `ocupado` |
-| `VALIDATED` | `CANCELLED` | `PATCH /api/emergencies/:id/cancel` | `citizen` (dueño) | `reason` opcional |
-| `DISPATCHED` | `VALIDATED` | `PATCH /api/emergencies/:id/return` | `dispatcher` | Devolución para reasignar: el oficial vuelve a `disponible`; `reason` opcional |
+| `VALIDATED` | `CANCELLED` | `PATCH /api/emergencies/:id/cancel` | `citizen` (dueño) | `reason` opcional; `closed_at = now()` |
+| `DISPATCHED` | `VALIDATED` | `PATCH /api/emergencies/:id/return` | `dispatcher` | Devolución para reasignar: el oficial vuelve a `disponible` y `assigned_officer_id` queda en `NULL`; `reason` opcional |
 | `DISPATCHED` | `EN_ROUTE` | `PATCH /api/emergencies/:id/en-route` | `officer` asignado | — |
 | `EN_ROUTE` | `ON_SCENE` | `PATCH /api/emergencies/:id/on-scene` | `officer` asignado | — |
 | `ON_SCENE` | `RESOLVED` | `PATCH /api/emergencies/:id/resolve` | `officer` asignado | `resueltoAt` en el evento; el oficial sigue `ocupado` |
