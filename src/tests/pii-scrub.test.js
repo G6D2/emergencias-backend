@@ -5,14 +5,25 @@ const {
 } = require('../security/pii-scrub');
 
 // 32 KB es el tope de express.json en app.js: lo más largo que puede llegar
-// en una description. Con el regex de email sin acotar tardaba ~0,7 s.
+// en una description. Con el regex de email sin acotar, cada pasada sobre esta
+// entrada tardaba ~0,7 s.
 const HOSTILE_32KB = '1-'.repeat(16 * 1024);
-const MAX_SCAN_MS = 50;
+// scrubFreeText completo: ~1 ms en local.
+const SCRUB_MAX_MS = 50;
+// Regex de email solo, sin el corte previo: ~7 ms en local. El margen absorbe
+// la carga de los workers de Jest corriendo en paralelo (en la suite completa
+// se vio 70 ms) y sigue muy por debajo de los ~700 ms de la versión sin acotar.
+const EMAIL_REGEX_MAX_MS = 150;
 
-function elapsedMs(fn) {
-  const start = process.hrtime.bigint();
-  fn();
-  return Number(process.hrtime.bigint() - start) / 1e6;
+// Mejor de 3 corridas: descarta picos de GC o de scheduling que no tienen
+// nada que ver con el regex.
+function fastestMs(fn) {
+  const runs = [0, 1, 2].map(() => {
+    const start = process.hrtime.bigint();
+    fn();
+    return Number(process.hrtime.bigint() - start) / 1e6;
+  });
+  return Math.min(...runs);
 }
 
 describe('scrubFreeText: ReDoS', () => {
@@ -20,23 +31,23 @@ describe('scrubFreeText: ReDoS', () => {
     expect(HOSTILE_32KB).toHaveLength(32 * 1024);
 
     let out;
-    const ms = elapsedMs(() => {
+    const ms = fastestMs(() => {
       out = scrubFreeText(HOSTILE_32KB);
     });
 
-    expect(ms).toBeLessThan(MAX_SCAN_MS);
+    expect(ms).toBeLessThan(SCRUB_MAX_MS);
     expect(out.length).toBeLessThanOrEqual(MAX_DESCRIPTION_LENGTH);
   });
 
   it('keeps the email pattern linear even without the length cut', () => {
     const email = PII_PATTERNS.find(({ label }) => label === '[email]').re;
 
-    const ms = elapsedMs(() => {
+    const ms = fastestMs(() => {
       email.lastIndex = 0;
       HOSTILE_32KB.replace(email, '[email]');
     });
 
-    expect(ms).toBeLessThan(MAX_SCAN_MS);
+    expect(ms).toBeLessThan(EMAIL_REGEX_MAX_MS);
   });
 });
 
