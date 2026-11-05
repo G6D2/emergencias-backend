@@ -59,8 +59,7 @@ describe('emergency-events', () => {
 
     it('publica los campos nuevos del contrato con default null/false hasta que se desbloqueen', () => {
       const event = buildEmergencyCreatedEvent(baseEmergency, 'evt-3');
-      // Sin barrio en la emergencia → null; si viene del catálogo, se publica (ver test abajo).
-      expect(event.data.barrio).toBeNull();
+      expect(event.data.barrio).toBeUndefined();
       expect(event.data.ubicacion.barrio).toBeNull();
       expect(event.data.ubicacion.latitud).toBeNull();
       expect(event.data.ubicacion.longitud).toBeNull();
@@ -74,9 +73,9 @@ describe('emergency-events', () => {
       expect(event.data.afectaCirculacion).toBeNull();
     });
 
-    it('publica barrio plano y anidado cuando la emergencia lo trae', () => {
+    it('publica barrio solo en ubicacion', () => {
       const event = buildEmergencyCreatedEvent({ ...baseEmergency, barrio: 'PALERMO' }, 'evt-barrio');
-      expect(event.data.barrio).toBe('PALERMO');
+      expect(event.data.barrio).toBeUndefined();
       expect(event.data.ubicacion).toEqual({
         barrio: 'PALERMO',
         latitud: null,
@@ -100,6 +99,7 @@ describe('emergency-events', () => {
         { busCrypto }
       );
 
+      expect(event.data.barrio).toBeUndefined();
       expect(event.data.latitud).toBeUndefined();
       expect(event.data.longitud).toBeUndefined();
       expect(event.data.ubicacion.barrio).toBe('PALERMO');

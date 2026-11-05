@@ -104,8 +104,8 @@ describe('createProgramarCoberturaHandler', () => {
       causaTipo: 'EVENTO_PUBLICO',
       causaId: 'ev-77',
       ciudadanoId: null,
-      barrio: 'SAN TELMO',
     });
+    expect(event.data.barrio).toBeUndefined();
     expect(event.data.latitud).toBeUndefined();
     expect(event.data.longitud).toBeUndefined();
     expect(event.data.ubicacion).toEqual({

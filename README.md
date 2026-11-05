@@ -270,22 +270,9 @@ Las filas escritas antes de esta versión no tienen cabecera y se desencriptan
 probando las claves del keyring, así que la migración no requiere backfill.
 
 ### Coords cifradas en el bus (`ubicacion.latitud` / `ubicacion.longitud`)
-En `EmergenciaCreada`, las coordenadas exactas van **solo** en `data.ubicacion.latitud` / `data.ubicacion.longitud`, cifradas con **`BUS_LOCATION_ENCRYPTION_KEY`** (distinta a la de DB). No se publican `latitud`/`longitud` en la raíz de `data`.
+En `EmergenciaCreada`, las coordenadas exactas van **solo** en `data.ubicacion.*`, cifradas con **`BUS_LOCATION_ENCRYPTION_KEY`** (distinta a la de DB).
 
-- Algoritmo / wire: el mismo AES-256-GCM versionado (`ELC…`).
-- Plaintext de cada campo: `{"value": <number>}`.
-- Handoff a otros equipos: entregarles `BUS_LOCATION_ENCRYPTION_KEY` (y keyring/`keyId` si aplica) por canal seguro. **No** compartir `LOCATION_ENCRYPTION_KEY`.
-- Snippet Node (consumidor):
-
-```js
-const { createBusLocationCrypto } = require('./src/security/bus-location-crypto');
-const bus = createBusLocationCrypto({
-  keys: { '1': process.env.BUS_LOCATION_ENCRYPTION_KEY },
-  activeKeyId: '1',
-});
-const lat = bus.decryptCoordinate(event.data.ubicacion.latitud);
-const lng = bus.decryptCoordinate(event.data.ubicacion.longitud);
-```
+Guía **autocontenida** para mandar a otros equipos (sin depender del repo): **[docs/bus-ubicacion-para-consumidores.md](docs/bus-ubicacion-para-consumidores.md)**.
 
 ### Retención / minimización
 Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
@@ -590,8 +577,7 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`; pendiente sumar `TRANSITO` y `PREVENTIVA`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
-| `barrio` | string \| null | catálogo oficial CABA (48 barrios), derivado por PIP al crear; lo leen Reclamos y Analítica |
-| `ubicacion.barrio` | string \| null | el mismo valor, anidado para Espacios |
+| `ubicacion.barrio` | string \| null | catálogo oficial CABA (48 barrios), derivado por PIP al crear; en claro. **No** hay `barrio` en la raíz de `data` |
 | `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**, no la de DB). Plaintext JSON `{"value": <number>}`. Wire igual que at-rest (`ELC`…). Sin coords o sin `BUS_LOCATION_ENCRYPTION_KEY` → null. **No** hay `latitud`/`longitud` en la raíz de `data` |
 | `afectaCirculacion` | boolean \| null | null hasta #85 (con `false`, Reclamos descarta el evento) |
 | `causaId`, `causaTipo` | string \| null / enum \| null | null hasta #77/#79/#80 (consumo de eventos externos) |

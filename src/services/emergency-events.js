@@ -75,12 +75,9 @@ function buildEmergencyCreatedEvent(emergency, eventId, options = {}) {
       categoria: emergency.emergencyType ?? null,
       prioridad: toPrioridad(emergency.severity),
       estado: toEstado(emergency.status),
-      // Catálogo oficial CABA (PIP en create / texto solo si matchea).
-      // Plano para Reclamos y Analitica; anidado para Espacios.
-      barrio: emergency.barrio ?? null,
+      // Todo lo espacial vive en ubicacion: barrio (claro) + lat/lng (cifrados).
       ubicacion: {
         barrio: emergency.barrio ?? null,
-        // Ciphertext AES-GCM (clave de bus); no se publican en la raíz de data.
         latitud: encrypted.latitud,
         longitud: encrypted.longitud,
       },
