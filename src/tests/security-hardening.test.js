@@ -71,19 +71,25 @@ describe('resolveDevLoginClaims', () => {
 });
 
 describe('buildEmergencyCreatedEvent', () => {
-  it('omits free-text description from the bus payload', () => {
+  it('omits free-text description and address from the bus payload', () => {
+    // Contrato cerrado 2026-11-02 (issue #48): descripcion, titulo y direccion
+    // NO viajan al bus aunque Analitica tenga columnas (su codigo los deja null).
     const event = buildEmergencyCreatedEvent({
       id: 'e1',
       userId: 'u1',
       description: 'llamar a juan@mail.com',
+      address: 'Av. Corrientes 1234',
       severity: 'critical',
       status: 'PENDING',
       emergencyType: 'PANICO',
     }, 'evt-1');
 
     expect(event.data.description).toBeUndefined();
-    expect(event.data.hasDescription).toBe(true);
-    expect(event.data.userId).toBe('u1');
+    expect(event.data.address).toBeUndefined();
+    expect(event.data.ciudadanoId).toBe('u1');
+    expect(event.data.categoria).toBe('PANICO');
+    expect(event.data.prioridad).toBe('CRITICA');
+    expect(event.data.estado).toBe('PENDIENTE');
   });
 });
 

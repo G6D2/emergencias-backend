@@ -165,8 +165,10 @@ describe('Panic Button API', () => {
       eventId: 'event-1',
       correlationId: savedEmergency.id,
     });
-    expect(event.data.latitude).toBeUndefined();
-    expect(event.data.longitude).toBeUndefined();
+    // Contrato cerrado 2026-11-02: latitud/longitud publicadas como null hasta
+    // que la regla de "mandar solo si afectaCirculacion=true" cierre con Valen.
+    expect(event.data.latitud).toBeNull();
+    expect(event.data.longitud).toBeNull();
   });
 
   describe('POST /api/panic-button', () => {
@@ -359,9 +361,11 @@ describe('Panic Button API', () => {
 
       const saved = await repo.findById(response.body.emergencyId);
       const event = outboxEvents[0].payload(saved, 'event-address-1');
+      // descripcion/titulo/direccion NO van al bus (contrato cerrado 2026-11-02).
       expect(event.data.address).toBeUndefined();
-      expect(event.data.latitude).toBeUndefined();
-      expect(event.data.longitude).toBeUndefined();
+      expect(event.data.direccion).toBeUndefined();
+      expect(event.data.latitud).toBeNull();
+      expect(event.data.longitud).toBeNull();
     });
 
     it('rechaza con 400 un emergencyType fuera del catálogo y no crea nada', async () => {
@@ -416,9 +420,9 @@ describe('Panic Button API', () => {
         type: 'EmergenciaCreada',
         correlationId: saved.id,
         data: {
-          id: saved.id,
+          emergenciaId: saved.id,
           correlationId: saved.id,
-          emergencyType: 'DISTURBIO_EVENTO_MASIVO',
+          categoria: 'DISTURBIO_EVENTO_MASIVO',
         },
       });
     });
@@ -764,13 +768,14 @@ describe('Emergencies API', () => {
       emergency: response.body.data,
       history: { previousStatus: 'PENDING', newStatus: 'VALIDATED' },
     }, 'event-1')).toMatchObject({
-      type: 'EmergenciaEstadoActualizado',
+      type: 'EmergenciaActualizada',
       eventId: 'event-1',
       correlationId: response.body.data.id,
       data: {
-        previousStatus: 'PENDING',
-        newStatus: 'VALIDATED',
-        actor: 'U000999',
+        emergenciaId: response.body.data.id,
+        estadoAnterior: 'PENDIENTE',
+        estadoNuevo: 'VALIDADA',
+        usuarioId: 'U000999',
       },
     });
   });
@@ -849,14 +854,15 @@ describe('Emergencies API', () => {
       emergency: response.body.data,
       history: { previousStatus: 'PENDING', newStatus: 'DISCARDED' },
     }, 'event-2')).toMatchObject({
-      type: 'EmergenciaEstadoActualizado',
+      type: 'EmergenciaActualizada',
       eventId: 'event-2',
       correlationId: response.body.data.id,
       data: {
-        previousStatus: 'PENDING',
-        newStatus: 'DISCARDED',
-        actor: 'U000999',
-        reason: 'Reporte invalido',
+        emergenciaId: response.body.data.id,
+        estadoAnterior: 'PENDIENTE',
+        estadoNuevo: 'DESCARTADA',
+        usuarioId: 'U000999',
+        resolucion: 'Reporte invalido',
       },
     });
   });
@@ -1017,7 +1023,9 @@ describe('Emergencies API', () => {
     expect(response.body.error).toBe('NotFoundError');
   });
 
-  it('allows a dispatcher to close a resolved emergency and stores EmergenciaCerrada', async () => {
+  it('allows a dispatcher to close a resolved emergency and emits EmergenciaActualizada con CERRADA', async () => {
+    // Contrato cerrado 2026-11-02 (issue #48): el cierre viaja como EmergenciaActualizada
+    // con estadoNuevo=CERRADA en lugar de un evento EmergenciaCerrada aparte.
     const sharedRepo = createMockEmergencyRepository();
     const emergencyId = '11111111-1111-4111-8111-111111111111';
     await sharedRepo.create({
@@ -1035,12 +1043,20 @@ describe('Emergencies API', () => {
     expect(response.body.data.status).toBe('CLOSED');
     expect(response.body.data.closedAt).toBeTruthy();
     const outboxEvent = sharedRepo.updateStatusCalls.at(-1).outboxEvent;
-    expect(outboxEvent.topic).toBe('emergencias.cerrada');
-    expect(outboxEvent.payload({ emergency: response.body.data }, 'event-close-1')).toMatchObject({
-      type: 'EmergenciaCerrada',
+    expect(outboxEvent.topic).toBe('emergencias.estado-actualizado');
+    expect(outboxEvent.payload({
+      emergency: response.body.data,
+      history: { previousStatus: 'RESOLVED', newStatus: 'CLOSED' },
+    }, 'event-close-1')).toMatchObject({
+      type: 'EmergenciaActualizada',
       eventId: 'event-close-1',
       correlationId: emergencyId,
-      data: { id: emergencyId, actor: 'D000007', closedAt: response.body.data.closedAt },
+      data: {
+        emergenciaId: emergencyId,
+        estadoAnterior: 'RESUELTA',
+        estadoNuevo: 'CERRADA',
+        usuarioId: 'D000007',
+      },
     });
   });
 

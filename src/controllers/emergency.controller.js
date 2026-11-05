@@ -9,7 +9,7 @@ const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
 const { assertTransition } = require('../domain/emergency-status');
-const { buildEmergencyStatusUpdatedEvent, buildEmergencyClosedEvent } = require('../services/emergency-events');
+const { buildEmergencyUpdatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { isValidSeverity } = require('../domain/severity');
 const { assertUuid } = require('../utils/uuid');
@@ -137,7 +137,7 @@ class EmergencyController {
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
         payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
-          buildEmergencyStatusUpdatedEvent({
+          buildEmergencyUpdatedEvent({
             emergency: savedEmergency,
             history: savedHistory,
             actor,
@@ -190,7 +190,7 @@ class EmergencyController {
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
         payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
-          buildEmergencyStatusUpdatedEvent({
+          buildEmergencyUpdatedEvent({
             emergency: savedEmergency,
             history: savedHistory,
             actor,
@@ -234,7 +234,7 @@ class EmergencyController {
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
         payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
-          buildEmergencyStatusUpdatedEvent({
+          buildEmergencyUpdatedEvent({
             emergency: savedEmergency,
             history: savedHistory,
             actor,
@@ -276,7 +276,7 @@ class EmergencyController {
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
         payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
-          buildEmergencyStatusUpdatedEvent({
+          buildEmergencyUpdatedEvent({
             emergency: savedEmergency,
             history: savedHistory,
             actor,
@@ -306,16 +306,20 @@ class EmergencyController {
 
     assertTransition(emergency.status, 'CLOSED');
 
+    // El contrato cerrado (issue #48 comment 2026-11-02) elimina EmergenciaCerrada
+    // como evento aparte: el cierre viaja como EmergenciaActualizada con estadoNuevo=CERRADA.
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus: 'CLOSED',
       actor,
       outboxEvent: {
-        topic: process.env.TOPIC_EMERGENCIA_CERRADA || 'emergencias.cerrada',
-        payload: ({ emergency: savedEmergency }, eventId) => buildEmergencyClosedEvent({
-          emergency: savedEmergency,
-          actor,
-          eventId,
-        }),
+        topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
+        payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
+          buildEmergencyUpdatedEvent({
+            emergency: savedEmergency,
+            history: savedHistory,
+            actor,
+            eventId,
+          }),
       },
     });
 
