@@ -1,5 +1,20 @@
 const { secureLog, summarizeEventForLog } = require('../security/secure-log');
 
+function resolvePublishSince(raw) {
+  if (raw === null || raw === undefined || raw === '') return null;
+  if (raw instanceof Date) {
+    if (Number.isNaN(raw.getTime())) {
+      throw new Error('OUTBOX_PUBLISH_SINCE invalido: Date no parseable');
+    }
+    return raw;
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`OUTBOX_PUBLISH_SINCE invalido: "${raw}" no es ISO 8601`);
+  }
+  return parsed;
+}
+
 class OutboxPublisher {
   constructor(pool, kafkaService, options = {}) {
     this.pool = pool;
@@ -10,27 +25,53 @@ class OutboxPublisher {
     this.maxBackoffMs = options.maxBackoffMs || Number(process.env.OUTBOX_MAX_BACKOFF_MS || 15 * 60 * 1000);
     this.publishedRetentionMs = options.publishedRetentionMs
       || Number(process.env.OUTBOX_PUBLISHED_RETENTION_HOURS || 168) * 60 * 60 * 1000;
+    // Issue #71: piso temporal al activar el bus. PENDING creados antes de
+    // esta marca se descartan como SKIPPED en skipPendingBefore() y nunca
+    // se reclaman (filtro defensivo en claimBatch por si el saneo no corrio).
+    this.publishSince = resolvePublishSince(
+      options.publishSince !== undefined ? options.publishSince : process.env.OUTBOX_PUBLISH_SINCE
+    );
     this.timer = null;
     this.running = false;
+  }
+
+  async skipPendingBefore() {
+    if (!this.publishSince) return 0;
+    const result = await this.pool.query(
+      `UPDATE outbox_events
+       SET status = 'SKIPPED', locked_at = NULL
+       WHERE status = 'PENDING' AND created_at < $1`,
+      [this.publishSince.toISOString()]
+    );
+    return result.rowCount || 0;
   }
 
   async claimBatch() {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Issue #71: el filtro de publishSince solo aplica a PENDING. Los
+      // PROCESSING-huerfanos (lock vencido > 1min) se siguen liberando
+      // porque son errores operativos ortogonales a la activacion del bus.
+      const since = this.publishSince ? this.publishSince.toISOString() : null;
       const result = await client.query(
         `UPDATE outbox_events
          SET status = 'PROCESSING', locked_at = now(), attempts = attempts + 1
          WHERE id IN (
            SELECT id FROM outbox_events
-           WHERE (status = 'PENDING' AND available_at <= now())
-              OR (status = 'PROCESSING' AND locked_at < now() - interval '1 minute')
+           WHERE (
+             status = 'PENDING'
+             AND available_at <= now()
+             AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+           ) OR (
+             status = 'PROCESSING' AND locked_at < now() - interval '1 minute'
+           )
            ORDER BY created_at
            FOR UPDATE SKIP LOCKED
            LIMIT $1
          )
          RETURNING id, topic, payload, attempts`,
-        [this.batchSize]
+        [this.batchSize, since]
       );
       await client.query('COMMIT');
       return result.rows;
@@ -103,6 +144,18 @@ class OutboxPublisher {
   }
 
   start() {
+    // Issue #71: saneo one-shot al activar el bus. Idempotente: si no hay
+    // publishSince o ya corrio antes, el UPDATE afecta 0 filas.
+    this.skipPendingBefore()
+      .then((skipped) => {
+        if (skipped > 0) {
+          secureLog('info', 'Outbox PENDING previos descartados al activar el bus', {
+            skipped,
+            since: this.publishSince.toISOString(),
+          });
+        }
+      })
+      .catch((error) => secureLog('error', 'Outbox skip-pending failed', { message: error.message }));
     this.runOnce().catch((error) => secureLog('error', 'Outbox poll failed', { message: error.message }));
     this.timer = setInterval(() => {
       this.runOnce().catch((error) => secureLog('error', 'Outbox poll failed', { message: error.message }));
@@ -117,4 +170,4 @@ class OutboxPublisher {
   }
 }
 
-module.exports = { OutboxPublisher };
+module.exports = { OutboxPublisher, resolvePublishSince };
