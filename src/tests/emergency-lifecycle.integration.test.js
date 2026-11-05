@@ -4,10 +4,10 @@
 // historial con actor, oficial ocupado/libre, closed_at y los eventos que
 // quedan en el outbox (contrato del issue #48).
 //
-// Los caminos usados son válidos con y sin el cambio de reglas en curso
-// (validate exige PENDING, return exige DISPATCHED): validate siempre desde
-// PENDING, return siempre desde DISPATCHED. No se afirma assigned_officer_id
-// después de return ni closed_at en cancel/discard, que ese cambio redefine.
+// validate siempre desde PENDING y return siempre desde DISPATCHED. Lo que
+// agregó el sweep de emergencias (#75: validate/return con estado de origen,
+// assigned_officer_id en NULL al devolver, closed_at en cancel/discard y V24)
+// se verifica en emergency-rules-v24.integration.test.js.
 
 const { getPool, closePool } = require('../db/pool');
 const {

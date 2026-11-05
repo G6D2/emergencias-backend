@@ -144,11 +144,9 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     const id = await createDispatched();
     await repository.updateStatus(id, { newStatus: 'VALIDATED', actor: 'D1', reason: 'devuelta' });
 
-    // Hoy la devolución libera al oficial pero NO limpia assigned_officer_id
-    // (ver nota en el PR), así que el permiso todavía lo reconoce y el que
-    // frena es el dominio: VALIDATED → EN_ROUTE no existe (409). Si algún día
-    // la devolución limpia la asignación, este caso pasa a ser 404.
-    await request(appAs(OFFICER)).patch(`/api/emergencies/${id}/en-route`).expect(409);
+    // La devolución libera al oficial y limpia assigned_officer_id: para el
+    // permiso la emergencia ya no es suya, así que responde 404 (no 409).
+    await request(appAs(OFFICER)).patch(`/api/emergencies/${id}/en-route`).expect(404);
     expect(await statusOf(id)).toBe('VALIDATED');
   });
 

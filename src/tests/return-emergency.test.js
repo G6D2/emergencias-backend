@@ -201,3 +201,84 @@ describe('PATCH /api/emergencies/:id/return', () => {
     expect(res.body.error).toBe('ForbiddenError');
   });
 });
+
+// ---------------------------------------------------------------------------
+// /validate y /return dejan de ser intercambiables: los dos llegan a
+// VALIDATED, pero validar solo sale de PENDING y devolver solo de DISPATCHED.
+// ---------------------------------------------------------------------------
+
+describe('PATCH /api/emergencies/:id/validate vs /return', () => {
+  it('validate sobre una DISPATCHED responde 409 y no libera al oficial', async () => {
+    const repo = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp(DISPATCHER, repo);
+    const id = await createValidateAndAssign(repo);
+    const updateStatus = jest.spyOn(repo, 'updateStatus');
+
+    const res = await request(dispatcherApp)
+      .patch(`/api/emergencies/${id}/validate`)
+      .expect(409);
+
+    expect(res.body).toEqual({
+      error: 'ConflictError',
+      message: `Emergency ${id} is DISPATCHED, expected PENDING`,
+    });
+    expect(updateStatus).not.toHaveBeenCalled();
+    expect(repo.officers.get(FAKE_OFFICER_ID)).toBe('ocupado');
+    expect((await repo.findById(id)).assignedOfficerId).toBe(FAKE_OFFICER_ID);
+  });
+
+  it('return sobre una PENDING responde 409', async () => {
+    const repo = createMockEmergencyRepository();
+    const createRes = await request(createTestApp(CITIZEN_A, repo))
+      .post('/api/panic-button')
+      .send({ location: { latitude: -34.6037, longitude: -58.3816 } })
+      .expect(201);
+
+    const res = await request(createTestApp(DISPATCHER, repo))
+      .patch(`/api/emergencies/${createRes.body.emergencyId}/return`)
+      .send({})
+      .expect(409);
+
+    expect(res.body.message).toBe(`Emergency ${createRes.body.emergencyId} is PENDING, expected DISPATCHED`);
+  });
+
+  it('cada endpoint le pide al repository que revalide su estado de origen con la fila bloqueada', async () => {
+    const repo = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp(DISPATCHER, repo);
+    const updateStatus = jest.spyOn(repo, 'updateStatus');
+
+    const id = await createValidateAndAssign(repo);
+    await request(dispatcherApp).patch(`/api/emergencies/${id}/return`).send({}).expect(200);
+
+    expect(updateStatus.mock.calls.map(([, options]) => [options.newStatus, options.requireStatus])).toEqual([
+      ['VALIDATED', 'PENDING'],
+      ['VALIDATED', 'DISPATCHED'],
+    ]);
+  });
+
+  it('return responde 400 si reason no es string', async () => {
+    const repo = createMockEmergencyRepository();
+    const id = await createValidateAndAssign(repo);
+
+    const res = await request(createTestApp(DISPATCHER, repo))
+      .patch(`/api/emergencies/${id}/return`)
+      .send({ reason: 123 })
+      .expect(400);
+
+    expect(res.body.error).toBe('ValidationError');
+    expect(repo.officers.get(FAKE_OFFICER_ID)).toBe('ocupado');
+  });
+
+  it('return guarda el motivo con la PII redactada', async () => {
+    const repo = createMockEmergencyRepository();
+    const id = await createValidateAndAssign(repo);
+    const updateStatus = jest.spyOn(repo, 'updateStatus');
+
+    await request(createTestApp(DISPATCHER, repo))
+      .patch(`/api/emergencies/${id}/return`)
+      .send({ reason: 'El oficial avisó por el 11 4567-8901 que no llega' })
+      .expect(200);
+
+    expect(updateStatus.mock.calls[0][1].reason).toBe('El oficial avisó por el [tel] que no llega');
+  });
+});
