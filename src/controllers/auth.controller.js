@@ -1,4 +1,7 @@
+const { randomUUID } = require('node:crypto');
+const bcrypt = require('bcryptjs');
 const { ValidationError, ConflictError, UnauthorizedError } = require('../errors/app-errors');
+const { BCRYPT_ROUNDS } = require('../repositories/auth-user.repository');
 
 // Anclado a forma típica de email; evita cuantificadores anidados (Sonar S5852).
 const EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
@@ -17,6 +20,13 @@ function resolveDisplayName(body) {
   }
   return undefined;
 }
+
+// Hash bcrypt de relleno, con el mismo costo que los reales: si el correo no
+// existe, el login compara igual contra este hash, así el 401 tarda lo mismo
+// que con una contraseña incorrecta y no se pueden enumerar cuentas midiendo
+// la respuesta. Se genera al cargar el módulo (una vez, en el arranque) para
+// que el primer login ya lo tenga listo.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(randomUUID(), BCRYPT_ROUNDS);
 
 class AuthController {
   constructor(authUserRepository, tokenIssuer) {
@@ -84,12 +94,9 @@ class AuthController {
     }
 
     const found = await this.authUserRepository.findByEmail(email);
-    if (!found) {
-      throw new UnauthorizedError('Correo o contraseña incorrectos.');
-    }
-
-    const ok = await this.authUserRepository.verifyPassword(found.passwordHash, password);
-    if (!ok) {
+    const passwordHash = (found && found.passwordHash) || DUMMY_PASSWORD_HASH;
+    const ok = await this.authUserRepository.verifyPassword(passwordHash, password);
+    if (!found || !ok) {
       throw new UnauthorizedError('Correo o contraseña incorrectos.');
     }
 

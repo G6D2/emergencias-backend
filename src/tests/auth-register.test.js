@@ -2,7 +2,7 @@ const request = require('supertest');
 const bcrypt = require('bcryptjs');
 const { createAuthSetup } = require('../auth/setup');
 const { createApp } = require('../app');
-const { AuthUserRepository } = require('../repositories/auth-user.repository');
+const { AuthUserRepository, BCRYPT_ROUNDS } = require('../repositories/auth-user.repository');
 
 const mockKafka = {
   publishEvent: async () => {},
@@ -153,6 +153,35 @@ describe('AUTH_MODE=local register/login', () => {
       .send({ email: 'wrong@example.com', password: 'otra-cosa' });
     expect(bad.status).toBe(401);
     expect(bad.body.error).toBe('UnauthorizedError');
+  });
+
+  it('POST /auth/login answers an unknown email exactly like a wrong password (no account enumeration)', async () => {
+    await request(app)
+      .post('/auth/register')
+      .send({ email: 'existe@example.com', password: 'secreto12' })
+      .expect(201);
+    const verifySpy = jest.spyOn(authUsers, 'verifyPassword');
+
+    try {
+      const wrongPassword = await request(app)
+        .post('/auth/login')
+        .send({ email: 'existe@example.com', password: 'otra-cosa' });
+      const unknownEmail = await request(app)
+        .post('/auth/login')
+        .send({ email: 'no-existe@example.com', password: 'otra-cosa' });
+
+      expect(unknownEmail.status).toBe(401);
+      expect(unknownEmail.body).toEqual(wrongPassword.body);
+
+      // Con el correo inexistente igual se paga un bcrypt.compare, y con el
+      // mismo costo que los hashes reales.
+      expect(verifySpy).toHaveBeenCalledTimes(2);
+      const [dummyHash, password] = verifySpy.mock.calls[1];
+      expect(password).toBe('otra-cosa');
+      expect(bcrypt.getRounds(dummyHash)).toBe(BCRYPT_ROUNDS);
+    } finally {
+      verifySpy.mockRestore();
+    }
   });
 
   it('keeps POST /auth/dev/login for scripts', async () => {

@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/G6D2/emergencias-backend/blob/main/docs/contratos/emergencia-actualizada.schema.json",
+  "title": "com.citypass.emergencias.EmergenciaActualizada",
+  "description": "Evento que se encola en outbox_events.payload en cada cambio de estado de una emergencia (incluye cancelación, descarte, devolución y cierre: EmergenciaCerrada salió del contrato). Contrato cerrado en G6D2/demo-repository#48 (comentario del 2026-11-02); campos tal como los arma buildEmergencyUpdatedEvent en src/services/emergency-events.js. Lo valida src/tests/outbox-contract.integration.test.js contra filas reales del outbox.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "eventId", "correlationId", "data"],
+  "properties": {
+    "type": { "const": "EmergenciaActualizada" },
+    "eventId": {
+      "description": "Id del evento. Es la PK de la fila en outbox_events.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "correlationId": { "$ref": "#/definitions/correlationId" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "emergenciaId",
+        "estadoAnterior",
+        "estadoNuevo",
+        "updatedAt",
+        "resueltoAt",
+        "usuarioId",
+        "asignadoA",
+        "areaResponsable",
+        "resolucion",
+        "prioridad",
+        "correlationId"
+      ],
+      "properties": {
+        "emergenciaId": { "type": "string", "format": "uuid" },
+        "estadoAnterior": { "$ref": "#/definitions/estado" },
+        "estadoNuevo": { "$ref": "#/definitions/estado" },
+        "updatedAt": { "$ref": "#/definitions/fechaUtc" },
+        "resueltoAt": {
+          "description": "Solo en la transición a RESUELTA.",
+          "anyOf": [{ "$ref": "#/definitions/fechaUtc" }, { "type": "null" }]
+        },
+        "usuarioId": {
+          "description": "Quién hizo el cambio (sub del token, o el actor del listener en las externas).",
+          "type": ["string", "null"]
+        },
+        "asignadoA": {
+          "description": "Oficial asignado, solo en DESPACHADA. Analítica pide un evento por recurso (#85).",
+          "type": ["string", "null"]
+        },
+        "areaResponsable": {
+          "description": "Solo en DESPACHADA; null hasta #85.",
+          "type": ["string", "null"]
+        },
+        "resolucion": {
+          "description": "Motivo del cambio (reason del request).",
+          "type": ["string", "null"]
+        },
+        "prioridad": {
+          "enum": ["BAJA", "MEDIA", "ALTA", "CRITICA", null]
+        },
+        "correlationId": { "$ref": "#/definitions/correlationId" }
+      },
+      "allOf": [
+        {
+          "description": "resueltoAt va solo (y siempre) en RESUELTA.",
+          "if": { "properties": { "estadoNuevo": { "const": "RESUELTA" } } },
+          "then": { "properties": { "resueltoAt": { "type": "string" } } },
+          "else": { "properties": { "resueltoAt": { "type": "null" } } }
+        },
+        {
+          "description": "asignadoA es obligatorio en DESPACHADA; fuera de DESPACHADA, asignadoA y areaResponsable van null.",
+          "if": { "properties": { "estadoNuevo": { "const": "DESPACHADA" } } },
+          "then": { "properties": { "asignadoA": { "type": "string", "minLength": 1 } } },
+          "else": {
+            "properties": {
+              "asignadoA": { "type": "null" },
+              "areaResponsable": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "correlationId": {
+      "description": "El que llega, aunque no sea uuid. En las altas propias es el id de la emergencia.",
+      "type": "string",
+      "minLength": 1
+    },
+    "estado": {
+      "description": "Estado en español (la base sigue en inglés; se traduce al armar el evento).",
+      "type": "string",
+      "enum": [
+        "PENDIENTE",
+        "VALIDADA",
+        "DESPACHADA",
+        "EN_CAMINO",
+        "EN_LUGAR",
+        "RESUELTA",
+        "CERRADA",
+        "DESCARTADA",
+        "CANCELADA"
+      ]
+    },
+    "fechaUtc": {
+      "description": "ISO-8601 en UTC (sufijo Z), no milisegundos.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  }
+}
