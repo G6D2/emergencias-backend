@@ -1,7 +1,7 @@
 const { ValidationError } = require('../errors/app-errors');
 
 /** Grupos que el login de desarrollo puede emitir. */
-const ALLOWED_DEV_GROUPS = new Set(['citizen', 'dispatcher']);
+const ALLOWED_DEV_GROUPS = new Set(['citizen', 'dispatcher', 'officer']);
 
 /**
  * Sujetos demo permitidos cuando DEV_LOGIN_STRICT / production.
@@ -26,6 +26,20 @@ const DEV_LOGIN_ALLOWLIST = Object.freeze({
   'DISP-Demo001': {
     preferred_username: 'Dispatcher Demo',
     groups: ['dispatcher'],
+    has_antipanic_button: false,
+  },
+  // Oficiales demo: el sub es el id del catálogo `officers` (V11), porque el
+  // permiso de avanzar estado compara sub === assigned_officer_id
+  // (canAdvanceEmergencyStatus). Dos oficiales permiten demostrar que uno no
+  // puede tocar la emergencia del otro.
+  'of-001': {
+    preferred_username: 'Oficial Carlos Gómez',
+    groups: ['officer'],
+    has_antipanic_button: false,
+  },
+  'of-002': {
+    preferred_username: 'Oficial Mariana López',
+    groups: ['officer'],
     has_antipanic_button: false,
   },
 });

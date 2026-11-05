@@ -5,6 +5,7 @@
 const GROUPS = {
   CITIZEN: 'citizen',
   DISPATCHER: 'dispatcher',
+  OFFICER: 'officer',
 };
 
 /**
@@ -18,6 +19,9 @@ const GROUP_PERMISSIONS = {
   ],
   [GROUPS.DISPATCHER]: [
     'emergency:read-all',
+  ],
+  [GROUPS.OFFICER]: [
+    'emergency:update-status-assigned',
   ],
 };
 

@@ -468,7 +468,18 @@ class EmergencyRepository {
   // Si falla cualquiera de los dos pasos, hace ROLLBACK. La transición se
   // valida acá (además de en los controllers) con la fila bloqueada, así
   // ningún endpoint futuro puede saltarse el flujo ni ganar una carrera.
-  async updateStatus(id, { newStatus, actor = null, reason = null, outboxEvent = null }) {
+  /**
+   * @param {string} id
+   * @param {object} options
+   * @param {string|null} [options.requireAssignedOfficerId] - si viene, la
+   *   transición solo se aplica si ese oficial sigue asignado al momento de
+   *   tomar el lock de la fila. Cierra la carrera "se comprobó el oficial,
+   *   pero el dispatcher devolvió y reasignó antes del UPDATE". Si no
+   *   coincide responde NotFound, igual que una emergencia ajena.
+   */
+  async updateStatus(id, {
+    newStatus, actor = null, reason = null, outboxEvent = null, requireAssignedOfficerId = null,
+  }) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -482,6 +493,9 @@ class EmergencyRepository {
       }
       const previousStatus = current.rows[0].status;
       const assignedOfficerId = current.rows[0].assigned_officer_id;
+      if (requireAssignedOfficerId !== null && assignedOfficerId !== requireAssignedOfficerId) {
+        throw new NotFoundError(`Emergency with ID ${id} not found`);
+      }
       assertTransition(previousStatus, newStatus);
 
       const updated = await client.query(
