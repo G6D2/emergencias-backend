@@ -126,7 +126,7 @@ describe('EventListener', () => {
     await expect(listener.start()).resolves.toBe(true);
 
     expect(kafka.consumer).toHaveBeenCalledWith({ groupId: 'com.citypass.emergencias.TestListener' });
-    expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 'espacios.evento', fromBeginning: false });
+    expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 'espacios.evento', fromBeginning: true });
     expect(consumer.run).toHaveBeenCalledTimes(1);
   });
 
@@ -247,6 +247,78 @@ describe('EventListener', () => {
     await listener.stop();
     expect(consumer.disconnect).toHaveBeenCalledTimes(1);
     expect(listener.consumer).toBeNull();
+  });
+});
+
+describe('EventListener: arranque sin offset y piso EDA_CONSUMER_SINCE', () => {
+  const ENV_KEYS = ['EDA_CONSUMER_FROM_BEGINNING', 'EDA_CONSUMER_SINCE'];
+  const saved = {};
+
+  beforeEach(() => {
+    ENV_KEYS.forEach((k) => { saved[k] = process.env[k]; delete process.env[k]; });
+  });
+
+  afterEach(() => {
+    ENV_KEYS.forEach((k) => {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    });
+  });
+
+  const at = (iso) => String(new Date(iso).getTime());
+  const message = (iso, value = { metadata: { eventId: 'e1' } }) => ({ ...toMessage(value), offset: '7', timestamp: at(iso) });
+
+  it('sin offset commiteado lee desde el principio por default', () => {
+    expect(new TestListener(buildKafka().kafka, { topic: 't' }).fromBeginning).toBe(true);
+  });
+
+  it('EDA_CONSUMER_FROM_BEGINNING=false vuelve a arrancar en el final del topic', async () => {
+    process.env.EDA_CONSUMER_FROM_BEGINNING = 'false';
+    const { kafka, consumer } = buildKafka();
+    await new TestListener(kafka, { topic: 't' }).start();
+    expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 't', fromBeginning: false });
+  });
+
+  it('la opción del constructor pisa a la variable de entorno', () => {
+    process.env.EDA_CONSUMER_FROM_BEGINNING = 'false';
+    expect(new TestListener(buildKafka().kafka, { topic: 't', fromBeginning: true }).fromBeginning).toBe(true);
+  });
+
+  it('un EDA_CONSUMER_SINCE que no es fecha falla al construir, no al primer mensaje', () => {
+    process.env.EDA_CONSUMER_SINCE = 'ayer';
+    expect(() => new TestListener(buildKafka().kafka, { topic: 't' })).toThrow(/EDA_CONSUMER_SINCE invalido/);
+  });
+
+  it('saltea sin decodificar ni procesar un mensaje anterior al piso', async () => {
+    process.env.EDA_CONSUMER_SINCE = '2026-11-05T15:00:00Z';
+    const decoder = { decode: jest.fn() };
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', decoder });
+
+    await expect(listener.onMessage(message('2026-11-02T12:00:00Z'))).resolves.toBeNull();
+
+    expect(decoder.decode).not.toHaveBeenCalled();
+    expect(listener.handled).toEqual([]);
+  });
+
+  it('procesa los mensajes desde el piso en adelante', async () => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', consumeSince: '2026-11-05T15:00:00Z' });
+
+    await listener.onMessage(message('2026-11-05T15:00:00Z', { metadata: { eventId: 'justo' } }));
+    await listener.onMessage(message('2026-11-05T18:30:00Z', { metadata: { eventId: 'despues' } }));
+
+    expect(listener.handled.map((e) => e.metadata.eventId)).toEqual(['justo', 'despues']);
+  });
+
+  it('sin piso procesa todo, aunque el mensaje sea viejo', async () => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't' });
+    await listener.onMessage(message('2026-10-01T00:00:00Z'));
+    expect(listener.handled).toHaveLength(1);
+  });
+
+  it('un mensaje sin timestamp se procesa aunque haya piso', async () => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', consumeSince: '2026-11-05T15:00:00Z' });
+    await listener.onMessage(toMessage({ metadata: { eventId: 'e1' } }));
+    expect(listener.handled).toHaveLength(1);
   });
 });
 
