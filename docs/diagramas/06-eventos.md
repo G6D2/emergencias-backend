@@ -115,6 +115,7 @@ Si preguntan "¿los eventos salen en orden cuando prende Kafka?": **no garantiza
 
 ## Fuente en el código
 
+- `asyncapi.yaml` (spec AsyncAPI del contrato vigente, validado contra los builders en `src/tests/asyncapi.test.js`)
 - `src/services/emergency-events.js` (builders de los 4 eventos, incluido `buildEmergencyPrioritizedEvent`)
 - `src/repositories/emergency.repository.js` (`insertOutboxEvent` — genera `eventId`, arma el `INSERT` a `outbox_events`)
 - `src/repositories/incident.repository.js` (`applyScoringDecision` — decide si notifica comparando `previousPriority` vs `priority`)
