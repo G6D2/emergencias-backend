@@ -59,6 +59,10 @@ function mapEmergency(row, locationCrypto) {
     assignedOfficer: row.assigned_officer_name || null,
     incidentId: row.incident_id,
     emergencyType: row.emergency_type,
+    source: row.source ?? 'INTERNAL',
+    requiresManualValidation: Boolean(row.requires_manual_validation),
+    causaTipo: row.causa_tipo ?? null,
+    causaId: row.causa_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
@@ -134,13 +138,14 @@ function mapAccessAudit(row) {
   };
 }
 
-// INSERT compartido por las dos ramas de create() (sin/con outbox).
-// correlation_id cae en el propio id si no viene (tarea #58).
+// INSERT compartido por las ramas de create() (sin/con outbox, con transacción
+// propia o del caller). correlation_id cae en el propio id si no viene (tarea #58).
 const INSERT_SQL = `INSERT INTO emergencies (
      id, correlation_id, user_id, latitude, longitude, location_encrypted,
-     description, severity, emergency_type, status
+     description, severity, emergency_type, status,
+     source, requires_manual_validation, causa_tipo, causa_id
    )
-   VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'))
+   VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'), $9, $10, $11, $12)
    RETURNING *`;
 
 // Repository de persistencia de emergencies.
@@ -151,11 +156,22 @@ class EmergencyRepository {
     this.locationCrypto = options.locationCrypto || createLocationCrypto();
   }
 
+  // source/causa vienen de las emergencias que crea el listener de eventos
+  // externos (ADR #25); el alta ciudadana usa los defaults. Si se pasa `client`,
+  // el INSERT y el outbox corren en la transacción del caller (la del
+  // OutcomeFactory) y no se abre una propia.
   async create({
     id, correlationId, userId, latitude, longitude, address, description, severity, emergencyType, status,
-    outboxEvent = null,
+    source = 'INTERNAL', requiresManualValidation = false, causaTipo = null, causaId = null,
+    outboxEvent = null, client: externalClient = null,
   }) {
-    const locationEncrypted = this.locationCrypto.encryptLocation({ latitude, longitude, address });
+    // Una emergencia externa puede llegar sin ubicación (queda para validación
+    // manual): sin lat/lng no hay nada que cifrar.
+    const hasLocation = latitude !== null && latitude !== undefined
+      && longitude !== null && longitude !== undefined;
+    const locationEncrypted = hasLocation
+      ? this.locationCrypto.encryptLocation({ latitude, longitude, address })
+      : null;
     const insertValues = [
       id,
       correlationId || id,
@@ -167,7 +183,18 @@ class EmergencyRepository {
       // de V10): un alias del front llega al INSERT ya como canónico.
       assertEmergencyType(emergencyType),
       status || null,
+      source,
+      Boolean(requiresManualValidation),
+      causaTipo,
+      causaId,
     ];
+
+    if (externalClient) {
+      const result = await externalClient.query(INSERT_SQL, insertValues);
+      const emergency = mapEmergency(result.rows[0], this.locationCrypto);
+      if (outboxEvent) await this.insertOutboxEvent(externalClient, outboxEvent, emergency);
+      return emergency;
+    }
 
     if (!outboxEvent) {
       const result = await this.pool.query(INSERT_SQL, insertValues);
@@ -476,76 +503,104 @@ class EmergencyRepository {
    *   tomar el lock de la fila. Cierra la carrera "se comprobó el oficial,
    *   pero el dispatcher devolvió y reasignó antes del UPDATE". Si no
    *   coincide responde NotFound, igual que una emergencia ajena.
+   * @param {object|null} [options.client] - con `client`, la transición corre
+   *   en la transacción del caller (la del OutcomeFactory) sin abrir una propia.
    */
   async updateStatus(id, {
     newStatus, actor = null, reason = null, outboxEvent = null, requireAssignedOfficerId = null,
+    client: externalClient = null,
   }) {
+    const options = { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId };
+    if (externalClient) {
+      return this.applyStatusUpdate(externalClient, id, options);
+    }
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-
-      const current = await client.query(
-        'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
-        [id]
-      );
-      if (current.rows.length === 0) {
-        throw new NotFoundError(`Emergency with ID ${id} not found`);
-      }
-      const previousStatus = current.rows[0].status;
-      const assignedOfficerId = current.rows[0].assigned_officer_id;
-      if (requireAssignedOfficerId !== null && assignedOfficerId !== requireAssignedOfficerId) {
-        throw new NotFoundError(`Emergency with ID ${id} not found`);
-      }
-      assertTransition(previousStatus, newStatus);
-
-      const updated = await client.query(
-        `UPDATE emergencies
-         SET status = $1,
-             updated_at = now(),
-             closed_at = CASE WHEN $1 = 'CLOSED' THEN now() ELSE closed_at END
-         WHERE id = $2
-         RETURNING *`,
-        [newStatus, id]
-      );
-
-      const history = await client.query(
-        `INSERT INTO emergency_status_history (emergency_id, previous_status, new_status, actor, reason)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-        [id, previousStatus, newStatus, actor, reason]
-      );
-
-      // Al cancelar, cerrar o devolver a VALIDATED, el oficial asignado vuelve a disponible
-      // en la misma transacción (si no, se agotan en demo y reasignar el mismo da 409).
-      if (
-        assignedOfficerId
-        && (newStatus === 'CANCELLED' || newStatus === 'CLOSED' || newStatus === 'VALIDATED')
-      ) {
-        await client.query(
-          `UPDATE officers SET status = 'disponible', updated_at = now()
-           WHERE id = $1 AND status = 'ocupado'`,
-          [assignedOfficerId]
-        );
-      }
-
-      if (outboxEvent) {
-        await this.insertOutboxEvent(client, outboxEvent, {
-          emergency: mapEmergency(updated.rows[0], this.locationCrypto),
-          history: mapHistoryEntry(history.rows[0]),
-        });
-      }
-
+      const result = await this.applyStatusUpdate(client, id, options);
       await client.query('COMMIT');
-
-      return {
-        emergency: mapEmergency(updated.rows[0], this.locationCrypto),
-        history: mapHistoryEntry(history.rows[0]),
-      };
+      return result;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
     } finally {
       client.release();
     }
+  }
+
+  async applyStatusUpdate(client, id, { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId = null }) {
+    const current = await client.query(
+      'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
+      [id]
+    );
+    if (current.rows.length === 0) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+    const previousStatus = current.rows[0].status;
+    const assignedOfficerId = current.rows[0].assigned_officer_id;
+    if (requireAssignedOfficerId !== null && assignedOfficerId !== requireAssignedOfficerId) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
+    assertTransition(previousStatus, newStatus);
+
+    const updated = await client.query(
+      `UPDATE emergencies
+       SET status = $1,
+           updated_at = now(),
+           closed_at = CASE WHEN $1 = 'CLOSED' THEN now() ELSE closed_at END
+       WHERE id = $2
+       RETURNING *`,
+      [newStatus, id]
+    );
+
+    const history = await client.query(
+      `INSERT INTO emergency_status_history (emergency_id, previous_status, new_status, actor, reason)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [id, previousStatus, newStatus, actor, reason]
+    );
+
+    // Al cancelar, cerrar o devolver a VALIDATED, el oficial asignado vuelve a disponible
+    // en la misma transacción (si no, se agotan en demo y reasignar el mismo da 409).
+    if (
+      assignedOfficerId
+      && (newStatus === 'CANCELLED' || newStatus === 'CLOSED' || newStatus === 'VALIDATED')
+    ) {
+      await client.query(
+        `UPDATE officers SET status = 'disponible', updated_at = now()
+         WHERE id = $1 AND status = 'ocupado'`,
+        [assignedOfficerId]
+      );
+    }
+
+    if (outboxEvent) {
+      await this.insertOutboxEvent(client, outboxEvent, {
+        emergency: mapEmergency(updated.rows[0], this.locationCrypto),
+        history: mapHistoryEntry(history.rows[0]),
+      });
+    }
+
+    return {
+      emergency: mapEmergency(updated.rows[0], this.locationCrypto),
+      history: mapHistoryEntry(history.rows[0]),
+    };
+  }
+
+  // Emergencias nacidas de una causa externa (p. ej. la cobertura preventiva
+  // de un evento público). FOR UPDATE: corre dentro de la transacción del
+  // OutcomeFactory y evita que dos entregas del mismo evento creen o cancelen
+  // en paralelo.
+  async findByCausa(client, { causaTipo, causaId, emergencyType = null }) {
+    const executor = client || this.pool;
+    const result = await executor.query(
+      `SELECT id, status, emergency_type
+       FROM emergencies
+       WHERE causa_tipo = $1 AND causa_id = $2
+         AND ($3::text IS NULL OR emergency_type = $3)
+       ORDER BY created_at
+       FOR UPDATE`,
+      [causaTipo, causaId, emergencyType]
+    );
+    return result.rows.map((row) => ({ id: row.id, status: row.status, emergencyType: row.emergency_type }));
   }
 
   /**

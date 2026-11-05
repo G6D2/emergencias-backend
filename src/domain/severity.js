@@ -28,6 +28,7 @@ const SEVERITY_BY_TYPE = Object.freeze({
   DISTURBIO_EVENTO_MASIVO: 'medium',
   INFRAESTRUCTURA: 'medium',
   OTRO: 'low',
+  PREVENTIVA: 'low',
 });
 
 /**

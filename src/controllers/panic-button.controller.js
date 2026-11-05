@@ -63,6 +63,9 @@ class PanicButtonController {
     // Catálogo cerrado (tarea #44): un valor inválido corta con 400. Si el
     // cliente no manda tipo, es el botón SOS: PANICO.
     const emergencyType = assertEmergencyType(payload.emergencyType) || 'PANICO';
+    if (emergencyType === 'PREVENTIVA') {
+      throw new ValidationError('emergencyType PREVENTIVA la crea el sistema, no se puede reportar');
+    }
 
     // Decisión de producto: la severidad no la elige quien reporta. Se
     // deriva del emergencyType (src/domain/severity.js); un `severity` en el

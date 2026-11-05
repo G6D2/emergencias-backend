@@ -15,6 +15,7 @@ describe('emergency-type domain', () => {
       'DISTURBIO_EVENTO_MASIVO',
       'OTRO',
       'PANICO',
+      'PREVENTIVA',
     ]);
     expect(Object.isFrozen(EMERGENCY_TYPES)).toBe(true);
     expect(() => EMERGENCY_TYPES.push('HACK')).toThrow();
@@ -102,7 +103,7 @@ describe('emergency-type domain', () => {
         statusCode: 400,
       }));
       expect(() => assertEmergencyType('flood')).toThrow(
-        'MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO'
+        'MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO, PREVENTIVA'
       );
       expect(() => assertEmergencyType(42)).toThrow(/Invalid emergencyType/);
     });

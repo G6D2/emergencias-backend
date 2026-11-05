@@ -16,7 +16,8 @@ jest.mock('kafkajs', () => ({
   })),
 }));
 
-const { KafkaService } = require('../services/kafka.service');
+const { Kafka } = require('kafkajs');
+const { KafkaService, saslFromEnv } = require('../services/kafka.service');
 const { ServiceUnavailableError } = require('../errors/app-errors');
 
 describe('KafkaService', () => {
@@ -120,3 +121,57 @@ describe('KafkaService', () => {
     expect(mockProducer.disconnect).not.toHaveBeenCalled();
   });
 });
+
+describe('saslFromEnv (SASL/OAUTHBEARER contra el broker del gateway)', () => {
+  it('sin secreto no configura SASL', () => {
+    expect(saslFromEnv({})).toBeNull();
+  });
+
+  it('con secreto usa oauthbearer y pide el token al cliente', async () => {
+    const authClient = { getToken: jest.fn().mockResolvedValue('jwt-1') };
+    const sasl = saslFromEnv({ EDA_OAUTH_CLIENT_SECRET: 's' }, authClient);
+
+    expect(sasl.mechanism).toBe('oauthbearer');
+    await expect(sasl.oauthBearerProvider()).resolves.toEqual({ value: 'jwt-1' });
+    expect(authClient.getToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('por default pide el token al Login Federado con el cliente grupo5', async () => {
+    const fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ access_token: 'jwt-2', expires_in: 900 }),
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = fetch;
+    try {
+      const sasl = saslFromEnv({ EDA_OAUTH_CLIENT_SECRET: 'secreto' });
+      await expect(sasl.oauthBearerProvider()).resolves.toEqual({ value: 'jwt-2' });
+    } finally {
+      globalThis.fetch = original;
+    }
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe('https://api.citypass-login.pp.ua/oauth/token');
+    expect(init.headers.Authorization).toBe(`Basic ${Buffer.from('grupo5:secreto').toString('base64')}`);
+    expect(init.body).toBe('grant_type=client_credentials');
+  });
+
+  it('KafkaService pasa sasl y ssl a kafkajs solo si están configurados', () => {
+    const env = { ...process.env };
+    try {
+      delete process.env.EDA_OAUTH_CLIENT_SECRET;
+      delete process.env.KAFKA_SSL;
+      new KafkaService({ enabled: false });
+      expect(Kafka.mock.calls.at(-1)[0].sasl).toBeUndefined();
+      expect(Kafka.mock.calls.at(-1)[0].ssl).toBeUndefined();
+
+      process.env.EDA_OAUTH_CLIENT_SECRET = 's';
+      process.env.KAFKA_SSL = 'true';
+      new KafkaService({ enabled: false, authClient: { getToken: jest.fn() } });
+      expect(Kafka.mock.calls.at(-1)[0].sasl.mechanism).toBe('oauthbearer');
+      expect(Kafka.mock.calls.at(-1)[0].ssl).toBe(true);
+    } finally {
+      process.env = env;
+    }
+  });
+});
+

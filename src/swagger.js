@@ -279,7 +279,8 @@ const options = {
             },
             emergencyType: {
               type: 'string',
-              enum: [...EMERGENCY_TYPES],
+              // PREVENTIVA la crea solo el sistema (cobertura preventiva).
+              enum: EMERGENCY_TYPES.filter((type) => type !== 'PREVENTIVA'),
               default: 'PANICO',
               example: 'INCENDIO',
               description: 'Tipo de emergencia. Si se omite, PANICO (botón SOS). '

@@ -14,7 +14,11 @@ const { startIncidentDetectionJob } = require('./services/incident-detection-job
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher } = require('./services/outbox-publisher');
-const { createListeners } = require('./listeners');
+const { createListeners, OutcomeFactory } = require('./listeners');
+const { createEventDecoder, registryFromEnv } = require('./listeners/event-decoder');
+const { EventosProcesadosRepository } = require('./repositories/eventos-procesados.repository');
+const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
+const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/cancelar-cobertura.handler');
 
 const PORT = process.env.PORT || 3000;
 
@@ -41,7 +45,17 @@ async function start() {
 
   // Listeners de eventos externos. Apagados por default: se prenden con
   // KAFKA_CONSUMER_ENABLED=true (cada uno necesita ademas su topic).
-  const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true' ? createListeners(kafkaService.kafka) : [];
+  const eventosProcesadosRepo = new EventosProcesadosRepository(pool);
+  const outcomeFactory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
+  outcomeFactory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository }));
+  outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository }));
+
+  const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true'
+    ? createListeners(kafkaService.kafka, {
+      factory: outcomeFactory,
+      decoder: createEventDecoder({ registry: registryFromEnv() }),
+    })
+    : [];
   for (const listener of listeners) {
     listener.start().catch((err) => {
       secureLog('error', 'Listener fallo al arrancar', { listener: listener.constructor.name, message: err.message });
