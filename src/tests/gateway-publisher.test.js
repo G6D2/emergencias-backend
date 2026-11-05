@@ -200,6 +200,30 @@ describe('GatewayPublisher (issue #74)', () => {
     });
   });
 
+  describe('publishEvent — tipos fuera del contrato', () => {
+    it('EmergenciaPriorizada no llama al gateway y devuelve { skipped: true }', async () => {
+      const calls = [];
+      const auth = createAuthClient();
+      const pub = new GatewayPublisher(auth, { baseUrl: BASE_URL, fetch: mockFetch({ status: 202, calls }) });
+
+      await expect(pub.publishEvent('emergencias.priorizada', { type: 'EmergenciaPriorizada', data: { id: 'em-1' } }))
+        .resolves.toEqual({ skipped: true });
+
+      expect(calls).toHaveLength(0);
+      expect(auth.getToken).not.toHaveBeenCalled();
+    });
+
+    it('EmergenciaActualizada sí se publica', async () => {
+      const calls = [];
+      const pub = new GatewayPublisher(createAuthClient(), { baseUrl: BASE_URL, fetch: mockFetch({ status: 202, calls }) });
+
+      await pub.publishEvent('emergencias.estado-actualizado', { type: 'EmergenciaActualizada', data: { emergenciaId: 'em-1' } });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toContain(encodeURIComponent('com.citypass.emergencias.EmergenciaActualizada'));
+    });
+  });
+
   describe('publishEvent — configuracion', () => {
     it('sin baseUrl lanza al publicar', async () => {
       const pub = new GatewayPublisher(createAuthClient(), { fetch: async () => {} });

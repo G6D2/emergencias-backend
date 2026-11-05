@@ -267,6 +267,19 @@ describe('OutboxPublisher', () => {
       expect(gatewayCalls).toHaveLength(1);
     });
 
+    it('un evento que el publisher saltea queda SKIPPED y no cuenta como publicado', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: { type: 'EmergenciaPriorizada' }, attempts: 1 }] });
+      const gateway = { isEnabled: () => true, publishEvent: async () => ({ skipped: true }) };
+      const publisher = new OutboxPublisher(pool, {}, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(0);
+
+      const skipQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'SKIPPED'"));
+      expect(skipQ).toBeDefined();
+      expect(skipQ.params).toEqual(['e1']);
+      expect(pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"))).toBeUndefined();
+    });
+
     it('markPublished escribe payload_hash y gateway_event_id cuando el publisher devuelve objeto', async () => {
       const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: {}, attempts: 1 }] });
       const gateway = {

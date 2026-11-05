@@ -13,6 +13,11 @@
 
 const TIMEOUT_MS = 15_000;
 
+// Solo salen al bus los tipos del contrato (issue #48 de demo-repository).
+// EmergenciaPriorizada es interna (orden de despacho): no se registra en el
+// catálogo y el outbox la marca SKIPPED sin llamar al gateway.
+const PUBLISHED_TYPES = new Set(['EmergenciaCreada', 'EmergenciaActualizada']);
+
 class PermanentError extends Error {
   constructor(message) {
     super(message);
@@ -38,6 +43,9 @@ class GatewayPublisher {
   async publishEvent(topic, payload) {
     if (!this.baseUrl) {
       throw new Error('EDA_API_URL no configurado para GatewayPublisher');
+    }
+    if (!PUBLISHED_TYPES.has(payload && payload.type)) {
+      return { skipped: true };
     }
     const fqn = `com.citypass.emergencias.${payload.type}`;
     const url = `${this.baseUrl.replace(/\/$/, '')}/api/v1/event-types/${encodeURIComponent(fqn)}/events`;
@@ -104,4 +112,4 @@ async function safeText(response) {
   try { return await response.text(); } catch (_) { return ''; }
 }
 
-module.exports = { GatewayPublisher, PermanentError };
+module.exports = { GatewayPublisher, PermanentError, PUBLISHED_TYPES };

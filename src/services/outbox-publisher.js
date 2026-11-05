@@ -104,6 +104,17 @@ class OutboxPublisher {
     );
   }
 
+  // Tipo que el publisher no saca al bus (EmergenciaPriorizada con el
+  // gateway): queda SKIPPED y no se reintenta.
+  async markSkipped(id) {
+    await this.pool.query(
+      `UPDATE outbox_events
+       SET status = 'SKIPPED', locked_at = NULL, last_error = 'tipo fuera del contrato del bus'
+       WHERE id = $1`,
+      [id]
+    );
+  }
+
   async markFailed(id, attempts, error) {
     // Clasificacion de errores del GatewayPublisher (issue #74):
     //   - error.isPermanent (400/404/413/401-tras-reintento): no reintentar, FAILED directo.
@@ -149,6 +160,10 @@ class OutboxPublisher {
           try {
             const sent = await this.publisher.publishEvent(event.topic, event.payload);
             if (!sent) throw new Error('Publisher disabled or not connected');
+            if (typeof sent === 'object' && sent.skipped) {
+              await this.markSkipped(event.id);
+              continue;
+            }
             // GatewayPublisher devuelve objeto { eventId, payloadHash };
             // KafkaService devuelve true. markPublished tolera ambos.
             const result = typeof sent === 'object' ? sent : null;
