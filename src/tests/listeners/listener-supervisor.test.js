@@ -82,6 +82,20 @@ describe('superviseListener', () => {
     expect(handle.status().status).toBe('retrying');
   });
 
+  it('mientras un reintento está conectando sigue en retrying (no vuelve a starting)', async () => {
+    const listener = new FakeListener([new Error('no broker')]);
+    const handle = superviseListener(listener);
+    await handle.ready;
+    // El segundo intento queda colgado, como kafkajs reintentando la conexión.
+    listener.start.mockImplementationOnce(() => new Promise(() => {}));
+
+    jest.advanceTimersByTime(5_000);
+    await flush();
+
+    expect(listener.start).toHaveBeenCalledTimes(2);
+    expect(handle.status()).toMatchObject({ status: 'retrying', nextRetryAt: null });
+  });
+
   it('cuando un reintento sale bien queda running y el backoff vuelve a empezar', async () => {
     const listener = new FakeListener([new Error('no broker'), true]);
     const handle = superviseListener(listener);

@@ -474,7 +474,7 @@ Estado del servicio (público). Responde con lo que el proceso tiene en memoria,
 }
 ```
 
-`status` de un listener: `starting`, `running`, `retrying` (no pudo conectarse: se reintenta a los 5 s, 30 s, 2 min y después cada 2 min; `nextRetryAt` dice cuándo), `disabled` (sin topic) o `stopped`. `lastPollAt` es el último fetch al broker (kafkajs hace long polling, así que se actualiza cada pocos segundos aunque no haya mensajes).
+`status` de un listener: `starting` (primer intento), `running`, `retrying` (falló y todavía no volvió a arrancar: se reintenta a los 5 s, 30 s, 2 min y después cada 2 min; `nextRetryAt` dice cuándo es el próximo intento), `disabled` (sin topic) o `stopped`. `lastPollAt` es el último fetch al broker (kafkajs hace long polling, así que se actualiza cada pocos segundos aunque no haya mensajes).
 
 ---
 

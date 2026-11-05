@@ -11,8 +11,9 @@ const DEFAULT_RETRY_DELAYS_MS = Object.freeze([5_000, 30_000, 120_000]);
  * levantar con backoff. Devuelve un handle con status() para GET /health y
  * stop() para el shutdown.
  *
- * Estados: starting, running, retrying, disabled (sin topic configurado: no
- * hay nada que reintentar) y stopped.
+ * Estados: starting (primer intento), running, retrying (ya falló al menos
+ * una vez y no volvió a arrancar), disabled (sin topic configurado: no hay
+ * nada que reintentar) y stopped.
  */
 function superviseListener(listener, { retryDelaysMs = DEFAULT_RETRY_DELAYS_MS } = {}) {
   const name = listener.constructor.name;
@@ -41,7 +42,9 @@ function superviseListener(listener, { retryDelaysMs = DEFAULT_RETRY_DELAYS_MS }
   async function attempt() {
     timer = null;
     nextRetryAt = null;
-    state = 'starting';
+    // Conectar al bus puede tardar más de un minuto en fallar (kafkajs
+    // reintenta adentro): mientras tanto, si ya falló antes, sigue en retrying.
+    state = failures === 0 ? 'starting' : 'retrying';
     try {
       const started = await listener.start();
       if (stopped) return;
