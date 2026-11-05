@@ -48,8 +48,30 @@ function canCancelEmergency(user, emergency) {
   return emergency.userId === user.sub;
 }
 
+/**
+ * Quién puede avanzar el estado operativo (EN_ROUTE → ON_SCENE → RESOLVED):
+ * solo el oficial actualmente asignado a la emergencia (HU-08, issue #21).
+ *
+ * Es el ÚNICO lugar donde vive esa regla. Si Producto decide que lo avanza el
+ * dispatcher (ver issue #85), se cambia acá y en el middleware de la ruta, sin
+ * tocar el controller ni el repository.
+ *
+ * El sub del token se compara contra emergencies.assigned_officer_id (el id
+ * del catálogo de oficiales). Cuando el login federado entregue subs propios
+ * (issue #75) habrá que mapear sub → oficial; hasta entonces el token de
+ * desarrollo de un oficial lleva como sub el id del catálogo (ej. 'of-001').
+ */
+function canAdvanceEmergencyStatus(user, emergency) {
+  if (!userHasGroup(user, GROUPS.OFFICER)) {
+    return false;
+  }
+
+  return Boolean(emergency.assignedOfficerId) && emergency.assignedOfficerId === user.sub;
+}
+
 const requireCitizen = createRequireGroups(GROUPS.CITIZEN);
 const requireDispatcher = createRequireGroups(GROUPS.DISPATCHER);
+const requireOfficer = createRequireGroups(GROUPS.OFFICER);
 const requireCitizenOrDispatcher = createRequireGroups(
   GROUPS.CITIZEN,
   GROUPS.DISPATCHER
@@ -61,7 +83,9 @@ module.exports = {
   userHasAnyGroup,
   canViewEmergency,
   canCancelEmergency,
+  canAdvanceEmergencyStatus,
   requireCitizen,
   requireDispatcher,
+  requireOfficer,
   requireCitizenOrDispatcher,
 };

@@ -495,16 +495,29 @@ class EmergencyRepository {
   // Si falla cualquiera de los dos pasos, hace ROLLBACK. La transición se
   // valida acá (además de en los controllers) con la fila bloqueada, así
   // ningún endpoint futuro puede saltarse el flujo ni ganar una carrera.
-  // Con `client`, la transición corre en la transacción del caller (la del
-  // OutcomeFactory) sin abrir una propia.
-  async updateStatus(id, { newStatus, actor = null, reason = null, outboxEvent = null, client: externalClient = null }) {
+  /**
+   * @param {string} id
+   * @param {object} options
+   * @param {string|null} [options.requireAssignedOfficerId] - si viene, la
+   *   transición solo se aplica si ese oficial sigue asignado al momento de
+   *   tomar el lock de la fila. Cierra la carrera "se comprobó el oficial,
+   *   pero el dispatcher devolvió y reasignó antes del UPDATE". Si no
+   *   coincide responde NotFound, igual que una emergencia ajena.
+   * @param {object|null} [options.client] - con `client`, la transición corre
+   *   en la transacción del caller (la del OutcomeFactory) sin abrir una propia.
+   */
+  async updateStatus(id, {
+    newStatus, actor = null, reason = null, outboxEvent = null, requireAssignedOfficerId = null,
+    client: externalClient = null,
+  }) {
+    const options = { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId };
     if (externalClient) {
-      return this.applyStatusUpdate(externalClient, id, { newStatus, actor, reason, outboxEvent });
+      return this.applyStatusUpdate(externalClient, id, options);
     }
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const result = await this.applyStatusUpdate(client, id, { newStatus, actor, reason, outboxEvent });
+      const result = await this.applyStatusUpdate(client, id, options);
       await client.query('COMMIT');
       return result;
     } catch (error) {
@@ -515,7 +528,7 @@ class EmergencyRepository {
     }
   }
 
-  async applyStatusUpdate(client, id, { newStatus, actor, reason, outboxEvent }) {
+  async applyStatusUpdate(client, id, { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId = null }) {
     const current = await client.query(
       'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
       [id]
@@ -525,6 +538,9 @@ class EmergencyRepository {
     }
     const previousStatus = current.rows[0].status;
     const assignedOfficerId = current.rows[0].assigned_officer_id;
+    if (requireAssignedOfficerId !== null && assignedOfficerId !== requireAssignedOfficerId) {
+      throw new NotFoundError(`Emergency with ID ${id} not found`);
+    }
     assertTransition(previousStatus, newStatus);
 
     const updated = await client.query(
