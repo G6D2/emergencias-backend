@@ -16,9 +16,9 @@ const DISPATCHER = { sub: 'D-lifecycle', groups: ['dispatcher'] };
 const CITIZEN = { sub: 'user-lifecycle', groups: ['citizen'] };
 // of-001/of-002 los usan otras suites; esta trabaja con su propio oficial.
 const OFFICER_ID = 'of-003';
-const V24_PATH = path.resolve(__dirname, '..', '..', 'db', 'migrations', 'V24__closed_at_terminales_e_indices.sql');
+const V26_PATH = path.resolve(__dirname, '..', '..', 'db', 'migrations', 'V26__closed_at_terminales_e_indices.sql');
 
-describe('Ciclo de vida de una emergencia: validar/devolver, closed_at y V24 (integración contra Postgres real)', () => {
+describe('Ciclo de vida de una emergencia: validar/devolver, closed_at y V26 (integración contra Postgres real)', () => {
   let pool;
   let repository;
   const createdIds = [];
@@ -181,8 +181,8 @@ describe('Ciclo de vida de una emergencia: validar/devolver, closed_at y V24 (in
     });
   });
 
-  describe('V24 sobre una base con filas terminales', () => {
-    // Flyway ya aplicó V24 sobre la base vacía en el global setup. Para
+  describe('V26 sobre una base con filas terminales', () => {
+    // Flyway ya aplicó V26 sobre la base vacía en el global setup. Para
     // probarla sobre datos se reconstruye el estado previo (terminales sin
     // closed_at, índices de V3 y V8) y se vuelve a correr el archivo, que es
     // idempotente.
@@ -223,7 +223,7 @@ describe('Ciclo de vida de una emergencia: validar/devolver, closed_at y V24 (in
       const pending = await legacyRow('PENDING');
       const validated = await legacyRow('VALIDATED');
 
-      await pool.query(fs.readFileSync(V24_PATH, 'utf8'));
+      await pool.query(fs.readFileSync(V26_PATH, 'utf8'));
 
       for (const id of [cancelled, discarded, closed]) {
         const row = await rowOf(id);

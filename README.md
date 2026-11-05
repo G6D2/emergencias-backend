@@ -654,6 +654,67 @@ Los dos eventos están en [`docs/contratos/emergencia-creada.schema.json`](docs/
 
 ---
 
+## Publisher al gateway EDA (issue #74)
+
+Hay dos modos de publicación controlados por `EDA_PUBLISHER_MODE`:
+
+| Modo | Qué hace |
+|---|---|
+| `kafka` (default) | `KafkaService` publica directo al broker configurado por `KAFKA_BROKER` |
+| `gateway` | `GatewayPublisher` POSTea cada evento como JSON al gateway EDA (`EDA_API_URL`) con `Authorization: Bearer <token-de-servicio>` |
+
+### Autenticación en modo `gateway` (OAuth2 client-credentials grupo5)
+
+Confirmado con Delfina (G2) el 2026-11-02 — hay **dos flujos de auth** que
+coexisten:
+
+- **Empleado → Backend:** el frontend loguea al empleado contra el
+  login-federado y manda el `access_token` como `Bearer` al backend. El
+  backend valida ese token para autorizar la acción. El `sub` del empleado
+  se persiste en el payload del evento (`data.userId` para el ciudadano
+  denunciante, `data.actor` para dispatcher).
+- **Backend → Gateway:** el `GatewayPublisher` usa un cliente OAuth2
+  **de servicio** del backend (`grupo5` + secret, otorgado por Delfina)
+  para obtener un token con `claim.namespace = "com.citypass.emergencias"`.
+  El bus autoriza por ese namespace. **La identidad del empleado NO viaja
+  en este token** (es `token_use: service`) — por eso se persiste en el
+  payload al momento del request.
+
+### Caching del token de servicio
+
+`EdaAuthClient` cachea en memoria y renueva:
+- **Proactivamente** `RENEW_BUFFER_MS` (default 120s) antes del expiry.
+- **Reactivamente** cuando el gateway responde 401 — invalida el token y
+  reintenta el POST UNA vez con un token fresco.
+
+Request concurrente del outbox: `pendingRefresh` dedupe para que solo un
+request renueve el token aunque haya N llamadas en vuelo.
+
+### Clasificación de errores del gateway
+
+| Status | Qué hace el outbox |
+|---|---|
+| `2xx` | `markPublished` con `payload_hash` y `gateway_event_id` del response |
+| `401` | reintento interno con token fresco; si vuelve a 401 → `PermanentError` → `FAILED` |
+| `400` / `403` / `404` / `413` | `PermanentError` → `FAILED` directo sin reintentar |
+| `429` | respeta `Retry-After` si viene; outbox usa ese `retryAfterMs` como backoff |
+| `5xx` y otros | transient — backoff exponencial del outbox |
+
+### Env vars
+
+```env
+EDA_PUBLISHER_MODE=gateway                          # kafka (default) | gateway
+EDA_API_URL=https://test.citypass.mrfranco.net.ar
+EDA_OAUTH_TOKEN_URL=https://api.citypass-login.pp.ua/oauth/token
+EDA_OAUTH_CLIENT_ID=grupo5
+EDA_OAUTH_CLIENT_SECRET=<Delfina lo pasa por privado — NUNCA en el repo>
+```
+
+**Default:** si `EDA_PUBLISHER_MODE` no está seteado o vale `kafka`, el
+`GatewayPublisher` ni se instancia — comportamiento idéntico al previo.
+
+---
+
 ## ⚠️ Kafka: `kafka:29092` vs `localhost:9092`
 
 El broker del `docker-compose.yml` expone **dos listeners**, y hay que usar el correcto según desde dónde corre el cliente:
@@ -691,7 +752,7 @@ La prioridad de diseño está en la lógica de dominio (transiciones de estado, 
 | **Repositories (unit)** | `emergency.repository.test.js`, `incident.repository.test.js`, `officer.repository.test.js` | Queries con `pg` mockeado. |
 | **Autorización** | `authorization-matrix.test.js` | Cada endpoint protegido × {sin token, token sin grupo, citizen, dispatcher, officer} con JWT RS256 real: 401, 403 o pasa, según `src/auth/authorize.js`. Falla si se agrega una ruta y no se suma a la matriz. |
 | **Repositories (integración)** | `emergency.repository.integration.test.js`, `incident.repository.integration.test.js`, `incident-detection-job.integration.test.js` | Postgres real (contenedor efímero + Flyway); en CI corren con el service `postgres:15-alpine`. |
-| **Flujos de punta a punta (integración)** | `emergency-lifecycle.integration.test.js`, `emergency-rules-v24.integration.test.js`, `outbox-contract.integration.test.js`, `listeners/consumer-avro.integration.test.js` | Ciclo completo por HTTP con JWT local real (estado, historial, oficial, `closed_at`, outbox) y ramas cancel/discard/return; validate/return con estado de origen, `closed_at` en terminales y V24; el outbox real contra el JSON Schema de `docs/contratos`; el consumer con Avro en formato Confluent y un registry HTTP local. |
+| **Flujos de punta a punta (integración)** | `emergency-lifecycle.integration.test.js`, `emergency-rules-v26.integration.test.js`, `outbox-contract.integration.test.js`, `listeners/consumer-avro.integration.test.js` | Ciclo completo por HTTP con JWT local real (estado, historial, oficial, `closed_at`, outbox) y ramas cancel/discard/return; validate/return con estado de origen, `closed_at` en terminales y V26; el outbox real contra el JSON Schema de `docs/contratos`; el consumer con Avro en formato Confluent y un registry HTTP local. |
 | **Infra** | `flyway.test.js`, `pool.test.js` | Aplicación de migraciones, configuración del pool. |
 
 Cobertura del último CI: ver `docs/diagramas/07-ci-cd.md` (statements ~97%, branches ~87%, functions ~96%, lines ~97%).
