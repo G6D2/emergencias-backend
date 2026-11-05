@@ -567,6 +567,17 @@ Si Kafka no está conectado, `publishEvent` responde **503** (no se pierde el ev
 
 ## Contrato de eventos (bus EDA)
 
+> **Spec AsyncAPI:** [`asyncapi.yaml`](asyncapi.yaml) (AsyncAPI 3.1) describe los eventos que
+> publicamos (`EmergenciaCreada`, `EmergenciaActualizada`, y el interno `EmergenciaPriorizada`)
+> y los que consumimos de Espacios (`EventoComunitarioPublicado`, `EventoCancelado`).
+> `src/tests/asyncapi.test.js` corre en `npm test` y falla si los builders de
+> `src/services/emergency-events.js` dejan de cumplir el spec: **si cambiás el contrato,
+> cambiá el YAML en el mismo PR.**
+>
+> - `npm run asyncapi:validate` — valida el spec con el parser oficial.
+> - `npm run asyncapi:docs` — genera la documentación HTML en `docs/asyncapi/` (no se versiona).
+> - También se puede pegar el YAML en [AsyncAPI Studio](https://studio.asyncapi.com).
+
 Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https://github.com/G6D2/demo-repository/issues/48#issuecomment-6589800911). Reemplaza los criterios originales de ese issue y las convenciones viejas (`emergencyType`, `severity` en inglés, `userId`, etc.). **La base de datos no cambia**: los renombres se hacen al armar el evento, en `src/services/emergency-events.js`.
 
 ### `com.citypass.emergencias.EmergenciaCreada`
@@ -574,13 +585,13 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | Campo | Tipo | Fuente / Default |
 |---|---|---|
 | `emergenciaId` | string | `emergencies.id` |
-| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`; pendiente sumar `TRANSITO` y `PREVENTIVA`) |
+| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; pendiente sumar `TRANSITO`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
 | `barrio` | string \| null | catálogo oficial CABA (48 barrios), en claro; lo leen Reclamos/Analítica |
 | `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
 | `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null. **No** hay lat/lng en la raíz de `data` |
-| `afectaCirculacion` | boolean \| null | null hasta #85 (con `false`, Reclamos descarta el evento) |
+| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA` (y `TRANSITO` cuando entre al catálogo); `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null / enum \| null | null hasta #77/#79/#80 (consumo de eventos externos) |
 | `prioridadOriginal` | enum \| null | null hasta #79/#85 |
 | `ciudadanoId` | string \| null | `user_id` |

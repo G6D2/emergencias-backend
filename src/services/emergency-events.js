@@ -9,6 +9,14 @@
 const { getBusLocationCrypto } = require('../security/bus-location-crypto');
 const { secureLog } = require('../security/secure-log');
 
+// Tipos que cortan la circulación (decisión Juani 2026-11-05).
+// TRANSITO: pendiente de agregar al catálogo (migration + emergency-type.js).
+// RECLAMO: cuando llegue el listener de ReclamoCreado, usar el afectaCirculacion
+// que manda Reclamos en lugar de derivarlo por categoría.
+const AFECTA_CIRCULACION = new Set([
+  'INCENDIO', 'INFRAESTRUCTURA', 'DISTURBIO_EVENTO_MASIVO', 'PREVENTIVA',
+]);
+
 const SEVERITY_TO_PRIORIDAD = {
   low: 'BAJA',
   medium: 'MEDIA',
@@ -31,6 +39,11 @@ const STATUS_TO_ESTADO = {
 function toPrioridad(severity) {
   if (!severity) return null;
   return SEVERITY_TO_PRIORIDAD[String(severity).toLowerCase()] || null;
+}
+
+function toAfectaCirculacion(emergencyType) {
+  if (!emergencyType) return null;
+  return AFECTA_CIRCULACION.has(emergencyType);
 }
 
 function toEstado(status) {
@@ -83,9 +96,9 @@ function buildEmergencyCreatedEvent(emergency, eventId, options = {}) {
         latitud: encrypted.latitud,
         longitud: encrypted.longitud,
       },
-      // Null hasta #85: con false, Reclamos descarta el evento sin
-      // escalar. Los demas consumidores toman null como "no afecta".
-      afectaCirculacion: null,
+      afectaCirculacion: toAfectaCirculacion(emergency.emergencyType),
+      // Causa externa (convencion de Analitica). Hoy la completa la cobertura
+      // preventiva (EVENTO_PUBLICO); el resto de las causas llega con #77/#79/#80.
       causaId: emergency.causaId ?? null,
       causaTipo: emergency.causaTipo ?? null,
       prioridadOriginal: null,

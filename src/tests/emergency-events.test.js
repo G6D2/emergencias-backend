@@ -57,7 +57,7 @@ describe('emergency-events', () => {
       expect(event.data.updatedAt).toBeUndefined();
     });
 
-    it('publica los campos nuevos del contrato con default null/false hasta que se desbloqueen', () => {
+    it('publica los campos nuevos del contrato con default null hasta que se desbloqueen', () => {
       const event = buildEmergencyCreatedEvent(baseEmergency, 'evt-3');
       expect(event.data.barrio).toBeNull();
       expect(event.data.ubicacion.barrio).toBeNull();
@@ -69,8 +69,18 @@ describe('emergency-events', () => {
       expect(event.data.causaId).toBeNull();
       expect(event.data.causaTipo).toBeNull();
       expect(event.data.prioridadOriginal).toBeNull();
-      // Null hasta #85: false haria que Reclamos descarte el evento.
-      expect(event.data.afectaCirculacion).toBeNull();
+    });
+
+    it('afectaCirculacion: true para tipos que cortan circulacion, false para los que no, null si falta tipo', () => {
+      const afecta = (type) => buildEmergencyCreatedEvent({ ...baseEmergency, emergencyType: type }, 'e').data.afectaCirculacion;
+      expect(afecta('INCENDIO')).toBe(true);
+      expect(afecta('INFRAESTRUCTURA')).toBe(true);
+      expect(afecta('DISTURBIO_EVENTO_MASIVO')).toBe(true);
+      expect(afecta('PREVENTIVA')).toBe(true);
+      expect(afecta('MEDICA')).toBe(false);
+      expect(afecta('PANICO')).toBe(false);
+      expect(afecta('OTRO')).toBe(false);
+      expect(afecta(null)).toBeNull();
     });
 
     it('publica barrio plano y anidado cuando la emergencia lo trae', () => {
