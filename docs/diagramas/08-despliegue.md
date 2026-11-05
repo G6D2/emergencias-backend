@@ -51,7 +51,8 @@ flowchart TB
 | `DB_POOL_MAX` | Tope de conexiones del pool `pg` |
 | `KAFKA_ENABLED`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID` | Producer de eventos (hoy `KAFKA_ENABLED=false`) |
 | `TOPIC_PANIC_BUTTON`, `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO`, `TOPIC_EMERGENCIA_CERRADA` | Nombres de tópico por tipo de evento |
-| `LOCATION_ENCRYPTION_KEY` / `LOCATION_ENCRYPTION_KEYS` / `LOCATION_ENCRYPTION_KEY_ID` | Cifrado AES-256-GCM de ubicación (obligatoria, el server no arranca sin ella) |
+| `LOCATION_ENCRYPTION_KEY` / `LOCATION_ENCRYPTION_KEYS` / `LOCATION_ENCRYPTION_KEY_ID` | Cifrado AES-256-GCM de ubicación at-rest (obligatoria, el server no arranca sin ella) |
+| `BUS_LOCATION_ENCRYPTION_KEY` / `BUS_*_KEYS` / `BUS_*_KEY_ID` | Cifrado de `ubicacion.latitud/longitud` en el bus (opcional; distinta a la de DB) |
 | `LOCATION_RETENTION_HOURS`, `LOCATION_RETENTION_ENABLED` | Job de anonimización |
 | `CORS_ALLOWED_ORIGINS` | Origins permitidos (sin ella, producción cae a un default con warning) |
 | `RATE_LIMIT_ENABLED` | Apaga el rate limit (login, panic-button) |

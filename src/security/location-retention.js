@@ -24,6 +24,17 @@ function startLocationRetentionJob(emergencyRepository, options = {}) {
 
   async function runOnce() {
     try {
+      // Antes de anonimizar: completar barrio en filas que aún tienen ubicación
+      // (cierra la race deploy: retención vs backfill manual).
+      if (typeof emergencyRepository.backfillBarrios === 'function') {
+        const backfill = await emergencyRepository.backfillBarrios();
+        if (backfill.updatedCount > 0) {
+          secureLog('info', 'Location retention backfilled barrios', {
+            count: backfill.updatedCount,
+          });
+        }
+      }
+
       const result = await emergencyRepository.anonymizeExpiredLocations(retentionHours);
       if (result.anonymizedCount > 0) {
         secureLog('info', 'Location retention anonymized emergencies', {
