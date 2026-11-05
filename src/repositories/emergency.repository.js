@@ -379,10 +379,47 @@ class EmergencyRepository {
       if (result.rowCount > 0) ids.push(row.id);
     }
 
+    if (ids.length > 0) {
+      // El outbox conserva payloads PUBLISHED/PENDING más allá de las 72 h;
+      // hay que scrubear coords cifradas del bus para que no queden descifrables
+      // con la clave compartida tras anonimizar at-rest.
+      await this.scrubOutboxBusCoordinates(ids);
+    }
+
     return {
       anonymizedCount: ids.length,
       ids,
     };
+  }
+
+  /**
+   * Pone en null data.ubicacion.latitud/longitud en outbox_events ligados
+   * a esas emergencias (cualquier status). Conserva barrio.
+   */
+  async scrubOutboxBusCoordinates(emergencyIds) {
+    if (!Array.isArray(emergencyIds) || emergencyIds.length === 0) return { scrubbedCount: 0 };
+
+    const result = await this.pool.query(
+      `UPDATE outbox_events
+       SET payload = jsonb_set(
+             jsonb_set(payload, '{data,ubicacion,latitud}', 'null'::jsonb, true),
+             '{data,ubicacion,longitud}', 'null'::jsonb, true
+           )
+       WHERE payload->'data'->>'emergenciaId' = ANY($1::text[])
+         AND (
+           jsonb_typeof(payload#>'{data,ubicacion,latitud}') = 'string'
+           OR jsonb_typeof(payload#>'{data,ubicacion,longitud}') = 'string'
+         )`,
+      [emergencyIds]
+    );
+
+    if (result.rowCount > 0) {
+      secureLog('info', 'Scrubbed bus coordinates from outbox payloads', {
+        scrubbedCount: result.rowCount,
+        emergencyIds,
+      });
+    }
+    return { scrubbedCount: result.rowCount };
   }
 
   // Anonimiza las filas cuyo ciphertext no se puede descifrar con el keyring
@@ -423,9 +460,14 @@ class EmergencyRepository {
       [undecryptable]
     );
 
+    const ids = result.rows.map((row) => row.id);
+    if (ids.length > 0) {
+      await this.scrubOutboxBusCoordinates(ids);
+    }
+
     return {
       anonymizedCount: result.rowCount,
-      ids: result.rows.map((row) => row.id),
+      ids,
     };
   }
 

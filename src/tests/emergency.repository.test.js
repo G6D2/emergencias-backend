@@ -437,7 +437,7 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
     await expect(repo.anonymizeExpiredLocations('nope')).rejects.toThrow('retentionHours must be a positive number');
   });
 
-  it('anonimiza y devuelve ids afectados', async () => {
+  it('anonimiza, deriva barrio si faltaba y scrubea coords del outbox', async () => {
     const queries = [];
     const pool = createPool({
       query: async (sql, params) => {
@@ -449,6 +449,9 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
               { id: 'e-2', latitude: null, longitude: null, location_encrypted: 'blob', barrio: null },
             ],
           };
+        }
+        if (sql.includes('UPDATE outbox_events')) {
+          return { rowCount: 2, rows: [] };
         }
         return { rowCount: 1, rows: [{ id: params[0] }] };
       },
@@ -467,6 +470,8 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
     expect(queries[1].params).toEqual(['e-1', 'PALERMO']);
     expect(queries[2].params).toEqual(['e-2', 'PALERMO']);
     expect(queries[1].sql).toMatch(/COALESCE\(barrio/);
+    const scrub = queries.find((q) => q.sql.includes('UPDATE outbox_events'));
+    expect(scrub.params[0]).toEqual(['e-1', 'e-2']);
   });
 
   it('sin candidatos devolvé cero', async () => {

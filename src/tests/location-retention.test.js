@@ -43,31 +43,14 @@ describe('startLocationRetentionJob', () => {
 
   it('runOnce loguea cuando anonimiza filas', async () => {
     const repo = {
-      backfillBarrios: jest.fn().mockResolvedValue({ updatedCount: 0, ids: [] }),
       anonymizeExpiredLocations: jest.fn().mockResolvedValue({ anonymizedCount: 3, ids: ['a', 'b', 'c'] }),
     };
     const job = startLocationRetentionJob(repo, { env: {} });
 
     const result = await job.runOnce();
 
-    expect(repo.backfillBarrios).toHaveBeenCalledTimes(1);
     expect(result.anonymizedCount).toBe(3);
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Location retention anonymized emergencies'));
-    job.stop();
-  });
-
-  it('runOnce backfillea barrios antes de anonimizar y loguea si hubo updates', async () => {
-    const repo = {
-      backfillBarrios: jest.fn().mockResolvedValue({ updatedCount: 2, ids: ['e-1', 'e-2'] }),
-      anonymizeExpiredLocations: jest.fn().mockResolvedValue({ anonymizedCount: 0, ids: [] }),
-    };
-    const job = startLocationRetentionJob(repo, { env: {} });
-
-    await job.runOnce();
-
-    expect(repo.backfillBarrios.mock.invocationCallOrder[0])
-      .toBeLessThan(repo.anonymizeExpiredLocations.mock.invocationCallOrder[0]);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Location retention backfilled barrios'));
     job.stop();
   });
 

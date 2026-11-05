@@ -275,7 +275,7 @@ En `EmergenciaCreada`, las coordenadas exactas van **solo** en `data.ubicacion.*
 Guía **autocontenida** para mandar a otros equipos (sin depender del repo): **[docs/bus-ubicacion-para-consumidores.md](docs/bus-ubicacion-para-consumidores.md)**.
 
 ### Retención / minimización
-Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
+Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`. El **barrio** se conserva (y se deriva antes de borrar si faltaba). Al anonimizar también se ponen en `null` `ubicacion.latitud`/`longitud` en los payloads del outbox de esas emergencias.
 
 Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
@@ -577,8 +577,9 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`; pendiente sumar `TRANSITO` y `PREVENTIVA`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
-| `ubicacion.barrio` | string \| null | catálogo oficial CABA (48 barrios), derivado por PIP al crear; en claro. **No** hay `barrio` en la raíz de `data` |
-| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**, no la de DB). Plaintext JSON `{"value": <number>}`. Wire igual que at-rest (`ELC`…). Sin coords o sin `BUS_LOCATION_ENCRYPTION_KEY` → null. **No** hay `latitud`/`longitud` en la raíz de `data` |
+| `barrio` | string \| null | catálogo oficial CABA (48 barrios), en claro; lo leen Reclamos/Analítica |
+| `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
+| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null. **No** hay lat/lng en la raíz de `data` |
 | `afectaCirculacion` | boolean \| null | null hasta #85 (con `false`, Reclamos descarta el evento) |
 | `causaId`, `causaTipo` | string \| null / enum \| null | null hasta #77/#79/#80 (consumo de eventos externos) |
 | `prioridadOriginal` | enum \| null | null hasta #79/#85 |

@@ -28,6 +28,18 @@ describe('domain/barrio — catálogo oficial CABA', () => {
     expect(resolveBarrioFromPoint(-34.9, -58.5)).toBeNull();
   });
 
+  it('en huecos/bordes del GeoJSON simplificado cae al barrio más cercano (~100 m)', () => {
+    // Punto de borde Palermo/Recoleta reportado en review: sin fallback daba null.
+    const borde = resolveBarrioFromPoint(-34.5722, -58.3950);
+    expect(borde).toMatch(/PALERMO|RECOLETA/);
+  });
+
+  it('en solapamientos elige un único barrio (vértice más cercano entre hits)', () => {
+    // Punto Almagro/Caballito reportado en review: PIP puro devolvía ambos.
+    const barrio = resolveBarrioFromPoint(-34.6150, -58.4298);
+    expect(['ALMAGRO', 'CABALLITO']).toContain(barrio);
+  });
+
   it('prioriza coordenadas sobre texto; sin coords usa el catálogo', () => {
     expect(resolveBarrio({
       latitude: -34.5735,

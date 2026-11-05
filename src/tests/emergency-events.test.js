@@ -59,7 +59,7 @@ describe('emergency-events', () => {
 
     it('publica los campos nuevos del contrato con default null/false hasta que se desbloqueen', () => {
       const event = buildEmergencyCreatedEvent(baseEmergency, 'evt-3');
-      expect(event.data.barrio).toBeUndefined();
+      expect(event.data.barrio).toBeNull();
       expect(event.data.ubicacion.barrio).toBeNull();
       expect(event.data.ubicacion.latitud).toBeNull();
       expect(event.data.ubicacion.longitud).toBeNull();
@@ -73,9 +73,9 @@ describe('emergency-events', () => {
       expect(event.data.afectaCirculacion).toBeNull();
     });
 
-    it('publica barrio solo en ubicacion', () => {
+    it('publica barrio plano y anidado cuando la emergencia lo trae', () => {
       const event = buildEmergencyCreatedEvent({ ...baseEmergency, barrio: 'PALERMO' }, 'evt-barrio');
-      expect(event.data.barrio).toBeUndefined();
+      expect(event.data.barrio).toBe('PALERMO');
       expect(event.data.ubicacion).toEqual({
         barrio: 'PALERMO',
         latitud: null,
@@ -83,7 +83,7 @@ describe('emergency-events', () => {
       });
     });
 
-    it('cifra coords solo en ubicacion (sin campos planos)', () => {
+    it('cifra coords solo en ubicacion (sin campos planos); AAD ata emergenciaId+campo', () => {
       const busCrypto = createBusLocationCrypto({
         keys: { bus1: BUS_TEST_KEY },
         activeKeyId: 'bus1',
@@ -99,14 +99,25 @@ describe('emergency-events', () => {
         { busCrypto }
       );
 
-      expect(event.data.barrio).toBeUndefined();
+      expect(event.data.barrio).toBe('PALERMO');
       expect(event.data.latitud).toBeUndefined();
       expect(event.data.longitud).toBeUndefined();
       expect(event.data.ubicacion.barrio).toBe('PALERMO');
       expect(typeof event.data.ubicacion.latitud).toBe('string');
       expect(typeof event.data.ubicacion.longitud).toBe('string');
-      expect(busCrypto.decryptCoordinate(event.data.ubicacion.latitud)).toBeCloseTo(-34.5735);
-      expect(busCrypto.decryptCoordinate(event.data.ubicacion.longitud)).toBeCloseTo(-58.4233);
+      expect(busCrypto.decryptCoordinate(event.data.ubicacion.latitud, {
+        emergencyId: baseEmergency.id,
+        field: 'latitud',
+      })).toBeCloseTo(-34.5735);
+      expect(busCrypto.decryptCoordinate(event.data.ubicacion.longitud, {
+        emergencyId: baseEmergency.id,
+        field: 'longitud',
+      })).toBeCloseTo(-58.4233);
+      // Swap de campos / AAD incorrecto no abre.
+      expect(() => busCrypto.decryptCoordinate(event.data.ubicacion.latitud, {
+        emergencyId: baseEmergency.id,
+        field: 'longitud',
+      })).toThrow();
     });
 
     it('sin busCrypto o sin coords → ubicacion.latitud/longitud null', () => {

@@ -46,9 +46,10 @@ function encryptBusCoords(emergency, busCrypto) {
     return { latitud: null, longitud: null };
   }
   try {
+    const emergencyId = emergency.id;
     return {
-      latitud: busCrypto.encryptCoordinate(lat),
-      longitud: busCrypto.encryptCoordinate(lng),
+      latitud: busCrypto.encryptCoordinate(lat, { emergencyId, field: 'latitud' }),
+      longitud: busCrypto.encryptCoordinate(lng, { emergencyId, field: 'longitud' }),
     };
   } catch (error) {
     secureLog('warn', 'Failed to encrypt bus coordinates; publishing null', {
@@ -75,7 +76,8 @@ function buildEmergencyCreatedEvent(emergency, eventId, options = {}) {
       categoria: emergency.emergencyType ?? null,
       prioridad: toPrioridad(emergency.severity),
       estado: toEstado(emergency.status),
-      // Todo lo espacial vive en ubicacion: barrio (claro) + lat/lng (cifrados).
+      // Plano (catálogo / Reclamos-Analítica) + anidado (Espacios y coords cifradas).
+      barrio: emergency.barrio ?? null,
       ubicacion: {
         barrio: emergency.barrio ?? null,
         latitud: encrypted.latitud,

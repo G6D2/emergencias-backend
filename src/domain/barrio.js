@@ -5,30 +5,46 @@ const fs = require('fs');
 // Fuente: https://data.buenosaires.gob.ar/dataset/barrios
 // Los nombres canónicos son los del campo BARRIO del dataset (mayúsculas).
 const GEOJSON_PATH = path.join(__dirname, 'data', 'barrios-caba.geojson');
+// Si el punto cae en un hueco del GeoJSON simplificado, se asigna el barrio
+// cuyo vértice más cercano esté a lo sumo NEAREST_BARRIO_MAX_METERS.
+const NEAREST_BARRIO_MAX_METERS = 100;
 
 let cachedCatalog = null;
+
+function emptyCatalog() {
+  return {
+    names: Object.freeze([]),
+    byKey: new Map(),
+    polygons: [],
+  };
+}
 
 function loadCatalog() {
   if (cachedCatalog) return cachedCatalog;
 
-  const raw = JSON.parse(fs.readFileSync(GEOJSON_PATH, 'utf8'));
-  const features = raw.features || [];
-  const byKey = new Map();
-  const polygons = [];
+  try {
+    const raw = JSON.parse(fs.readFileSync(GEOJSON_PATH, 'utf8'));
+    const features = raw.features || [];
+    const byKey = new Map();
+    const polygons = [];
 
-  for (const feature of features) {
-    const name = feature.properties && feature.properties.barrio;
-    if (!name || typeof name !== 'string') continue;
-    const key = normalizeBarrioKey(name);
-    byKey.set(key, name);
-    polygons.push({ name, geometry: feature.geometry });
+    for (const feature of features) {
+      const name = feature.properties && feature.properties.barrio;
+      if (!name || typeof name !== 'string') continue;
+      const key = normalizeBarrioKey(name);
+      byKey.set(key, name);
+      polygons.push({ name, geometry: feature.geometry });
+    }
+
+    cachedCatalog = {
+      names: Object.freeze([...byKey.values()].sort((a, b) => a.localeCompare(b, 'es'))),
+      byKey,
+      polygons,
+    };
+  } catch (error) {
+    // No tumbar el alta de emergencias si falta/rompe el GeoJSON.
+    cachedCatalog = emptyCatalog();
   }
-
-  cachedCatalog = {
-    names: Object.freeze([...byKey.values()].sort((a, b) => a.localeCompare(b, 'es'))),
-    byKey,
-    polygons,
-  };
   return cachedCatalog;
 }
 
@@ -98,20 +114,83 @@ function pointInPolygon(lng, lat, geometry) {
   return false;
 }
 
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const R = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function iterOuterRings(geometry) {
+  if (!geometry || !geometry.coordinates) return [];
+  if (geometry.type === 'Polygon') return [geometry.coordinates[0] || []];
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.map((poly) => poly[0] || []);
+  }
+  return [];
+}
+
+/** Distancia del punto al vértice más cercano del polígono (metros). */
+function minDistanceToGeometryMeters(lat, lng, geometry) {
+  let min = Infinity;
+  for (const ring of iterOuterRings(geometry)) {
+    for (const coord of ring) {
+      if (!coord || coord.length < 2) continue;
+      const d = haversineMeters(lat, lng, coord[1], coord[0]);
+      if (d < min) min = d;
+    }
+  }
+  return min;
+}
+
+function resolveNearestBarrio(lat, lng, maxMeters = NEAREST_BARRIO_MAX_METERS) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const entry of loadCatalog().polygons) {
+    const d = minDistanceToGeometryMeters(lat, lng, entry.geometry);
+    if (d < bestDist) {
+      bestDist = d;
+      best = entry.name;
+    }
+  }
+  if (best != null && bestDist <= maxMeters) return best;
+  return null;
+}
+
 /**
- * Punto-en-polígono contra el catálogo oficial. Fuera de CABA → null.
+ * Punto-en-polígono; si cae en un hueco del GeoJSON simplificado, el barrio
+ * más cercano dentro de NEAREST_BARRIO_MAX_METERS. Fuera de CABA → null.
  */
 function resolveBarrioFromPoint(latitude, longitude) {
   const lat = Number(latitude);
   const lng = Number(longitude);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
+  const hits = [];
   for (const entry of loadCatalog().polygons) {
     if (pointInPolygon(lng, lat, entry.geometry)) {
-      return entry.name;
+      hits.push(entry.name);
     }
   }
-  return null;
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) {
+    // Solapamiento: entre los que contienen el punto, el de vértice más cercano.
+    let best = hits[0];
+    let bestDist = Infinity;
+    for (const entry of loadCatalog().polygons) {
+      if (!hits.includes(entry.name)) continue;
+      const d = minDistanceToGeometryMeters(lat, lng, entry.geometry);
+      if (d < bestDist) {
+        bestDist = d;
+        best = entry.name;
+      }
+    }
+    return best;
+  }
+  return resolveNearestBarrio(lat, lng);
 }
 
 /**
@@ -139,6 +218,7 @@ module.exports = {
   normalizeBarrioKey,
   resolveBarrioFromPoint,
   resolveBarrio,
+  NEAREST_BARRIO_MAX_METERS,
   // test hook
   _resetCatalogCache: () => { cachedCatalog = null; },
 };
