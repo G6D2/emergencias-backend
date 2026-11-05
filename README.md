@@ -552,9 +552,73 @@ Detalle del schema y migrations: [db/README.md](db/README.md). Plantilla de env:
 ## Kafka Topics
 
 - `emergencias.boton-panico`: Eventos de botón de pánico
-- `emergencias.estado-actualizado`: Cambios de estado (p. ej. cancelación)
+- `emergencias.estado-actualizado`: Cambios de estado (incluye cancelación y cierre; el cierre dejó de publicar un evento aparte)
 
 Si Kafka no está conectado, `publishEvent` responde **503** (no se pierde el evento en silencio).
+
+---
+
+## Contrato de eventos (bus EDA)
+
+Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https://github.com/G6D2/demo-repository/issues/48#issuecomment-6589800911). Reemplaza los criterios originales de ese issue y las convenciones viejas (`emergencyType`, `severity` en inglés, `userId`, etc.). **La base de datos no cambia**: los renombres se hacen al armar el evento, en `src/services/emergency-events.js`.
+
+### `com.citypass.emergencias.EmergenciaCreada`
+
+| Campo | Tipo | Fuente / Default |
+|---|---|---|
+| `emergenciaId` | string | `emergencies.id` |
+| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`; pendiente sumar `TRANSITO` y `PREVENTIVA`) |
+| `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
+| `estado` | string | map desde `status` (ver tabla de estados) |
+| `barrio` | string \| null | null hasta #76. Lo leen Reclamos y Analítica |
+| `ubicacion.barrio` | string \| null | el mismo valor, anidado para Espacios |
+| `afectaCirculacion` | boolean \| null | null hasta #76/#85 (con `false`, Reclamos descarta el evento) |
+| `latitud`, `longitud` | double \| null | null hasta que cierre la regla "mandar sólo con `afectaCirculacion = true`" (Juani con Valentina) |
+| `causaId`, `causaTipo` | string \| null / enum \| null | null hasta #77/#79/#80 (consumo de eventos externos) |
+| `prioridadOriginal` | enum \| null | null hasta #79/#85 |
+| `ciudadanoId` | string \| null | `user_id` |
+| `correlationId` | string | `correlation_id` (fallback: `id`) |
+| `createdAt` | ISO-8601 UTC | `created_at` |
+
+**No viajan al bus:** `descripcion`, `titulo`, `direccion` (texto libre; analítica tiene columnas pero su código los deja null).
+
+### `com.citypass.emergencias.EmergenciaActualizada`
+
+Antes era `EmergenciaEstadoActualizado`. Reemplaza también a `EmergenciaCerrada` (eliminado del contrato): el cierre viaja como esta misma `EmergenciaActualizada` con `estadoNuevo = CERRADA`.
+
+| Campo | Tipo | Fuente / Default |
+|---|---|---|
+| `emergenciaId` | string | `emergencies.id` |
+| `estadoAnterior`, `estadoNuevo` | string español | map desde `previousStatus`/`newStatus` del history |
+| `updatedAt` | ISO-8601 UTC | `emergencies.updated_at` |
+| `resueltoAt` | ISO-8601 UTC \| null | sólo en transición a `RESUELTA` |
+| `usuarioId` | string \| null | actor del request |
+| `asignadoA` | string \| null | `assigned_officer_id` sólo en `DESPACHADA` (#85 pide un evento por recurso) |
+| `areaResponsable` | string \| null | null hasta #85 |
+| `resolucion` | string \| null | `reason` del request |
+| `prioridad` | enum \| null | map desde `severity` |
+| `correlationId` | string | `correlation_id` (fallback: `id`) |
+
+### Tabla de traducción de estados
+
+| DB (`emergencies.status`) | Bus EDA (`estado*`) |
+|---|---|
+| `PENDING` | `PENDIENTE` |
+| `VALIDATED` | `VALIDADA` |
+| `DISPATCHED` | `DESPACHADA` |
+| `EN_ROUTE` | `EN_CAMINO` |
+| `ON_SCENE` | `EN_LUGAR` |
+| `RESOLVED` | `RESUELTA` |
+| `CLOSED` | `CERRADA` |
+| `DISCARDED` | `DESCARTADA` |
+| `CANCELLED` | `CANCELADA` |
+
+### Reglas duras
+
+- Timestamps en **ISO-8601 UTC** (no milisegundos).
+- `descripcion`, `titulo`, `direccion` **nunca** van al bus (texto libre).
+- `EmergenciaCerrada` y `EmergenciaReportada.v2` quedaron descartados.
+- Los renombres se hacen al armar el evento. La base de datos sigue en inglés; el issue #63 no es bloqueante para este contrato.
 
 ---
 

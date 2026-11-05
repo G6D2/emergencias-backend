@@ -1,71 +1,94 @@
-function emergencyData(emergency) {
-  const {
-    id,
-    correlationId,
-    userId,
-    description,
-    severity,
-    status,
-    assignedOfficerId,
-    emergencyType,
-    createdAt,
-    updatedAt,
-  } = emergency;
+// Contrato cerrado por Juani en issue #48 (comment 6589800911, 2026-11-02).
+// Reemplaza los criterios originales del issue; refleja lo que leen reclamos,
+// espacios, movilidad, residuos y analitica + lo acordado con Analitica el
+// 29/10. La traduccion se hace solo al armar el evento: la base no cambia.
 
-  // No publicar description en el bus: es texto libre y puede contener PII.
-  // Queda en Postgres para el dispatcher autenticado (API HTTP).
-  return {
-    id,
-    correlationId: correlationId || id,
-    userId,
-    hasDescription: Boolean(description && String(description).trim()),
-    severity,
-    status,
-    assignedOfficerId,
-    emergencyType,
-    createdAt,
-    updatedAt,
-  };
+const SEVERITY_TO_PRIORIDAD = {
+  low: 'BAJA',
+  medium: 'MEDIA',
+  high: 'ALTA',
+  critical: 'CRITICA',
+};
+
+const STATUS_TO_ESTADO = {
+  PENDING: 'PENDIENTE',
+  VALIDATED: 'VALIDADA',
+  DISPATCHED: 'DESPACHADA',
+  EN_ROUTE: 'EN_CAMINO',
+  ON_SCENE: 'EN_LUGAR',
+  RESOLVED: 'RESUELTA',
+  CLOSED: 'CERRADA',
+  DISCARDED: 'DESCARTADA',
+  CANCELLED: 'CANCELADA',
+};
+
+function toPrioridad(severity) {
+  if (!severity) return null;
+  return SEVERITY_TO_PRIORIDAD[String(severity).toLowerCase()] || null;
 }
 
-// correlationId = emergencyId al crear (tarea #58, ADR-001). Se lee de la
-// columna propia; el fallback al id cubre filas anteriores a V9.
+function toEstado(status) {
+  if (!status) return null;
+  return STATUS_TO_ESTADO[String(status).toUpperCase()] || null;
+}
+
 function buildEmergencyCreatedEvent(emergency, eventId) {
+  const correlationId = emergency.correlationId || emergency.id;
   return {
     type: 'EmergenciaCreada',
     eventId,
-    correlationId: emergency.correlationId || emergency.id,
-    data: emergencyData(emergency),
-  };
-}
-
-function buildEmergencyStatusUpdatedEvent({ emergency, history, actor, reason, eventId }) {
-  return {
-    type: 'EmergenciaEstadoActualizado',
-    eventId,
-    correlationId: emergency.correlationId || emergency.id,
+    correlationId,
     data: {
-      id: emergency.id,
-      correlationId: emergency.correlationId || emergency.id,
-      previousStatus: history.previousStatus,
-      newStatus: history.newStatus,
-      actor,
-      reason: reason ?? null,
-      timestamp: new Date().toISOString(),
+      emergenciaId: emergency.id,
+      categoria: emergency.emergencyType ?? null,
+      prioridad: toPrioridad(emergency.severity),
+      estado: toEstado(emergency.status),
+      // #76: hasta que el ingreso resuelva barrio desde lat/lng va null.
+      // Plano para Reclamos y Analitica (contrato del #48); anidado para
+      // Espacios, que lo lee en data.ubicacion.barrio.
+      barrio: emergency.barrio ?? null,
+      ubicacion: { barrio: emergency.barrio ?? null },
+      // Null hasta #76/#85: con false, Reclamos descarta el evento sin
+      // escalar. Los demas consumidores toman null como "no afecta".
+      afectaCirculacion: null,
+      // Opcionales con default null: la regla de cuando poblarlos la cierra
+      // Juani con Valentina (ver memoria project-decision-latlng-bus).
+      latitud: null,
+      longitud: null,
+      // Hasta #77/#79/#80 (consumo de eventos externos) causa va null.
+      causaId: null,
+      causaTipo: null,
+      // Hasta #79/#85 publicamos null; obligatorio solo si causaTipo=EVENTO_CLIMATICO.
+      prioridadOriginal: null,
+      ciudadanoId: emergency.userId ?? null,
+      correlationId,
+      createdAt: emergency.createdAt,
     },
   };
 }
 
-function buildEmergencyClosedEvent({ emergency, actor, eventId }) {
+function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId }) {
+  const correlationId = emergency.correlationId || emergency.id;
+  const estadoNuevo = toEstado(history.newStatus);
   return {
-    type: 'EmergenciaCerrada',
+    type: 'EmergenciaActualizada',
     eventId,
-    correlationId: emergency.correlationId || emergency.id,
+    correlationId,
     data: {
-      id: emergency.id,
-      correlationId: emergency.correlationId || emergency.id,
-      actor,
-      closedAt: emergency.closedAt,
+      emergenciaId: emergency.id,
+      estadoAnterior: toEstado(history.previousStatus),
+      estadoNuevo,
+      updatedAt: emergency.updatedAt || new Date().toISOString(),
+      // resueltoAt solo en transicion a RESUELTA.
+      resueltoAt: estadoNuevo === 'RESUELTA' ? (emergency.resolvedAt || new Date().toISOString()) : null,
+      usuarioId: actor ?? null,
+      // En DESPACHADA, hoy publicamos un unico evento con el oficial asignado.
+      // #85: si un despacho asigna N recursos, generar N eventos (uno por recurso).
+      asignadoA: estadoNuevo === 'DESPACHADA' ? (emergency.assignedOfficerId ?? null) : null,
+      areaResponsable: null,
+      resolucion: reason ?? null,
+      prioridad: toPrioridad(emergency.severity),
+      correlationId,
     },
   };
 }
@@ -102,7 +125,8 @@ function buildEmergencyPrioritizedEvent({
 
 module.exports = {
   buildEmergencyCreatedEvent,
-  buildEmergencyStatusUpdatedEvent,
-  buildEmergencyClosedEvent,
+  buildEmergencyUpdatedEvent,
   buildEmergencyPrioritizedEvent,
+  STATUS_TO_ESTADO,
+  SEVERITY_TO_PRIORIDAD,
 };
