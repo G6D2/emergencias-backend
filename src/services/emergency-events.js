@@ -2,6 +2,12 @@
 // Reemplaza los criterios originales del issue; refleja lo que leen reclamos,
 // espacios, movilidad, residuos y analitica + lo acordado con Analitica el
 // 29/10. La traduccion se hace solo al armar el evento: la base no cambia.
+//
+// Extensión: ubicacion.latitud/longitud van cifrados con BUS_LOCATION_ENCRYPTION_KEY
+// (solo anidados; no hay latitud/longitud en la raíz de data).
+
+const { getBusLocationCrypto } = require('../security/bus-location-crypto');
+const { secureLog } = require('../security/secure-log');
 
 // Tipos que cortan la circulación (decisión Juani 2026-11-05).
 // TRANSITO: pendiente de agregar al catálogo (migration + emergency-type.js).
@@ -45,8 +51,35 @@ function toEstado(status) {
   return STATUS_TO_ESTADO[String(status).toUpperCase()] || null;
 }
 
-function buildEmergencyCreatedEvent(emergency, eventId) {
+function encryptBusCoords(emergency, busCrypto) {
+  const lat = emergency.latitude;
+  const lng = emergency.longitude;
+  if (!busCrypto) return { latitud: null, longitud: null };
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return { latitud: null, longitud: null };
+  }
+  try {
+    const emergencyId = emergency.id;
+    return {
+      latitud: busCrypto.encryptCoordinate(lat, { emergencyId, field: 'latitud' }),
+      longitud: busCrypto.encryptCoordinate(lng, { emergencyId, field: 'longitud' }),
+    };
+  } catch (error) {
+    secureLog('warn', 'Failed to encrypt bus coordinates; publishing null', {
+      emergencyId: emergency.id,
+      message: error.message,
+    });
+    return { latitud: null, longitud: null };
+  }
+}
+
+function buildEmergencyCreatedEvent(emergency, eventId, options = {}) {
   const correlationId = emergency.correlationId || emergency.id;
+  const busCrypto = options.busCrypto !== undefined
+    ? options.busCrypto
+    : getBusLocationCrypto();
+  const encrypted = encryptBusCoords(emergency, busCrypto);
+
   return {
     type: 'EmergenciaCreada',
     eventId,
@@ -56,21 +89,18 @@ function buildEmergencyCreatedEvent(emergency, eventId) {
       categoria: emergency.emergencyType ?? null,
       prioridad: toPrioridad(emergency.severity),
       estado: toEstado(emergency.status),
-      // #76: hasta que el ingreso resuelva barrio desde lat/lng va null.
-      // Plano para Reclamos y Analitica (contrato del #48); anidado para
-      // Espacios, que lo lee en data.ubicacion.barrio.
+      // Plano (catálogo / Reclamos-Analítica) + anidado (Espacios y coords cifradas).
       barrio: emergency.barrio ?? null,
-      ubicacion: { barrio: emergency.barrio ?? null },
+      ubicacion: {
+        barrio: emergency.barrio ?? null,
+        latitud: encrypted.latitud,
+        longitud: encrypted.longitud,
+      },
       afectaCirculacion: toAfectaCirculacion(emergency.emergencyType),
-      // Opcionales con default null: la regla de cuando poblarlos la cierra
-      // Juani con Valentina (ver memoria project-decision-latlng-bus).
-      latitud: null,
-      longitud: null,
       // Causa externa (convencion de Analitica). Hoy la completa la cobertura
       // preventiva (EVENTO_PUBLICO); el resto de las causas llega con #77/#79/#80.
       causaId: emergency.causaId ?? null,
       causaTipo: emergency.causaTipo ?? null,
-      // Hasta #79/#85 publicamos null; obligatorio solo si causaTipo=EVENTO_CLIMATICO.
       prioridadOriginal: null,
       ciudadanoId: emergency.userId ?? null,
       correlationId,
@@ -91,11 +121,8 @@ function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId
       estadoAnterior: toEstado(history.previousStatus),
       estadoNuevo,
       updatedAt: emergency.updatedAt || new Date().toISOString(),
-      // resueltoAt solo en transicion a RESUELTA.
       resueltoAt: estadoNuevo === 'RESUELTA' ? (emergency.resolvedAt || new Date().toISOString()) : null,
       usuarioId: actor ?? null,
-      // En DESPACHADA, hoy publicamos un unico evento con el oficial asignado.
-      // #85: si un despacho asigna N recursos, generar N eventos (uno por recurso).
       asignadoA: estadoNuevo === 'DESPACHADA' ? (emergency.assignedOfficerId ?? null) : null,
       areaResponsable: null,
       resolucion: reason ?? null,

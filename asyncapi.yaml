@@ -203,10 +203,8 @@ components:
               prioridad: CRITICA
               estado: PENDIENTE
               barrio: null
-              ubicacion: { barrio: null }
-              afectaCirculacion: null
-              latitud: null
-              longitud: null
+              ubicacion: { barrio: null, latitud: null, longitud: null }
+              afectaCirculacion: false
               causaId: null
               causaTipo: null
               prioridadOriginal: null
@@ -350,8 +348,6 @@ components:
         - barrio
         - ubicacion
         - afectaCirculacion
-        - latitud
-        - longitud
         - causaId
         - causaTipo
         - prioridadOriginal
@@ -375,22 +371,24 @@ components:
             - type: 'null'
         barrio:
           type: [string, 'null']
-          description: Null hasta #76. Lo leen Reclamos y Analítica.
+          description: Barrio del catálogo oficial de CABA (48), en claro. Lo leen Reclamos y Analítica.
         ubicacion:
           type: object
           additionalProperties: false
-          required: [barrio]
+          required: [barrio, latitud, longitud]
           properties:
             barrio:
               type: [string, 'null']
               description: Mismo valor que `barrio`, anidado para Espacios.
+            latitud:
+              type: [string, 'null']
+              description: Ciphertext AES-256-GCM con la clave de bus (ver docs/bus-ubicacion-para-consumidores.md). Null sin clave de bus.
+            longitud:
+              type: [string, 'null']
+              description: Igual que `latitud`. No hay coordenadas en la raíz de `data`.
         afectaCirculacion:
           type: [boolean, 'null']
-          description: Null hasta #76/#85 (con `false`, Reclamos descarta el evento).
-        latitud:
-          type: [number, 'null']
-        longitud:
-          type: [number, 'null']
+          description: Derivado de `categoria`. true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y PREVENTIVA; false para MEDICA, PANICO y OTRO; null sin categoría.
         causaId:
           type: [string, 'null']
         causaTipo:
