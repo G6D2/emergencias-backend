@@ -1,6 +1,6 @@
 require('dotenv').config();
-const { KafkaService, edaAuthClientFromEnv } = require('./services/kafka.service');
-const { getPool } = require('./db/pool');
+const { KafkaService, edaAuthClientFromEnv, kafkaHealth } = require('./services/kafka.service');
+const { getPool, closePool } = require('./db/pool');
 const { EmergencyRepository } = require('./repositories/emergency.repository');
 const { OfficerRepository } = require('./repositories/officer.repository');
 const { IncidentRepository } = require('./repositories/incident.repository');
@@ -14,13 +14,17 @@ const { startIncidentDetectionJob } = require('./services/incident-detection-job
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher, isOutboxPublisherEnabled } = require('./services/outbox-publisher');
-const { createListeners, OutcomeFactory } = require('./listeners');
+const { createListeners, superviseListener, OutcomeFactory } = require('./listeners');
 const { createEventDecoder, registryFromEnv } = require('./listeners/event-decoder');
 const { EventosProcesadosRepository } = require('./repositories/eventos-procesados.repository');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/cancelar-cobertura.handler');
+const { gracefulShutdown, closeServer } = require('./utils/graceful-shutdown');
 
 const PORT = process.env.PORT || 3000;
+// Tope del apagado ordenado. Render espera 30 s (default) entre el SIGTERM y
+// el SIGKILL, así que sobra margen.
+const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 async function start() {
   // Valida la key al boot (falla temprano si falta o es inválida).
@@ -38,14 +42,12 @@ async function start() {
   const citizenProfileRepository = new CitizenProfileRepository(pool, { locationCrypto });
   const outboxPublisher = new OutboxPublisher(pool, kafkaService);
 
-  // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
-  kafkaService.connect().catch((err) => {
-    secureLog('error', 'Initial Kafka connection failed', { message: err.message });
-  });
+  // El producer solo lo usa el outbox: lo conecta el publisher en su primer
+  // poll. Apagado, no queda una conexión ociosa al bus.
   if (isOutboxPublisherEnabled()) {
     outboxPublisher.start();
   } else {
-    secureLog('info', 'Outbox publisher apagado (OUTBOX_PUBLISHER_ENABLED=false)');
+    secureLog('info', 'Outbox publisher apagado (OUTBOX_PUBLISHER_ENABLED no es true): el producer no se conecta');
   }
 
   // Listeners de eventos externos. Apagados por default: se prenden con
@@ -61,11 +63,9 @@ async function start() {
       decoder: createEventDecoder({ registry: registryFromEnv(process.env, { authClient: edaAuthClient }) }),
     })
     : [];
-  for (const listener of listeners) {
-    listener.start().catch((err) => {
-      secureLog('error', 'Listener fallo al arrancar', { listener: listener.constructor.name, message: err.message });
-    });
-  }
+  // Si un listener no arranca (o se cae sin que kafkajs lo reinicie), se
+  // reintenta con backoff en vez de quedar muerto hasta el próximo deploy.
+  const listenerHandles = listeners.map((listener) => superviseListener(listener));
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
   const citizenPiiRetentionJob = startCitizenProfileRetentionJob(citizenProfileRepository);
@@ -76,7 +76,11 @@ async function start() {
   const app = createApp(kafkaService, emergencyRepository, {
     authenticate: auth.authenticate,
     devAuthRouter: auth.devAuthRouter,
-    authMode: auth.mode,
+    // GET /health: estado en memoria, sin conectar nada.
+    health: () => kafkaHealth(kafkaService, {
+      outbox: outboxPublisher.health(),
+      listeners: listenerHandles.map((handle) => handle.status()),
+    }),
     officerRepository,
     incidentRepository,
     citizenProfileRepository,
@@ -93,20 +97,29 @@ async function start() {
     }
   });
 
-  const shutdown = async () => {
+  let shuttingDown = false;
+  const shutdown = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    secureLog('info', `${signal} recibido: apagando`);
     retentionJob.stop();
     citizenPiiRetentionJob.stop();
     incidentDetectionJob.stop();
     keepWarmJob.stop();
     outboxPublisher.stop();
-    server.close();
-    await Promise.all(listeners.map((l) => l.stop().catch(() => {})));
-    await kafkaService.disconnect().catch(() => {});
-    process.exit(0);
+    // Primero deja de aceptar requests y espera los que están en curso; el
+    // pool se cierra al final, cuando ya nadie lo usa.
+    const exitCode = await gracefulShutdown([
+      { name: 'el servidor HTTP', run: () => closeServer(server) },
+      { name: 'los listeners', run: () => Promise.all(listenerHandles.map((handle) => handle.stop())) },
+      { name: 'el producer de Kafka', run: () => kafkaService.disconnect() },
+      { name: 'el pool de Postgres', run: () => closePool() },
+    ], { timeoutMs: SHUTDOWN_TIMEOUT_MS });
+    process.exit(exitCode);
   };
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 start().catch((error) => {

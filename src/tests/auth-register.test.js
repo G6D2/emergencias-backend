@@ -72,7 +72,6 @@ describe('AUTH_MODE=local register/login', () => {
     app = createApp(mockKafka, mockRepo, {
       authenticate: auth.authenticate,
       devAuthRouter: auth.devAuthRouter,
-      authMode: auth.mode,
     });
   });
 

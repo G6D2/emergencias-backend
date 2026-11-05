@@ -1306,7 +1306,7 @@ describe('GET /health with Kafka disabled', () => {
 });
 
 describe('GET /health', () => {
-  it('reports kafka status from checkHealth', async () => {
+  it('sin el detalle de index.js, reporta disconnected si nada de Kafka está en uso', async () => {
     const response = await request(app).get('/health').expect(200);
 
     expect(response.body.status).toBe('ok');

@@ -372,13 +372,34 @@ const options = {
             timestamp: { type: 'string', format: 'date-time' },
             kafka: {
               type: 'string',
-              enum: ['connected', 'disconnected'],
+              enum: ['connected', 'disconnected', 'disabled'],
+              description: 'connected si el producer (cuando el outbox publica) y cada listener con topic están arriba',
               example: 'connected',
             },
-            authMode: {
-              type: 'string',
-              enum: ['local', 'idp'],
-              example: 'local',
+            outbox: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean', example: false },
+                producerConnected: { type: 'boolean', example: false },
+                lastPollAt: { type: 'string', format: 'date-time', nullable: true },
+              },
+            },
+            listeners: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string', example: 'EventoCanceladoListener' },
+                  running: { type: 'boolean', example: true },
+                  status: {
+                    type: 'string',
+                    enum: ['starting', 'running', 'retrying', 'disabled', 'stopped'],
+                    example: 'running',
+                  },
+                  lastPollAt: { type: 'string', format: 'date-time', nullable: true },
+                  nextRetryAt: { type: 'string', format: 'date-time', nullable: true },
+                },
+              },
             },
           },
         },

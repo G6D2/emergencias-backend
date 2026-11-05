@@ -68,6 +68,9 @@ class KafkaService {
     }
 
     try {
+      // Reconexión (el outbox la pide si un send falló): el producer viejo se
+      // descarta en vez de quedar abierto.
+      if (this.producer) await this.producer.disconnect().catch(() => {});
       this.producer = this.kafka.producer({
         allowAutoTopicCreation: true,
         transactionTimeout: 30000,
@@ -86,19 +89,6 @@ class KafkaService {
 
   isConnected() {
     return this.connected && this.producer !== null;
-  }
-
-  async checkHealth() {
-    const admin = this.kafka.admin({ retry: { retries: 0 } });
-
-    try {
-      await admin.connect();
-      return true;
-    } catch (error) {
-      return false;
-    } finally {
-      await admin.disconnect().catch(() => {});
-    }
   }
 
   async publishEvent(topic, value) {
@@ -144,4 +134,30 @@ class KafkaService {
   }
 }
 
-module.exports = { KafkaService, saslFromEnv, edaAuthClientFromEnv };
+// Estado de Kafka para GET /health con lo que el proceso ya sabe: no abre
+// conexiones al broker. "connected" si todo lo que usa Kafka está arriba (el
+// producer, si el outbox publica, y cada listener con topic); "disconnected"
+// si algo no lo está o si nada usa Kafka en este proceso.
+function kafkaHealth(kafkaService, { outbox = { enabled: false, lastPollAt: null }, listeners = [] } = {}) {
+  const enabled = Boolean(kafkaService)
+    && (typeof kafkaService.isEnabled !== 'function' || kafkaService.isEnabled());
+  const producerConnected = enabled && outbox.enabled && kafkaService.isConnected();
+  const required = [
+    ...(outbox.enabled ? [producerConnected] : []),
+    ...listeners.filter((listener) => listener.status !== 'disabled')
+      .map((listener) => listener.status === 'running'),
+  ];
+
+  let kafka = 'disabled';
+  if (enabled) {
+    kafka = required.length > 0 && required.every(Boolean) ? 'connected' : 'disconnected';
+  }
+
+  return {
+    kafka,
+    outbox: { ...outbox, producerConnected },
+    listeners,
+  };
+}
+
+module.exports = { KafkaService, saslFromEnv, edaAuthClientFromEnv, kafkaHealth };
