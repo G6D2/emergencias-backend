@@ -57,7 +57,13 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     // Las suites de integración comparten base: lo que crea esta suite no debe
     // alterar el agrupamiento de incidentes de las otras.
     await pool.query('DELETE FROM emergency_status_history WHERE emergency_id = ANY($1::uuid[])', [createdIds]);
-    await pool.query("DELETE FROM outbox_events WHERE payload->'data'->>'id' = ANY($1::text[])", [createdIds]);
+    // El contrato del #48 identifica la emergencia en data.emergenciaId
+    // (EmergenciaCreada y EmergenciaActualizada); data.id queda solo en
+    // EmergenciaPriorizada.
+    await pool.query(
+      "DELETE FROM outbox_events WHERE COALESCE(payload->'data'->>'emergenciaId', payload->'data'->>'id') = ANY($1::text[])",
+      [createdIds]
+    );
     await pool.query('DELETE FROM emergencies WHERE id = ANY($1::uuid[])', [createdIds]);
     await pool.query("UPDATE officers SET status = 'disponible' WHERE id IN ('of-001', 'of-002')");
     await closePool();

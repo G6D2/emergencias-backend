@@ -122,12 +122,20 @@ describe('GET /api/emergencies', () => {
     expect(Array.isArray(res.body.data)).toBe(true);
   });
 
-  it('returns 403 when a citizen accesses the dispatcher-only listing (old behavior, now 200 filtered)', async () => {
-    // POST /api/emergencies ahora permite citizen pero filtra por userId.
-    // Este test documenta que el endpoint NO devuelve 403 para citizen.
-    const app = createTestApp(CITIZEN_A);
-    const res = await request(app).get('/api/emergencies').expect(200);
-    expect(Array.isArray(res.body.data)).toBe(true);
+  it('a citizen gets 200 (not 403) and ?userId= cannot widen the listing to someone else', async () => {
+    // GET /api/emergencies admite citizen, pero el filtro sale del sub del
+    // JWT: un userId en el query string se ignora.
+    const repo = createMockEmergencyRepository();
+    const appA = createTestApp(CITIZEN_A, repo);
+    await createEmergency(appA);
+    await createEmergency(createTestApp(CITIZEN_B, repo));
+
+    const res = await request(appA)
+      .get(`/api/emergencies?userId=${CITIZEN_B.sub}`)
+      .expect(200);
+
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].userId).toBe(CITIZEN_A.sub);
   });
 });
 
