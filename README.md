@@ -560,6 +560,17 @@ Si Kafka no está conectado, `publishEvent` responde **503** (no se pierde el ev
 
 ## Contrato de eventos (bus EDA)
 
+> **Spec AsyncAPI:** [`asyncapi.yaml`](asyncapi.yaml) (AsyncAPI 3.1) describe los eventos que
+> publicamos (`EmergenciaCreada`, `EmergenciaActualizada`, y el interno `EmergenciaPriorizada`)
+> y los que consumimos de Espacios (`EventoComunitarioPublicado`, `EventoCancelado`).
+> `src/tests/asyncapi.test.js` corre en `npm test` y falla si los builders de
+> `src/services/emergency-events.js` dejan de cumplir el spec: **si cambiás el contrato,
+> cambiá el YAML en el mismo PR.**
+>
+> - `npm run asyncapi:validate` — valida el spec con el parser oficial.
+> - `npm run asyncapi:docs` — genera la documentación HTML en `docs/asyncapi/` (no se versiona).
+> - También se puede pegar el YAML en [AsyncAPI Studio](https://studio.asyncapi.com).
+
 Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https://github.com/G6D2/demo-repository/issues/48#issuecomment-6589800911). Reemplaza los criterios originales de ese issue y las convenciones viejas (`emergencyType`, `severity` en inglés, `userId`, etc.). **La base de datos no cambia**: los renombres se hacen al armar el evento, en `src/services/emergency-events.js`.
 
 ### `com.citypass.emergencias.EmergenciaCreada`
