@@ -10,9 +10,8 @@ describe('isTransientError', () => {
     ['serialización', { code: '40001' }],
     ['red', { code: 'ECONNREFUSED' }],
     ['causa de red', { cause: { code: 'ETIMEDOUT' } }],
-    ['timeout del pool', { message: 'timeout exceeded when trying to connect' }],
-    ['conexión cortada', { message: 'Connection terminated unexpectedly' }],
-    ['marcado', { transient: true }],
+    ['base arrancando (Neon despertando)', { code: '57P03' }],
+    ['marcado (OutcomeFactory: sin conexión o conexión cortada)', { transient: true, message: 'Connection terminated unexpectedly' }],
   ])('transitorio: %s', (_, props) => {
     expect(isTransientError(Object.assign(new Error(props.message || 'x'), props))).toBe(true);
   });
@@ -24,6 +23,12 @@ describe('isTransientError', () => {
     ['type sin handler', { message: 'No hay un handler registrado para X' }],
     ['marcado', { permanent: true, code: 'ECONNREFUSED' }],
     ['desconocido', {}],
+    // Antes se decidía por el texto: estos pasaban por transitorios y
+    // trababan la partición reentregando para siempre.
+    ['eventId con "timeout" en el valor', { code: '22P02', message: 'invalid input syntax for type uuid: "timeout-1"' }],
+    ['texto sin código', { message: 'timeout exceeded when trying to connect' }],
+    ['texto sin código (conexión)', { message: 'Connection terminated unexpectedly' }],
+    ['dato inválido aunque la causa sea de red', { code: '23505', cause: { code: 'ECONNRESET' } }],
   ])('permanente: %s', (_, props) => {
     expect(isTransientError(Object.assign(new Error(props.message || 'x'), props))).toBe(false);
   });
