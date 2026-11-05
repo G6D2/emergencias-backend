@@ -3,6 +3,12 @@
 // espacios, movilidad, residuos y analitica + lo acordado con Analitica el
 // 29/10. La traduccion se hace solo al armar el evento: la base no cambia.
 
+// Tipos que cortan la circulación (decisión Juani 2026-11-05).
+// TRANSITO: pendiente de agregar al catálogo (migration + emergency-type.js).
+const AFECTA_CIRCULACION = new Set([
+  'INCENDIO', 'INFRAESTRUCTURA', 'DISTURBIO_EVENTO_MASIVO', 'PREVENTIVA',
+]);
+
 const SEVERITY_TO_PRIORIDAD = {
   low: 'BAJA',
   medium: 'MEDIA',
@@ -27,6 +33,11 @@ function toPrioridad(severity) {
   return SEVERITY_TO_PRIORIDAD[String(severity).toLowerCase()] || null;
 }
 
+function toAfectaCirculacion(emergencyType) {
+  if (!emergencyType) return null;
+  return AFECTA_CIRCULACION.has(emergencyType);
+}
+
 function toEstado(status) {
   if (!status) return null;
   return STATUS_TO_ESTADO[String(status).toUpperCase()] || null;
@@ -48,9 +59,7 @@ function buildEmergencyCreatedEvent(emergency, eventId) {
       // Espacios, que lo lee en data.ubicacion.barrio.
       barrio: emergency.barrio ?? null,
       ubicacion: { barrio: emergency.barrio ?? null },
-      // Null hasta #76/#85: con false, Reclamos descarta el evento sin
-      // escalar. Los demas consumidores toman null como "no afecta".
-      afectaCirculacion: null,
+      afectaCirculacion: toAfectaCirculacion(emergency.emergencyType),
       // Opcionales con default null: la regla de cuando poblarlos la cierra
       // Juani con Valentina (ver memoria project-decision-latlng-bus).
       latitud: null,
