@@ -620,6 +620,10 @@ Antes era `EmergenciaEstadoActualizado`. Reemplaza también a `EmergenciaCerrada
 - `EmergenciaCerrada` y `EmergenciaReportada.v2` quedaron descartados.
 - Los renombres se hacen al armar el evento. La base de datos sigue en inglés; el issue #63 no es bloqueante para este contrato.
 
+### JSON Schema
+
+Los dos eventos están en [`docs/contratos/emergencia-creada.schema.json`](docs/contratos/emergencia-creada.schema.json) y [`docs/contratos/emergencia-actualizada.schema.json`](docs/contratos/emergencia-actualizada.schema.json) (draft-07, todos los campos `required`, `additionalProperties: false`). `src/tests/outbox-contract.integration.test.js` los valida con `ajv` contra las filas reales que deja en `outbox_events` el ciclo completo por HTTP: si cambia un campo en `emergency-events.js` sin tocar el schema, o al revés, el CI falla.
+
 ---
 
 ## ⚠️ Kafka: `kafka:29092` vs `localhost:9092`
@@ -657,7 +661,9 @@ La prioridad de diseño está en la lógica de dominio (transiciones de estado, 
 | **Servicios** | `kafka.service.test.js`, `outbox-publisher.test.js`, `keep-warm.test.js`, `location-retention.test.js`, `incident-detection-job.test.js` | Publicación al bus (con `kafkajs` mockeado), poll del outbox, job de retención, detección con lock cross-instance. |
 | **Seguridad** | `security.test.js`, `secure-log.test.js`, `local-keys.test.js` | Headers, sanitización de logs (sin JWT ni lat/lng), rotación de keys. |
 | **Repositories (unit)** | `emergency.repository.test.js`, `incident.repository.test.js`, `officer.repository.test.js` | Queries con `pg` mockeado. |
+| **Autorización** | `authorization-matrix.test.js` | Cada endpoint protegido × {sin token, token sin grupo, citizen, dispatcher, officer} con JWT RS256 real: 401, 403 o pasa, según `src/auth/authorize.js`. Falla si se agrega una ruta y no se suma a la matriz. |
 | **Repositories (integración)** | `emergency.repository.integration.test.js`, `incident.repository.integration.test.js`, `incident-detection-job.integration.test.js` | Postgres real (contenedor efímero + Flyway); en CI corren con el service `postgres:15-alpine`. |
+| **Flujos de punta a punta (integración)** | `emergency-lifecycle.integration.test.js`, `outbox-contract.integration.test.js`, `listeners/consumer-avro.integration.test.js` | Ciclo completo por HTTP con JWT local real (estado, historial, oficial, `closed_at`, outbox) y ramas cancel/discard/return; el outbox real contra el JSON Schema de `docs/contratos`; el consumer con Avro en formato Confluent y un registry HTTP local. |
 | **Infra** | `flyway.test.js`, `pool.test.js` | Aplicación de migraciones, configuración del pool. |
 
 Cobertura del último CI: ver `docs/diagramas/07-ci-cd.md` (statements ~97%, branches ~87%, functions ~96%, lines ~97%).

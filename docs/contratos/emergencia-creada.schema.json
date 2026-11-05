@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/G6D2/emergencias-backend/blob/main/docs/contratos/emergencia-creada.schema.json",
+  "title": "com.citypass.emergencias.EmergenciaCreada",
+  "description": "Evento que se encola en outbox_events.payload al crear una emergencia (botón de pánico o cobertura preventiva). Contrato cerrado en G6D2/demo-repository#48 (comentario del 2026-11-02); campos tal como los arma buildEmergencyCreatedEvent en src/services/emergency-events.js. Lo valida src/tests/outbox-contract.integration.test.js contra filas reales del outbox.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "eventId", "correlationId", "data"],
+  "properties": {
+    "type": { "const": "EmergenciaCreada" },
+    "eventId": {
+      "description": "Id del evento. Es la PK de la fila en outbox_events.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "correlationId": { "$ref": "#/definitions/correlationId" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "emergenciaId",
+        "categoria",
+        "prioridad",
+        "estado",
+        "barrio",
+        "ubicacion",
+        "afectaCirculacion",
+        "latitud",
+        "longitud",
+        "causaId",
+        "causaTipo",
+        "prioridadOriginal",
+        "ciudadanoId",
+        "correlationId",
+        "createdAt"
+      ],
+      "properties": {
+        "emergenciaId": { "type": "string", "format": "uuid" },
+        "categoria": {
+          "description": "emergency_type. El contrato suma TRANSITO, que el catálogo todavía no emite.",
+          "type": "string",
+          "enum": [
+            "MEDICA",
+            "INCENDIO",
+            "INFRAESTRUCTURA",
+            "DISTURBIO_EVENTO_MASIVO",
+            "OTRO",
+            "PANICO",
+            "PREVENTIVA",
+            "TRANSITO"
+          ]
+        },
+        "prioridad": { "$ref": "#/definitions/prioridad" },
+        "estado": {
+          "description": "Una emergencia nace siempre PENDIENTE.",
+          "type": "string",
+          "enum": ["PENDIENTE"]
+        },
+        "barrio": {
+          "description": "null hasta #76. Sin barrio, Reclamos descarta el evento.",
+          "type": ["string", "null"]
+        },
+        "ubicacion": {
+          "description": "El mismo barrio, anidado para Espacios (lo lee en data.ubicacion.barrio).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["barrio"],
+          "properties": {
+            "barrio": { "type": ["string", "null"] }
+          }
+        },
+        "afectaCirculacion": {
+          "description": "El contrato lo define boolean; hasta #76/#85 se publica null (con false, Reclamos descarta el evento).",
+          "type": ["boolean", "null"]
+        },
+        "latitud": {
+          "description": "Opcional con default null hasta que se cierre la regla de cuándo mandarlas.",
+          "type": ["number", "null"],
+          "minimum": -90,
+          "maximum": 90
+        },
+        "longitud": {
+          "type": ["number", "null"],
+          "minimum": -180,
+          "maximum": 180
+        },
+        "causaId": {
+          "description": "Id de lo que originó la emergencia (ej. el eventoId de Espacios).",
+          "type": ["string", "null"]
+        },
+        "causaTipo": {
+          "description": "null si causaId es null.",
+          "enum": ["EVENTO_CLIMATICO", "RECLAMO", "INCIDENTE_VIAL", "EVENTO_PUBLICO", "RESERVA", null]
+        },
+        "prioridadOriginal": {
+          "description": "La prioridad sin el clima. Obligatoria si causaTipo = EVENTO_CLIMATICO; si no, null.",
+          "enum": ["BAJA", "MEDIA", "ALTA", "CRITICA", null]
+        },
+        "ciudadanoId": {
+          "description": "user_id. null en las emergencias externas.",
+          "type": ["string", "null"]
+        },
+        "correlationId": { "$ref": "#/definitions/correlationId" },
+        "createdAt": { "$ref": "#/definitions/fechaUtc" }
+      },
+      "allOf": [
+        {
+          "description": "causaTipo va si y solo si va causaId.",
+          "if": { "properties": { "causaId": { "type": "null" } } },
+          "then": { "properties": { "causaTipo": { "type": "null" } } },
+          "else": { "properties": { "causaTipo": { "type": "string" } } }
+        },
+        {
+          "description": "prioridadOriginal solo con causaTipo = EVENTO_CLIMATICO (y ahí es obligatoria).",
+          "if": { "properties": { "causaTipo": { "const": "EVENTO_CLIMATICO" } } },
+          "then": { "properties": { "prioridadOriginal": { "type": "string" } } },
+          "else": { "properties": { "prioridadOriginal": { "type": "null" } } }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "correlationId": {
+      "description": "El que llega, aunque no sea uuid. En las altas propias es el id de la emergencia.",
+      "type": "string",
+      "minLength": 1
+    },
+    "prioridad": {
+      "type": "string",
+      "enum": ["BAJA", "MEDIA", "ALTA", "CRITICA"]
+    },
+    "fechaUtc": {
+      "description": "ISO-8601 en UTC (sufijo Z), no milisegundos.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  }
+}
