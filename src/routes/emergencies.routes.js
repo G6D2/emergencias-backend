@@ -352,7 +352,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     description: |
    *       Requiere grupo `officer`, y que el `sub` del token sea el oficial
    *       asignado a la emergencia. Registra el cambio en el historial y
-   *       publica `EmergenciaEstadoActualizado`. Una emergencia inexistente o
+   *       publica `EmergenciaActualizada`. Una emergencia inexistente o
    *       asignada a otro oficial responde 404.
    *     security: [{ bearerAuth: [] }]
    *     parameters:
@@ -379,7 +379,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     description: |
    *       Requiere grupo `officer`, y que el `sub` del token sea el oficial
    *       asignado a la emergencia. No se puede saltear el estado EN_ROUTE.
-   *       Publica `EmergenciaEstadoActualizado`.
+   *       Publica `EmergenciaActualizada`.
    *     security: [{ bearerAuth: [] }]
    *     parameters:
    *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
@@ -405,7 +405,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     description: |
    *       Requiere grupo `officer`, y que el `sub` del token sea el oficial
    *       asignado a la emergencia. El cierre definitivo (RESOLVED → CLOSED)
-   *       sigue siendo del dispatcher. Publica `EmergenciaEstadoActualizado`.
+   *       sigue siendo del dispatcher. Publica `EmergenciaActualizada`.
    *     security: [{ bearerAuth: [] }]
    *     parameters:
    *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }

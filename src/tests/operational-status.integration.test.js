@@ -84,7 +84,7 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     ]);
   });
 
-  it('cada avance deja un EmergenciaEstadoActualizado en el outbox, en la misma transacción', async () => {
+  it('cada avance deja un EmergenciaActualizada en el outbox, en la misma transacción', async () => {
     const id = await createDispatched();
 
     await request(appAs(OFFICER)).patch(`/api/emergencies/${id}/en-route`).expect(200);
@@ -92,15 +92,15 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
 
     const outbox = await pool.query(
       `SELECT topic, payload FROM outbox_events
-       WHERE payload->'data'->>'id' = $1
-         AND payload->>'type' = 'EmergenciaEstadoActualizado'
-         AND payload->'data'->>'newStatus' IN ('EN_ROUTE', 'ON_SCENE')
+       WHERE payload->'data'->>'emergenciaId' = $1
+         AND payload->>'type' = 'EmergenciaActualizada'
+         AND payload->'data'->>'estadoNuevo' IN ('EN_CAMINO', 'EN_LUGAR')
        ORDER BY created_at`,
       [id]
     );
-    expect(outbox.rows.map((r) => r.payload.data.newStatus)).toEqual(['EN_ROUTE', 'ON_SCENE']);
+    expect(outbox.rows.map((r) => r.payload.data.estadoNuevo)).toEqual(['EN_CAMINO', 'EN_LUGAR']);
     expect(outbox.rows.every((r) => r.topic === 'emergencias.estado-actualizado')).toBe(true);
-    expect(outbox.rows[0].payload.data).toMatchObject({ previousStatus: 'DISPATCHED', actor: 'of-001' });
+    expect(outbox.rows[0].payload.data).toMatchObject({ estadoAnterior: 'DESPACHADA', usuarioId: 'of-001' });
   });
 
   it('otro oficial recibe 404 y la emergencia queda intacta', async () => {

@@ -358,7 +358,7 @@ class EmergencyController {
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
         payload: ({ emergency: savedEmergency, history: savedHistory }, eventId) =>
-          buildEmergencyStatusUpdatedEvent({
+          buildEmergencyUpdatedEvent({
             emergency: savedEmergency,
             history: savedHistory,
             actor,

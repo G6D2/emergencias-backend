@@ -135,7 +135,7 @@ describe('PATCH acciones de estado operativo del oficial', () => {
     });
   });
 
-  it('publica EmergenciaEstadoActualizado con el cambio de estado', async () => {
+  it('publica EmergenciaActualizada con el cambio de estado', async () => {
     const repository = createMockRepository();
 
     await request(buildApp(repository)).patch(`/api/emergencies/${EMERGENCY_ID}/en-route`).expect(200);
@@ -150,9 +150,9 @@ describe('PATCH acciones de estado operativo del oficial', () => {
       'evt-1'
     );
     expect(event).toMatchObject({
-      type: 'EmergenciaEstadoActualizado',
+      type: 'EmergenciaActualizada',
       eventId: 'evt-1',
-      data: { previousStatus: 'DISPATCHED', newStatus: 'EN_ROUTE', actor: 'of-001' },
+      data: { estadoAnterior: 'DESPACHADA', estadoNuevo: 'EN_CAMINO', usuarioId: 'of-001' },
     });
   });
 
