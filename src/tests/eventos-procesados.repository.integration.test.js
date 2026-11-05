@@ -34,6 +34,8 @@ describe('EventosProcesadosRepository (integration)', () => {
         source: 'com.espacios',
         eventType: 'EventoComunitarioPublicado',
         causationId: null,
+        status: 'PROCESSED',
+        discardReason: null,
       });
     });
 
@@ -71,6 +73,33 @@ describe('EventosProcesadosRepository (integration)', () => {
 
       const row = await repo.findById(eventId);
       expect(row).toBeNull();
+    });
+  });
+
+  describe('markDiscarded', () => {
+    it('registra el descarte con su motivo', async () => {
+      const eventId = '00000000-0000-0000-0000-000000000005';
+      await expect(repo.markDiscarded(null, { eventId, source: 'grupo7', eventType: 'T', reason: 'payload invalido' }))
+        .resolves.toBe(true);
+
+      expect(await repo.findById(eventId)).toMatchObject({
+        eventId,
+        status: 'DISCARDED',
+        discardReason: 'payload invalido',
+      });
+    });
+
+    it('no pisa un evento ya registrado', async () => {
+      const eventId = '00000000-0000-0000-0000-000000000006';
+      await repo.tryMarkProcessed(null, { eventId, source: 'src', eventType: 'T' });
+      await expect(repo.markDiscarded(null, { eventId, source: 'src', eventType: 'T', reason: 'x' })).resolves.toBe(false);
+      expect((await repo.findById(eventId)).status).toBe('PROCESSED');
+    });
+
+    it('exige eventId y motivo', async () => {
+      await expect(repo.markDiscarded(null, { source: 's', eventType: 'T', reason: 'x' })).rejects.toThrow(/eventId/);
+      await expect(repo.markDiscarded(null, { eventId: '00000000-0000-0000-0000-000000000007', source: 's', eventType: 'T' }))
+        .rejects.toThrow(/reason/);
     });
   });
 

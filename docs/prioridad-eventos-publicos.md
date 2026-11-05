@@ -49,7 +49,7 @@ actualizadas.
 
 ### 2. Persistir la zona (factory)
 
-Migración `V17__create_priority_zones.sql`:
+Migración `V<n>__create_priority_zones.sql` (la siguiente libre; V17 a V23 ya están tomadas o reservadas):
 
 | Columna | Notas |
 |---|---|
@@ -140,5 +140,6 @@ job o dejarse: inactivas se ignoran.
   candidatas en el paso 2 (`created_at` vs. estado no cerrado).
 - **Eventos superpuestos:** se asume que suben un solo nivel, no uno por evento.
 - Las emergencias `PANICO` ya son `critical`: el aumento solo afecta a los demás tipos.
-- La factory (despacho de resultados `{ type, payload }` a escrituras) todavía no existe;
-  `EventListener.onMessage` hoy solo devuelve los resultados.
+- La factory ya existe (`src/listeners/outcome-factory.js`): ejecuta los resultados
+  `{ type, payload }` en una transacción con dedup por `eventId`. Para este caso falta
+  registrar los handlers `ActualizarZonaPrioritaria` y `CancelarZonaPrioritaria`.
