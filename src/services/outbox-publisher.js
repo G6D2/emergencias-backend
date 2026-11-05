@@ -91,7 +91,7 @@ class OutboxPublisher {
     // result opcional: GatewayPublisher devuelve { eventId, payloadHash } del
     // response 2xx del gateway. KafkaService devuelve true/false — no hay
     // eventId ni payloadHash y los campos quedan NULL (comportamiento previo).
-    // Las columnas payload_hash y gateway_event_id vienen de la migracion V17.
+    // Las columnas payload_hash y gateway_event_id vienen de la migracion V24.
     const payloadHash = result && result.payloadHash ? result.payloadHash : null;
     const gatewayEventId = result && result.eventId ? result.eventId : null;
     await this.pool.query(

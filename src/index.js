@@ -44,7 +44,7 @@ async function start() {
   // en 'kafka' (o unset) y el GatewayPublisher no se usa.
   let publisher;
   if (process.env.EDA_PUBLISHER_MODE === 'gateway') {
-    if (!edaAuthClient.isConfigured()) {
+    if (!edaAuthClient || !edaAuthClient.isConfigured()) {
       secureLog('warn', 'EDA_PUBLISHER_MODE=gateway pero EdaAuthClient no esta configurado — se cae a KafkaService', {});
       publisher = kafkaService;
     } else {
