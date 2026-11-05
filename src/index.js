@@ -14,6 +14,7 @@ const { startIncidentDetectionJob } = require('./services/incident-detection-job
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher, isOutboxPublisherEnabled } = require('./services/outbox-publisher');
+const { GatewayPublisher } = require('./services/gateway-publisher');
 const { createListeners, OutcomeFactory } = require('./listeners');
 const { createEventDecoder, registryFromEnv } = require('./listeners/event-decoder');
 const { EventosProcesadosRepository } = require('./repositories/eventos-procesados.repository');
@@ -36,7 +37,24 @@ async function start() {
   const officerRepository = new OfficerRepository(pool);
   const incidentRepository = new IncidentRepository(pool, emergencyRepository);
   const citizenProfileRepository = new CitizenProfileRepository(pool, { locationCrypto });
-  const outboxPublisher = new OutboxPublisher(pool, kafkaService);
+  // Issue #74: EDA_PUBLISHER_MODE=gateway activa publicacion HTTP al gateway
+  // via GatewayPublisher. Default kafka = KafkaService directo (sin cambios).
+  // Secret de EDA_OAUTH_CLIENT_SECRET viene por privado de Delfina (G2); jamas
+  // en el repo. Hasta que llegue y se setee en Render, EDA_PUBLISHER_MODE queda
+  // en 'kafka' (o unset) y el GatewayPublisher no se usa.
+  let publisher;
+  if (process.env.EDA_PUBLISHER_MODE === 'gateway') {
+    if (!edaAuthClient || !edaAuthClient.isConfigured()) {
+      secureLog('warn', 'EDA_PUBLISHER_MODE=gateway pero EdaAuthClient no esta configurado — se cae a KafkaService', {});
+      publisher = kafkaService;
+    } else {
+      publisher = new GatewayPublisher(edaAuthClient);
+      secureLog('info', 'GatewayPublisher activo (EDA_PUBLISHER_MODE=gateway)', { apiUrl: publisher.baseUrl });
+    }
+  } else {
+    publisher = kafkaService;
+  }
+  const outboxPublisher = new OutboxPublisher(pool, kafkaService, { publisher });
 
   // Con KAFKA_ENABLED=false connect() no hace nada (ver KafkaService).
   kafkaService.connect().catch((err) => {
