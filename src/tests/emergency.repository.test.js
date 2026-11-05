@@ -1,6 +1,7 @@
 const { EmergencyRepository, mapEmergency } = require('../repositories/emergency.repository');
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
 const { createLocationCrypto } = require('../security/location-crypto');
+const { TERMINAL_STATUSES } = require('../domain/emergency-status');
 
 const fakeCrypto = {
   encryptLocation: () => 'encrypted-blob',
@@ -754,12 +755,13 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
     const pool = createPool({
       query: async (sql, params) => {
         expect(sql).toMatch(/FROM emergencies/);
-        expect(params).toEqual(['INCENDIO', since]);
+        expect(params).toEqual([['INCENDIO'], since, ['CLOSED', 'CANCELLED', 'DISCARDED']]);
         return {
           rows: [{
             id: 'e1',
             correlation_id: 'c1',
             user_id: 'u1',
+            emergency_type: 'INCENDIO',
             latitude: null,
             longitude: null,
             location_encrypted: null,
@@ -778,12 +780,37 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
       id: 'e1',
       correlationId: 'c1',
       userId: 'u1',
+      emergencyType: 'INCENDIO',
       latitude: null,
       longitude: null,
       severity: 'low',
       incidentId: null,
       createdAt: 'c',
     }]);
+  });
+
+  it('con emergencyTypes pide varios tipos en una sola query y excluye los estados terminales', async () => {
+    const since = new Date('2026-01-01T00:00:00.000Z');
+    const query = jest.fn(async () => ({
+      rows: [
+        {
+          id: 'e5', correlation_id: 'c5', user_id: 'u5', emergency_type: 'PANICO', location_encrypted: null, severity: 'high', incident_id: null, created_at: 'c',
+        },
+        {
+          id: 'e6', correlation_id: 'c6', user_id: 'u6', emergency_type: 'MEDICA', location_encrypted: null, severity: 'medium', incident_id: null, created_at: 'c',
+        },
+      ],
+    }));
+    const repo = new EmergencyRepository(createPool({ query }), { locationCrypto: crypto });
+
+    const candidates = await repo.findRecentByType({ emergencyTypes: ['PANICO', 'MEDICA'], since });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/emergency_type = ANY\(\$1::text\[\]\)/);
+    expect(sql).toMatch(/status <> ALL\(\$3::text\[\]\)/);
+    expect(params).toEqual([['PANICO', 'MEDICA'], since, TERMINAL_STATUSES]);
+    expect(candidates.map((c) => [c.id, c.emergencyType])).toEqual([['e5', 'PANICO'], ['e6', 'MEDICA']]);
   });
 
   it('descifra la ubicación cuando hay ciphertext válido', async () => {

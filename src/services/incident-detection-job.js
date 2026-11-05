@@ -2,23 +2,38 @@ const { secureLog } = require('../security/secure-log');
 const { EMERGENCY_TYPES } = require('../domain/emergency-type');
 const { processEmergencyTypeCandidates } = require('../domain/incident-detector');
 
-// Constante arbitraria pero FIJA para pg_try_advisory_lock/pg_advisory_unlock:
-// identifica a este job entre cualquier otro advisory lock que corra contra
-// la misma base (bigint de 32 bits, sin significado más allá de "no la
-// cambies sin coordinar" — si dos procesos usan claves distintas, el lock no
-// sirve de nada). Hoy no hay otro advisory lock en el código.
+// Constante arbitraria pero FIJA para pg_try_advisory_xact_lock: identifica
+// a este job entre cualquier otro advisory lock que corra contra la misma
+// base (bigint de 32 bits, sin significado más allá de "no la cambies sin
+// coordinar" — si dos procesos usan claves distintas, el lock no sirve de
+// nada). Hoy no hay otro advisory lock en el código.
 const DETECTION_LOCK_KEY = 875312047;
+
+// PANICO entra sin excepcion: a diferencia de un tipo de uso general/anonimo,
+// el boton de panico lo activa gente puntual que ya lo solicito, asi que
+// varias activaciones agrupadas en el tiempo y el espacio son una senal MAS
+// fuerte de incidente real, no ruido a filtrar.
+// PREVENTIVA no es un reporte ciudadano: la crea el listener ante un evento
+// publico, asi que no se agrupa en incidentes.
+const GROUPABLE_EMERGENCY_TYPES = Object.freeze(EMERGENCY_TYPES.filter((type) => type !== 'PREVENTIVA'));
 
 /**
  * Ejecuta `fn` bajo un lock exclusivo a nivel de base de datos (no solo del
  * proceso): dos instancias del backend contra la misma Neon (primary +
  * backup de failover, ver ADRs) podrían correr el job al mismo tiempo y
  * crear incidentes duplicados si solo hubiera un guard `running` en memoria.
- * `pg_try_advisory_lock` no bloquea: si otra instancia ya tiene el lock,
+ * `pg_try_advisory_xact_lock` no bloquea: si otra instancia ya tiene el lock,
  * esta corrida se saltea (hay otra corrida cada 60s, no hace falta esperar).
- * El lock se toma en una conexión DEDICADA (no la del pool general) porque
- * es un lock de sesión: vive atado a esa conexión y se libera explícitamente
- * con pg_advisory_unlock en el finally (o al cerrarse la conexión).
+ *
+ * El lock es de transacción y se toma en una conexión DEDICADA: vive lo que
+ * vive la transacción y se suelta solo con el COMMIT (o al cortarse la
+ * conexión). Un lock de sesión no sirve detrás del pooler de Neon (PgBouncer
+ * en modo transacción): el lock y el unlock pueden caer en conexiones
+ * distintas del servidor y el lock queda tomado.
+ * Las escrituras del job van por otras conexiones del pool, así que esta
+ * transacción queda ociosa mientras tanto: set_config(..., true) apaga
+ * idle_in_transaction_session_timeout solo para ella, para que el timeout
+ * del pool no la corte (y suelte el lock) a mitad de una corrida.
  */
 async function withDetectionLock(pool, fn) {
   if (!pool) {
@@ -29,7 +44,12 @@ async function withDetectionLock(pool, fn) {
 
   const client = await pool.connect();
   try {
-    const { rows } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [DETECTION_LOCK_KEY]);
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT pg_try_advisory_xact_lock($1) AS locked,
+              set_config('idle_in_transaction_session_timeout', '0', true)`,
+      [DETECTION_LOCK_KEY]
+    );
     const locked = rows[0] && rows[0].locked;
 
     if (!locked) {
@@ -39,13 +59,88 @@ async function withDetectionLock(pool, fn) {
       return undefined;
     }
 
-    try {
-      return await fn();
-    } finally {
-      await client.query('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
-    }
+    return await fn();
   } finally {
-    client.release();
+    // Cerrar la transacción suelta el lock. Si ni eso anda, la conexión está
+    // rota y se descarta en vez de volver al pool.
+    let connectionError;
+    await client.query('COMMIT').catch((error) => {
+      connectionError = error;
+    });
+    client.release(connectionError);
+  }
+}
+
+function groupByEmergencyType(candidates) {
+  const byType = new Map();
+  for (const candidate of candidates) {
+    const group = byType.get(candidate.emergencyType);
+    if (group) {
+      group.push(candidate);
+    } else {
+      byType.set(candidate.emergencyType, [candidate]);
+    }
+  }
+  return byType;
+}
+
+async function persistDecision(incidentRepository, decision) {
+  let { incidentId } = decision;
+  if (incidentId == null) {
+    const incident = await incidentRepository.create({ emergencyType: decision.emergencyType });
+    incidentId = incident.id;
+  }
+
+  for (const member of decision.members) {
+    if (!member.alreadyLinked) {
+      await incidentRepository.addMember(incidentId, member.emergencyId);
+    }
+  }
+
+  await incidentRepository.applyScoringDecision(incidentId, {
+    priority: decision.priority,
+    score: decision.score,
+    reasonCodes: decision.reasonCodes,
+    factors: decision.factors,
+    algorithmVersion: decision.algorithmVersion,
+    members: decision.members,
+  });
+}
+
+/**
+ * Una pasada del job: UNA sola query trae los candidatos activos de todos los
+ * tipos agrupables, se separan en memoria por emergencyType y cada grupo
+ * detectado se persiste. A diferencia de runOnce(), no traga errores.
+ */
+async function detectIncidents({
+  emergencyRepository,
+  incidentRepository,
+  since,
+  radiusMeters,
+  minUniqueCitizens,
+  emergencyTypes = GROUPABLE_EMERGENCY_TYPES,
+}) {
+  const candidates = await emergencyRepository.findRecentByType({ emergencyTypes, since });
+
+  for (const [emergencyType, typeCandidates] of groupByEmergencyType(candidates)) {
+    const decisions = await processEmergencyTypeCandidates(typeCandidates, {
+      radiusMeters,
+      minUniqueCitizens,
+      emergencyType,
+    });
+
+    for (const decision of decisions) {
+      if (decision.skippedReason) {
+        secureLog('warn', 'Incident detection skipped a group', {
+          emergencyType,
+          skippedReason: decision.skippedReason,
+          conflictingIncidentIds: decision.conflictingIncidentIds,
+        });
+        continue;
+      }
+
+      await persistDecision(incidentRepository, decision);
+    }
   }
 }
 
@@ -81,71 +176,21 @@ function startIncidentDetectionJob(emergencyRepository, incidentRepository, opti
     throw new Error('INCIDENT_DETECTION_INTERVAL_MS must be >= 1000');
   }
 
-  async function processDecision(decision) {
-    let { incidentId } = decision;
-    if (incidentId == null) {
-      const incident = await incidentRepository.create({ emergencyType: decision.emergencyType });
-      incidentId = incident.id;
-    }
-
-    for (const member of decision.members) {
-      if (!member.alreadyLinked) {
-        await incidentRepository.addMember(incidentId, member.emergencyId);
-      }
-    }
-
-    await incidentRepository.applyScoringDecision(incidentId, {
-      priority: decision.priority,
-      score: decision.score,
-      reasonCodes: decision.reasonCodes,
-      factors: decision.factors,
-      algorithmVersion: decision.algorithmVersion,
-      members: decision.members,
-    });
-  }
-
   let running = false;
 
   async function runOnce() {
     if (running) return;
     running = true;
     try {
-      try {
-        await withDetectionLock(pool, async () => {
-          const since = new Date(Date.now() - windowMinutes * 60000);
-
-          // PANICO entra al loop sin excepcion: a diferencia de un tipo de uso
-          // general/anonimo, el boton de panico lo activa gente puntual que ya
-          // lo solicito, asi que varias activaciones agrupadas en el tiempo y el
-          // espacio son una senal MAS fuerte de incidente real, no ruido a
-          // filtrar.
-          // PREVENTIVA no es un reporte ciudadano: la crea el listener ante un
-          // evento publico, asi que no se agrupa en incidentes.
-          for (const emergencyType of EMERGENCY_TYPES.filter((type) => type !== 'PREVENTIVA')) {
-            const candidates = await emergencyRepository.findRecentByType({ emergencyType, since });
-            const decisions = await processEmergencyTypeCandidates(candidates, {
-              radiusMeters,
-              minUniqueCitizens,
-              emergencyType,
-            });
-
-            for (const decision of decisions) {
-              if (decision.skippedReason) {
-                secureLog('warn', 'Incident detection skipped a group', {
-                  emergencyType,
-                  skippedReason: decision.skippedReason,
-                  conflictingIncidentIds: decision.conflictingIncidentIds,
-                });
-                continue;
-              }
-
-              await processDecision(decision);
-            }
-          }
-        });
-      } catch (error) {
-        secureLog('error', 'Incident detection job failed', { message: error.message });
-      }
+      await withDetectionLock(pool, () => detectIncidents({
+        emergencyRepository,
+        incidentRepository,
+        since: new Date(Date.now() - windowMinutes * 60000),
+        radiusMeters,
+        minUniqueCitizens,
+      }));
+    } catch (error) {
+      secureLog('error', 'Incident detection job failed', { message: error.message });
     } finally {
       running = false;
     }
@@ -172,4 +217,10 @@ function startIncidentDetectionJob(emergencyRepository, incidentRepository, opti
   };
 }
 
-module.exports = { startIncidentDetectionJob, withDetectionLock, DETECTION_LOCK_KEY };
+module.exports = {
+  startIncidentDetectionJob,
+  withDetectionLock,
+  detectIncidents,
+  DETECTION_LOCK_KEY,
+  GROUPABLE_EMERGENCY_TYPES,
+};

@@ -1,5 +1,5 @@
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
-const { assertTransition } = require('../domain/emergency-status');
+const { assertTransition, TERMINAL_STATUSES } = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
@@ -604,21 +604,27 @@ class EmergencyRepository {
   }
 
   /**
-   * Candidatos recientes de un emergencyType para el job de deteccion de
-   * incidentes (#60): sin JOIN a officers, sin paginacion, sin COUNT --
-   * el consumidor es el job, no un endpoint HTTP. Devuelve lat/lng ya
-   * descifrados porque el job los pasa directo a groupNearbyEmergencies.
+   * Candidatos recientes para el job de deteccion de incidentes (#60): sin
+   * JOIN a officers, sin paginacion, sin COUNT -- el consumidor es el job,
+   * no un endpoint HTTP. Recibe un tipo (`emergencyType`) o varios
+   * (`emergencyTypes`): el job pide todos los agrupables en UNA sola query y
+   * los separa en memoria por emergencyType. Las emergencias en estado
+   * terminal (cerradas, canceladas, descartadas) no son candidatas.
+   * Devuelve lat/lng ya descifrados porque el job los pasa directo a
+   * groupNearbyEmergencies.
    * Una fila cuyo ciphertext no se puede descifrar se excluye del
    * resultado (no puede tumbar la corrida del job), dejando constancia
    * con secureLog de cual id se excluyo y por que.
    */
-  async findRecentByType({ emergencyType, since }) {
+  async findRecentByType({ emergencyType, emergencyTypes = [emergencyType], since }) {
     const result = await this.pool.query(
-      `SELECT id, correlation_id, user_id, latitude, longitude, location_encrypted,
+      `SELECT id, correlation_id, user_id, emergency_type, latitude, longitude, location_encrypted,
               severity, incident_id, created_at
        FROM emergencies
-       WHERE emergency_type = $1 AND created_at >= $2`,
-      [emergencyType, since]
+       WHERE emergency_type = ANY($1::text[])
+         AND created_at >= $2
+         AND status <> ALL($3::text[])`,
+      [emergencyTypes, since, TERMINAL_STATUSES]
     );
 
     const candidates = [];
@@ -628,6 +634,7 @@ class EmergencyRepository {
           id: row.id,
           correlationId: row.correlation_id,
           userId: row.user_id,
+          emergencyType: row.emergency_type,
           latitude: null,
           longitude: null,
           severity: row.severity,
@@ -643,6 +650,7 @@ class EmergencyRepository {
           id: row.id,
           correlationId: row.correlation_id,
           userId: row.user_id,
+          emergencyType: row.emergency_type,
           latitude: location.latitude,
           longitude: location.longitude,
           severity: row.severity,
