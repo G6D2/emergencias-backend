@@ -18,6 +18,12 @@ function resolveDisplayName(body) {
   return undefined;
 }
 
+// Hash bcrypt de relleno (de un valor aleatorio descartado, con el mismo costo
+// que BCRYPT_ROUNDS): si el correo no existe, el login compara igual contra
+// este hash, así el 401 tarda lo mismo que con una contraseña incorrecta y no
+// se pueden enumerar cuentas midiendo la respuesta.
+const DUMMY_BCRYPT_HASH = '$2b$10$J/CidMs6D.e76z0vcQE93edksmFPr8XmVwlVQXDJ19N6S3GtHnG.O';
+
 class AuthController {
   constructor(authUserRepository, tokenIssuer) {
     this.authUserRepository = authUserRepository;
@@ -84,12 +90,9 @@ class AuthController {
     }
 
     const found = await this.authUserRepository.findByEmail(email);
-    if (!found) {
-      throw new UnauthorizedError('Correo o contraseña incorrectos.');
-    }
-
-    const ok = await this.authUserRepository.verifyPassword(found.passwordHash, password);
-    if (!ok) {
+    const passwordHash = (found && found.passwordHash) || DUMMY_BCRYPT_HASH;
+    const ok = await this.authUserRepository.verifyPassword(passwordHash, password);
+    if (!found || !ok) {
       throw new UnauthorizedError('Correo o contraseña incorrectos.');
     }
 

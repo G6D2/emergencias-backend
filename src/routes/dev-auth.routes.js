@@ -100,7 +100,7 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      *       200:
      *         description: access_token + user
      *       401:
-     *         description: Credenciales inválidas
+     *         description: Credenciales inválidas (misma respuesta si el correo no existe)
      *       429:
      *         description: Rate limit (intentos fallidos por IP)
      */
