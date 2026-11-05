@@ -4,17 +4,17 @@
 
 ## Descripción
 
-Backend para el módulo de Emergencias y Seguridad de CityPass+. Gestiona botones de pánico, alertas críticas y cambios de estado de emergencias.
+Backend para el módulo de Emergencias y Seguridad de CityPass+. Gestiona el botón de pánico, el ciclo de vida de cada emergencia (validar, despachar, seguimiento del oficial, cierre), la detección de incidentes y la cobertura preventiva que disparan los eventos de otros módulos.
 
 ## Caso de Uso 2: Botón de Pánico
 
 **Objetivo:** Permitir que ciudadanos activen un botón de pánico que genere una emergencia crítica.
 
 ### Flujo
-1. Usuario activa botón de pánico en la app mobile/web
-2. Sistema persiste la emergencia en PostgreSQL (`PENDING`)
-3. Evento se publica en Kafka (`emergencias.boton-panico`)
-4. Operadores pueden visualizar la emergencia en tiempo real
+1. El ciudadano activa el botón de pánico en la app web (`POST /api/panic-button`).
+2. El backend guarda la emergencia en PostgreSQL (`PENDING`) y, en la misma transacción, deja el evento `EmergenciaCreada` en `outbox_events`.
+3. El outbox publisher lo manda a Kafka (`emergencias.boton-panico`) cuando está prendido. En producción hoy está apagado (`OUTBOX_PUBLISHER_ENABLED=false`) y el evento queda `PENDING` (ver [Eventos](#eventos-bus-eda)).
+4. El dispatcher la ve en su listado (`GET /api/emergencies`; el front hace polling, no hay push) y sigue el flujo de la [máquina de estados](#máquina-de-estados).
 
 ---
 
@@ -99,7 +99,7 @@ Importá en Postman:
 - Colección: [`postman/Emergencias-Backend.postman_collection.json`](postman/Emergencias-Backend.postman_collection.json)
 - Environment: [`postman/Emergencias-Backend-Local.postman_environment.json`](postman/Emergencias-Backend-Local.postman_environment.json)
 
-Pegá el `access_token` en `accessToken`. En la primera entrega usá **POST /auth/dev/login** (colección incluida) para obtenerlo sin IdP.
+Pegá el `access_token` en `accessToken`. Para obtenerlo sin IdP usá **POST /auth/dev/login** o **POST /auth/login** (colección incluida).
 
 ---
 
@@ -107,13 +107,13 @@ Pegá el `access_token` en `accessToken`. En la primera entrega usá **POST /aut
 
 Los endpoints bajo `/api/*` exigen `Authorization: Bearer <access_token>`.
 
-### Primera entrega — sin IdP (`AUTH_MODE=local`, default)
+### Sin IdP (`AUTH_MODE=local`, default; así corre producción)
 
-Funcionás solos con JWT local que **respeta el mismo contrato** que CityPass+ (claims, RS256, `verify()`).
+El backend emite sus propios JWT, que **respetan el mismo contrato** que CityPass+ (claims, RS256, `verify()`).
 
 1. `POST /auth/register` — alta email+password (tabla `auth_users`, bcrypt)
 2. `POST /auth/login` — login email+password → `access_token`
-3. `POST /auth/dev/login` — token inventando `sub` (tests / atajos demo)
+3. `POST /auth/dev/login` — token para un `sub` sin password. Con `DEV_LOGIN_STRICT=true` (producción) solo acepta los `sub` demo de la allowlist; sin modo estricto, cualquier `sub` y `groups`
 4. Mandá ese token en `Authorization: Bearer …` al resto de la API
 
 Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipánico) y `luciatranquila@gmail.com`.
@@ -148,22 +148,23 @@ Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipá
 | `LOCAL_TOKEN_TTL_SECONDS` | Vida del token local (default 900) |
 | `LOCAL_JWT_PRIVATE_KEY_PEM` | Opcional: misma clave entre reinicios |
 
-`AUTH_MODE=local` **no arranca en producción** salvo staging pre-IdP (ver abajo).
+`AUTH_MODE=local` **no arranca con `NODE_ENV=production`** salvo que esté `ALLOW_LOCAL_AUTH=true` (ver abajo).
 
-### Deploy (Render / staging) sin Grupo 2
+### Producción (Render) sin Grupo 2
 
-Sí podés deployar y probar la API antes del IdP. En el dashboard de Render (o secrets del CD) configurá:
+Producción corre con `AUTH_MODE=local` (lo dice `authMode` en `GET /health`) y `DEV_LOGIN_STRICT=true`. **No** corre con `NODE_ENV=production`: las respuestas no traen `Strict-Transport-Security` (verificado el 05/11/2026), así que tampoco necesita `ALLOW_LOCAL_AUTH`. La configuración está en [`render.yaml`](render.yaml).
 
-```env
-AUTH_MODE=local
-ALLOW_LOCAL_AUTH=true
-CORS_ALLOWED_ORIGINS=https://frontend-krds.onrender.com
-```
+Con `DEV_LOGIN_STRICT=true`, `POST /auth/dev/login` solo emite tokens para estos `sub` (`src/auth/dev-login-policy.js`), con groups fijos que el cliente no puede elegir:
 
-El server arranca con `NODE_ENV=production` y expone `POST /auth/dev/login` para obtener tokens.  
-**Sacá `ALLOW_LOCAL_AUTH` cuando pasen a IdP real** — es solo para la primera entrega.
+| `sub` | Grupo |
+|---|---|
+| `U000042`, `CIT-JuanPanico`, `CIT-LuciaTranquila` | `citizen` (solo `CIT-JuanPanico` tiene botón antipánico) |
+| `DISP-Demo001` | `dispatcher` |
+| `of-001`, `of-002` | `officer` (el `sub` es el id del catálogo de oficiales) |
 
-En producción, si `CORS_ALLOWED_ORIGINS` no está seteada, el server igual arranca: cae al frontend de Render (`https://frontend-krds.onrender.com`) y deja un `warn` en el log. Configurarla explícitamente evita depender de ese fallback.
+Cualquiera que conozca esos `sub` puede pedir un token, incluido el de dispatcher: sirve para una demo de clase, no para un entorno abierto.
+
+Qué cambia con `NODE_ENV=production`: con `AUTH_MODE=local` el server no arranca sin `ALLOW_LOCAL_AUTH=true`, se prenden HSTS + redirect a HTTPS, `DEV_LOGIN_STRICT` pasa a ser `true` por default y, si falta `CORS_ALLOWED_ORIGINS`, CORS cae al frontend de Render con un `warn`. Fuera de `production`, sin `CORS_ALLOWED_ORIGINS` el default es `http://localhost:3001`; por eso producción la tiene seteada.
 
 ### Keep-warm (Render plan free)
 
@@ -180,7 +181,7 @@ Render (free) duerme backend y frontend tras 15 min sin tráfico y tardan 50-60 
 | `KEEP_WARM_TZ` | Zona IANA en la que se evalúan las ventanas (default `America/Argentina/Buenos_Aires`) |
 | `KEEP_WARM_INTERVAL_MS` | Intervalo entre pasadas (default `480000` = 8 min) |
 
-Producción (ya en `render.yaml`; si el servicio no usa Blueprint, setearlo en el dashboard de Render):
+Producción (en `render.yaml`; el servicio no usa Blueprint, así que se setea en el dashboard de Render):
 
 ```env
 KEEP_WARM_URLS=https://emergencias-backend-34go.onrender.com/health,https://frontend-krds.onrender.com/api/warmup
@@ -218,29 +219,56 @@ Grupo desconocido no otorga nada. Mapa actual del módulo:
 
 | Grupo | Permisos |
 |-------|----------|
-| `citizen` | Activar pánico; ver y cancelar **solo sus** emergencias |
-| `dispatcher` | Ver cualquier emergencia; validar; descartar; listar oficiales; asignar oficial |
+| `citizen` | Activar pánico; ver y cancelar **solo sus** emergencias; perfil y ubicaciones frecuentes propias |
+| `dispatcher` | Ver cualquier emergencia; validar, descartar, asignar, devolver y cerrar; ver oficiales, incidentes y el outbox |
+| `officer` | Avanzar el estado operativo (en camino, en el lugar, resuelta) **solo** de la emergencia que tiene asignada: el `sub` del token tiene que ser `assigned_officer_id` |
 
-| Endpoint | Grupo requerido | Regla extra |
-|----------|-----------------|-------------|
+### Endpoints
+
+Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (parámetros, respuestas, schemas) está en Swagger (`/api-docs`).
+
+| Endpoint | Acceso | Regla extra |
+|----------|--------|-------------|
+| `GET /health` | público | estado de Kafka (`connected`, `disconnected` o `disabled`) y `authMode` |
+| `GET /api-docs`, `GET /api-docs.json` | público | Swagger UI y spec OpenAPI |
+| `POST /auth/register` | público, solo `AUTH_MODE=local` | 20 req/min por IP |
+| `POST /auth/login` | público, solo `AUTH_MODE=local` | 20 req/min por IP |
+| `POST /auth/dev/login` | público, solo `AUTH_MODE=local` | 10 req/min por IP; allowlist con `DEV_LOGIN_STRICT` |
 | `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT |
-| `POST /api/panic-button` | `citizen` | rate limit 5 req/min por IP |
-| `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo `userId === sub` (404 si ajena) |
-| `GET /api/emergencies` | `citizen` o `dispatcher` | citizen: solo las propias |
+| `POST /api/panic-button` | `citizen` | 5 req/min por IP; `emergencyType=PREVENTIVA` → 400 |
+| `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena); deja registro de auditoría |
+| `GET /api/emergencies` | `citizen` o `dispatcher` | citizen: solo propias y sin `incident`/`effectivePriority` |
 | `GET /api/emergencies/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena) |
-| `PATCH /api/emergencies/:id/validate` | `dispatcher` | PENDING → VALIDATED |
-| `PATCH /api/emergencies/:id/discard` | `dispatcher` | PENDING → DISCARDED; motivo obligatorio |
-| `PATCH /api/emergencies/:id/assign` | `dispatcher` | VALIDATED → DISPATCHED; oficial disponible |
-| `GET /api/officers` | `dispatcher` | catálogo local (oficiales no se loguean acá) |
-| `PATCH /api/emergencies/:id/cancel` | `citizen` | solo dueño (`userId === sub`) |
+| `PATCH /api/emergencies/:id/validate` | `dispatcher` | `PENDING` → `VALIDATED` |
+| `PATCH /api/emergencies/:id/discard` | `dispatcher` | `PENDING` → `DISCARDED`; `reason` obligatorio |
+| `PATCH /api/emergencies/:id/assign` | `dispatcher` | `VALIDATED` → `DISPATCHED`; el oficial tiene que estar `disponible` y pasa a `ocupado` |
+| `PATCH /api/emergencies/:id/return` | `dispatcher` | `DISPATCHED` → `VALIDATED`; libera al oficial; `reason` opcional |
+| `PATCH /api/emergencies/:id/en-route` | `officer` | `DISPATCHED` → `EN_ROUTE`; solo el oficial asignado (404 si no) |
+| `PATCH /api/emergencies/:id/on-scene` | `officer` | `EN_ROUTE` → `ON_SCENE`; solo el oficial asignado |
+| `PATCH /api/emergencies/:id/resolve` | `officer` | `ON_SCENE` → `RESOLVED`; solo el oficial asignado |
+| `PATCH /api/emergencies/:id/close` | `dispatcher` | `RESOLVED` → `CLOSED`; setea `closedAt` y libera al oficial |
+| `PATCH /api/emergencies/:id/cancel` | `citizen` | solo dueño (404 si ajena); desde `PENDING` o `VALIDATED` |
+| `GET /api/officers` | `dispatcher` | catálogo local; `?status=disponible\|ocupado` opcional |
+| `GET /api/incidents` | `dispatcher` | incidentes activos (con alguna emergencia no terminal), paginado |
+| `GET /api/incidents/:id` | `dispatcher` | incidente con sus emergencias miembro, sin coordenadas |
+| `GET /api/citizen/profile` | `citizen` | perfil propio (vacío si no se guardó) |
+| `PUT /api/citizen/profile` | `citizen` | crea o actualiza; 30 cambios/min por IP en `/api/citizen/*` |
+| `GET /api/citizen/saved-locations` | `citizen` | ubicaciones frecuentes propias |
+| `POST /api/citizen/saved-locations` | `citizen` | agrega una |
+| `PATCH /api/citizen/saved-locations/:id` | `citizen` | modifica una propia |
+| `DELETE /api/citizen/saved-locations/:id` | `citizen` | borra una propia |
+| `GET /api/outbox-events` | `dispatcher` | estado de los eventos sin payload; filtros `status`, `topic`, `page`, `limit` (máx. 100) |
 
-En dev login podés probar groups distintos:
+Una ruta o método que no existe responde **404** en JSON (`{ "error": "NotFoundError", "message": "Cannot GET /..." }`).
+
+En dev login sin modo estricto podés probar groups distintos:
 ```json
 { "sub": "U000042", "groups": ["citizen"] }
 { "sub": "U000999", "groups": ["dispatcher"] }
+{ "sub": "of-001", "groups": ["officer"] }
 ```
 
-Token ausente o inválido → **401 Unauthorized**. `/health`, `/api-docs` y `/auth/dev/*` (solo local) son públicos.
+Token ausente o inválido → **401 Unauthorized**. `/health`, `/api-docs*` y `/auth/*` (solo `AUTH_MODE=local`) son públicos.
 
 ---
 
@@ -275,13 +303,15 @@ Job en background (y `npm run security:anonymize-locations`) borra el ciphertext
 Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
 ### Logs seguros
-No se loguean JWT ni coordenadas. Kafka loguea solo un resumen (`emergencyId`, `status`, `hasLocation`).
+No se loguean JWT ni coordenadas. Los eventos se loguean solo como resumen (`topic`, `type`, ids, `hasLocation`), nunca el payload.
 
 ### HTTPS / headers
-En `NODE_ENV=production`: HSTS + redirect a HTTPS (vía `X-Forwarded-Proto`, típico en Render). Headers: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, etc.
+Siempre: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, etc. Con `NODE_ENV=production` o `FORCE_HTTPS=true`, además HSTS + redirect a HTTPS (vía `X-Forwarded-Proto`, típico en Render). Producción hoy no tiene ninguna de las dos, así que no manda HSTS.
 
 ### Auditoría de lectura
-Cada `GET /api/panic-button/:id` autorizado deja un registro en `emergency_access_audit` (`actor_sub`, `action`, timestamp).
+Solo `GET /api/panic-button/:id` deja registro: después de autorizar la lectura, inserta una fila en `emergency_access_audit` (`emergency_id`, `actor_sub`, `action = 'emergency:read'`, `created_at`). Si ese insert falla, la lectura responde igual y el error queda en el log.
+
+`GET /api/emergencies` y `GET /api/emergencies/:id` **no** dejan registro, y no hay endpoint para consultar la auditoría (se lee en la base). Los cambios de estado no van a esta tabla: quedan en `emergency_status_history`, con `actor` y `reason`.
 
 | Variable | Rol |
 |----------|-----|
@@ -295,7 +325,7 @@ Cada `GET /api/panic-button/:id` autorizado deja un registro en `emergency_acces
 | `DB_POOL_MAX` | Máximo de conexiones del pool de `pg` (default 10) |
 | `RATE_LIMIT_ENABLED` | `false` apaga el rate limiting (default: activo) |
 
-El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `connected` solo indica que el producer se conectó — ver la sección de Kafka para una trampa conocida al publicar desde el host.
+El health check reporta Kafka como `connected`, `disconnected` o `disabled` (`KAFKA_ENABLED=false`). `connected` sale de conectar un admin client al broker en cada llamada: no dice que el outbox esté publicando (en producción no publica). Ver la sección de Kafka para una trampa conocida al publicar desde el host.
 
 ### Rate limiting
 
@@ -306,6 +336,7 @@ El health check reporta el estado de Kafka (`connected`/`disconnected`). Ojo: `c
 | `POST /auth/dev/login` | 10 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
 | `POST /auth/login` / `POST /auth/register` | 20 req/min por IP | idem |
 | `POST /api/panic-button` | 5 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
+| `PUT`/`POST`/`PATCH`/`DELETE` en `/api/citizen/*` | 30 req/min por IP | idem |
 
 ### Pool de conexiones (`pg`)
 
@@ -318,6 +349,8 @@ Un 4xx tipado (`ValidationError`, `NotFoundError`, etc.) sigue devolviendo su `m
 ---
 
 ## API Endpoints
+
+La tabla completa está en [Endpoints](#endpoints). Acá, los que necesitan más detalle.
 
 ### GET `/api/user`
 
@@ -338,13 +371,13 @@ Perfil del usuario autenticado (groups del JWT). Requiere Bearer token.
 
 ### POST `/auth/dev/login` (solo `AUTH_MODE=local`)
 
-Emite un access token de desarrollo. Ver ejemplo arriba.
+Emite un access token de desarrollo. Ver ejemplo y allowlist arriba.
 
 ### POST `/api/panic-button`
 
-Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`. Rate limit: **5 req/min por IP** (ver más abajo).
+Activa el botón de pánico. Requiere grupo `citizen`. El `userId` se toma de `sub`. Rate limit: **5 req/min por IP**. Responde **201**.
 
-`latitude`/`longitude` se validan contra rango geográfico (`-90..90` / `-180..180`); fuera de rango → 400.
+`latitude`/`longitude` se validan contra rango geográfico (`-90..90` / `-180..180`); fuera de rango → 400. `address` es opcional (≤200 caracteres, se guarda cifrada junto con la ubicación). `emergencyType` acepta el catálogo menos `PREVENTIVA` (400), que la crea solo el sistema; sin tipo es `PANICO`.
 
 **`severity` ya no es un input:** el backend la deriva de `emergencyType` (ver tabla abajo). Si el body manda `severity`, se **ignora** (se loguea a nivel debug, no rompe con 400, para no romper clientes viejos hasta que se actualicen).
 
@@ -355,12 +388,13 @@ Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`. Rate li
     "latitude": -34.6037,
     "longitude": -58.3816
   },
+  "address": "Av. Corrientes 1234, CABA",
   "description": "Necesito ayuda inmediata",
   "emergencyType": "INCENDIO"
 }
 ```
 
-**Response:**
+**Response (201):**
 ```json
 {
   "success": true,
@@ -368,18 +402,32 @@ Activa el botón de pánico. Requiere JWT. El `userId` se toma de `sub`. Rate li
   "message": "Botón de pánico activado",
   "data": {
     "id": "550e8400-e29b-41d4-a716-446655440000",
+    "correlationId": "550e8400-e29b-41d4-a716-446655440000",
     "userId": "U000042",
     "latitude": -34.6037,
     "longitude": -58.3816,
+    "address": "Av. Corrientes 1234, CABA",
+    "locationAnonymized": false,
+    "locationUnavailable": false,
     "description": "Necesito ayuda inmediata",
-    "emergencyType": "INCENDIO",
     "severity": "high",
     "status": "PENDING",
+    "assignedOfficerId": null,
+    "assignedOfficer": null,
+    "incidentId": null,
+    "emergencyType": "INCENDIO",
+    "source": "INTERNAL",
+    "requiresManualValidation": false,
+    "causaTipo": null,
+    "causaId": null,
     "createdAt": "2026-08-25T10:00:00.000Z",
-    "updatedAt": "2026-08-25T10:00:00.000Z"
+    "updatedAt": "2026-08-25T10:00:00.000Z",
+    "closedAt": null
   }
 }
 ```
+
+`source`, `requiresManualValidation`, `causaTipo` y `causaId` distinguen las emergencias que crea el sistema a partir de eventos de otros módulos (ver [Consumo de eventos externos](#consumo-de-eventos-externos)). En un alta ciudadana siempre valen `INTERNAL`, `false`, `null` y `null`.
 
 #### Severidad derivada por `emergencyType`
 
@@ -393,42 +441,41 @@ Decisión de producto: "la severidad no la elige quien reporta". Tabla en `src/d
 | `DISTURBIO_EVENTO_MASIVO` | `medium` |
 | `INFRAESTRUCTURA` | `medium` |
 | `OTRO` | `low` |
+| `PREVENTIVA` | `low` (solo la crea la cobertura preventiva) |
 
-Es la base sobre la que el Risk Engine en `main` (`src/domain/risk-engine.js`, job
-`incident-detection-job`, merge #36) solo puede **subir** la prioridad, nunca bajarla
+Es la base sobre la que el Risk Engine (`src/domain/risk-engine.js`, job
+`incident-detection-job`) solo puede **subir** la prioridad, nunca bajarla
 (`effectivePriority` / invariante en `severity.js`).
 
 ### GET `/api/panic-button/:id`
 
-Obtiene detalles de un evento de pánico. Requiere JWT. Delega en el mismo método que `GET /api/emergencies/:id`: una emergencia ajena responde **404** (no 403), para no revelar que el id existe.
+Detalle de una emergencia. Delega en el mismo método que `GET /api/emergencies/:id` (una emergencia ajena responde **404**, no 403, para no revelar que el id existe) y además deja el registro de [auditoría de lectura](#auditoría-de-lectura).
 
 ### GET `/api/emergencies`
 
-Lista paginada de emergencias, con filtros por status, severity, rango de fechas, oficial asignado y tipo. Requiere `citizen` o `dispatcher` (citizen solo ve las propias).
+Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad efectiva. Citizen solo ve las propias y sin `incident`/`effectivePriority`.
 
 ### GET `/api/emergencies/:id`
 
-Detalle con `statusHistory`. Mismas reglas de acceso que el listado.
+Detalle con `statusHistory` (transiciones con `actor` y `reason`), `incident` y `effectivePriority`. A diferencia del listado, el detalle no le recorta `incident`/`effectivePriority` al citizen dueño. `observations` y `reinforcementRequests` vuelven siempre vacíos (no hay registro de esas cosas).
 
-### PATCH `/api/emergencies/:id/validate`
+### Cambios de estado (dispatcher)
 
-Dispatcher: `PENDING` → `VALIDATED`.
+- `PATCH /api/emergencies/:id/validate`: `PENDING` → `VALIDATED`.
+- `PATCH /api/emergencies/:id/discard`: `PENDING` → `DISCARDED`. Body: `{ "reason": "..." }` (obligatorio).
+- `PATCH /api/emergencies/:id/assign`: `VALIDATED` → `DISPATCHED`. Body: `{ "officerId": "of-001" }`. El oficial tiene que existir y estar `disponible`; pasa a `ocupado`.
+- `PATCH /api/emergencies/:id/return`: `DISPATCHED` → `VALIDATED` (devolución para reasignar). Body opcional: `{ "reason": "..." }`. El oficial vuelve a `disponible`.
+- `PATCH /api/emergencies/:id/close`: `RESOLVED` → `CLOSED`. Setea `closedAt` y el oficial vuelve a `disponible`.
 
-### PATCH `/api/emergencies/:id/discard`
+Al devolver, cancelar o cerrar, el oficial vuelve a `disponible`, pero `assignedOfficerId` queda con su id en la emergencia.
 
-Dispatcher: `PENDING` → `DISCARDED`. Body: `{ "reason": "..." }` (obligatorio).
+### Estado operativo (oficial asignado)
 
-### PATCH `/api/emergencies/:id/assign`
-
-Dispatcher: `VALIDATED` → `DISPATCHED`. Body: `{ "officerId": "of-001" }`. El oficial debe existir y estar `disponible`; pasa a `ocupado`.
-
-### GET `/api/officers`
-
-Catálogo de oficiales para el dispatcher (`?status=disponible` opcional). Los oficiales **no** se autentican en este módulo.
+`PATCH /api/emergencies/:id/en-route` (`DISPATCHED` → `EN_ROUTE`), `.../on-scene` (`EN_ROUTE` → `ON_SCENE`) y `.../resolve` (`ON_SCENE` → `RESOLVED`). Requieren grupo `officer` y que el `sub` del token sea el `assigned_officer_id` de la emergencia; si no, **404**. No se puede saltear un estado (409). Resolver no libera al oficial: eso pasa al cerrar.
 
 ### PATCH `/api/emergencies/:id/cancel`
 
-Cancela una emergencia propia en estado `PENDING` o `VALIDATED`. Requiere JWT y grupo `citizen`. El `actor` se toma de `sub`.
+Cancela una emergencia propia en estado `PENDING` o `VALIDATED`. Requiere grupo `citizen`; una ajena responde 404. El `actor` se toma de `sub`.
 
 **Request:**
 ```json
@@ -437,16 +484,25 @@ Cancela una emergencia propia en estado `PENDING` o `VALIDATED`. Requiere JWT y 
 }
 ```
 
-### Auth en deploy (demo)
+### GET `/api/officers`
 
-Con `AUTH_MODE=local` + `ALLOW_LOCAL_AUTH=true` cualquiera puede pedir un token dispatcher en `POST /auth/dev/login`. Para demo pública o con evaluadores externos: **sacar `ALLOW_LOCAL_AUTH`** o pasar a `AUTH_MODE=idp`. Demo de clase cerrada: se puede dejar.
+Catálogo de oficiales para el dispatcher (`?status=disponible` opcional). El catálogo vive en la tabla `officers` (V11); los oficiales se loguean con su id como `sub` (`of-001`, `of-002` en el dev login).
 
-### Ops: Postgres huérfano en Render
+### GET `/api/incidents` y `/api/incidents/:id`
 
-Si quedó un PostgreSQL de Render sin uso (tras migrar a Neon), borrarlo desde el dashboard de Render para no seguir pagando. No es un cambio de código.
+Resultado del motor de detección (dispatcher). El listado trae los incidentes con al menos una emergencia no terminal; el detalle suma las emergencias miembro sin coordenadas.
+
+### `/api/citizen/*`
+
+Perfil personal (`GET`/`PUT /api/citizen/profile`) y ubicaciones frecuentes (`GET`/`POST /api/citizen/saved-locations`, `PATCH`/`DELETE /api/citizen/saved-locations/:id`). Solo grupo `citizen`, siempre sobre el `sub` del token. Teléfono, contacto, condición médica y las coordenadas se guardan cifrados.
+
+### GET `/api/outbox-events`
+
+Estado de los eventos del outbox para el dispatcher: `id`, `topic`, `status`, `attempts`, fechas y `lastError`, sin el payload. Filtros `status` (`PENDING`, `PROCESSING`, `PUBLISHED`, `FAILED`, `SKIPPED`) y `topic`.
+
 ### GET `/health`
 
-Estado del servicio y conectividad Kafka (público).
+Estado del servicio, de Kafka y el `authMode` (público).
 
 ---
 
@@ -463,15 +519,21 @@ PENDING ──► VALIDATED ──► DISPATCHED ──► EN_ROUTE ──► ON
    └──► DISCARDED       (solo desde PENDING)
 ```
 
-| Desde | Hacia |
-|-------|-------|
-| `PENDING` | `VALIDATED`, `CANCELLED`, `DISCARDED` |
-| `VALIDATED` | `DISPATCHED`, `CANCELLED` |
-| `DISPATCHED` | `EN_ROUTE`, `VALIDATED` |
-| `EN_ROUTE` | `ON_SCENE` |
-| `ON_SCENE` | `RESOLVED` |
-| `RESOLVED` | `CLOSED` |
-| `CANCELLED`, `DISCARDED`, `CLOSED` | — (terminales) |
+Todas las transiciones tienen endpoint:
+
+| Desde | Hacia | Endpoint | Quién |
+|-------|-------|----------|-------|
+| `PENDING` | `VALIDATED` | `PATCH /api/emergencies/:id/validate` | `dispatcher` |
+| `PENDING` | `DISCARDED` | `PATCH /api/emergencies/:id/discard` | `dispatcher` |
+| `PENDING`, `VALIDATED` | `CANCELLED` | `PATCH /api/emergencies/:id/cancel` | `citizen` dueño (o el listener, si Espacios cancela el evento de una cobertura preventiva) |
+| `VALIDATED` | `DISPATCHED` | `PATCH /api/emergencies/:id/assign` | `dispatcher` |
+| `DISPATCHED` | `VALIDATED` | `PATCH /api/emergencies/:id/return` | `dispatcher` |
+| `DISPATCHED` | `EN_ROUTE` | `PATCH /api/emergencies/:id/en-route` | `officer` asignado |
+| `EN_ROUTE` | `ON_SCENE` | `PATCH /api/emergencies/:id/on-scene` | `officer` asignado |
+| `ON_SCENE` | `RESOLVED` | `PATCH /api/emergencies/:id/resolve` | `officer` asignado |
+| `RESOLVED` | `CLOSED` | `PATCH /api/emergencies/:id/close` | `dispatcher` |
+
+`CANCELLED`, `DISCARDED` y `CLOSED` son terminales. Cada transición deja una fila en `emergency_status_history` (con `actor` y `reason`) y un `EmergenciaActualizada` en el outbox, en la misma transacción.
 
 Una transición no listada devuelve **409 Conflict** (`ConflictError`, p. ej. `Invalid transition PENDING → RESOLVED`). La validación corre en el controller y, como defensa en profundidad, en `EmergencyRepository.updateStatus` con la fila bloqueada (`FOR UPDATE`), así ningún endpoint puede saltarse el flujo.
 
@@ -481,59 +543,91 @@ Una transición no listada devuelve **409 Conflict** (`ConflictError`, p. ej. `I
 
 ```
 src/
-├── index.js                      # Composition root (Kafka + pool + app)
-├── app.js                        # Express factory (inyectable en tests)
-├── swagger.js                    # OpenAPI 3 + Swagger UI (/api-docs)
+├── index.js                      # Composition root: pool, Kafka, outbox publisher, listeners, jobs y app
+├── app.js                        # Express factory (inyectable en tests), /health y Swagger
+├── swagger.js                    # OpenAPI 3 base (schemas); los paths salen del JSDoc de app.js y routes/
 ├── auth/
 │   ├── authenticate.js           # Middleware Bearer JWT → req.user
-│   ├── jwt-verifier.js           # verify() RS256 + claims CityPass+
-│   ├── groups.js                 # citizen / dispatcher + permisos
-│   ├── authorize.js              # requireGroups + reglas de ownership
+│   ├── authorize.js              # requireGroups + reglas de dueño y de oficial asignado
 │   ├── config.js                 # AUTH_MODE + IDP_* desde env
-│   ├── setup.js                  # local vs idp (factory)
-│   ├── local-keys.js             # RSA dev (AUTH_MODE=local)
-│   └── local-token-issuer.js     # POST /auth/dev/login
-├── security/
-│   ├── location-crypto.js        # AES-256-GCM ubicación
-│   ├── location-retention.js     # Job de anonimización
-│   ├── secure-log.js             # Redacción de logs
-│   ├── security-headers.js       # HTTPS/HSTS + headers
-│   ├── cors.js                   # CORS_ALLOWED_ORIGINS + defaults dev/prod
-│   └── rate-limit.js             # express-rate-limit (login, panic-button)
+│   ├── dev-login-policy.js       # Allowlist de /auth/dev/login (DEV_LOGIN_STRICT)
+│   ├── groups.js                 # citizen / dispatcher / officer + permisos
+│   ├── jwt-verifier.js           # verify() RS256 + claims CityPass+
+│   ├── local-keys.js             # RSA local (AUTH_MODE=local)
+│   ├── local-token-issuer.js     # Emite los JWT locales
+│   └── setup.js                  # local vs idp (factory)
+├── controllers/
+│   ├── auth.controller.js        # /auth/register y /auth/login
+│   ├── citizen-profile.controller.js
+│   ├── emergency.controller.js   # Listado, detalle y todos los cambios de estado
+│   ├── incident.controller.js
+│   ├── officer.controller.js
+│   ├── panic-button.controller.js
+│   └── user.controller.js
+├── db/
+│   ├── connection.js             # Reexporta pool.js (compat)
+│   └── pool.js                   # Pool de pg: max, timeouts y SSL configurables
 ├── domain/
 │   ├── emergency-status.js       # Máquina de estados (transiciones válidas)
-│   ├── emergency-type.js         # Catálogo cerrado de emergencyType
-│   └── severity.js               # severityForType: severidad derivada del tipo
-├── controllers/
-│   ├── panic-button.controller.js
-│   ├── emergency.controller.js   # list/detail/validate/discard/assign/cancel
-│   ├── officer.controller.js
-│   └── user.controller.js
-├── routes/
-│   ├── panic-button.routes.js
-│   ├── emergencies.routes.js
-│   ├── officer.routes.js
-│   ├── user.routes.js
-│   └── dev-auth.routes.js        # Solo AUTH_MODE=local
-├── repositories/
-│   ├── emergency.repository.js   # SQL + mapper + transacciones
-│   └── officer.repository.js
-├── services/
-│   └── kafka.service.js
+│   ├── emergency-type.js         # Catálogo cerrado de emergencyType (incluye PREVENTIVA)
+│   ├── severity.js               # severityForType + effectivePriority
+│   ├── incident-detector.js      # Arma incidentes a partir de los grupos
+│   ├── incident-detection-strategy.js  # DBSCAN primaria, reglas como fallback
+│   ├── dbscan-grouper.js
+│   ├── rule-based-grouper.js
+│   └── risk-engine.js            # Score y prioridad del incidente
 ├── errors/
 │   └── app-errors.js
+├── jobs/
+│   └── keep-warm.js              # Pings en horario de clase (Render free)
+├── listeners/                    # Consumo de eventos externos (ver src/listeners/README.md)
+│   ├── event-listener.js         # Listener abstracto: consumer, decode, reglas
+│   ├── event-decoder.js          # Avro (schema registry) o JSON
+│   ├── error-classifier.js       # Transitorio (reentrega) vs permanente (descarta)
+│   ├── outcome-factory.js        # Ejecuta los resultados en una transacción con dedup
+│   ├── business-rule.js
+│   ├── load-rules.js
+│   └── cobertura-preventiva/     # EventoComunitarioPublicado y EventoCancelado de Espacios
+├── repositories/
+│   ├── auth-user.repository.js
+│   ├── citizen-profile.repository.js
+│   ├── emergency.repository.js   # SQL + mapper + transacciones + outbox
+│   ├── eventos-procesados.repository.js  # Dedup de eventos consumidos
+│   ├── incident.repository.js
+│   └── officer.repository.js
+├── routes/
+│   ├── citizen-profile.routes.js
+│   ├── dev-auth.routes.js        # Solo AUTH_MODE=local
+│   ├── emergencies.routes.js
+│   ├── incidents.routes.js
+│   ├── officer.routes.js
+│   ├── outbox.routes.js
+│   ├── panic-button.routes.js
+│   └── user.routes.js
+├── security/
+│   ├── citizen-profile-retention.js  # Job de minimización del perfil
+│   ├── cors.js                   # CORS_ALLOWED_ORIGINS + defaults dev/prod
+│   ├── location-crypto.js        # AES-256-GCM de ubicaciones
+│   ├── location-retention.js     # Job de anonimización
+│   ├── pii-scrub.js              # Limpia PII de la descripción libre
+│   ├── rate-limit.js             # express-rate-limit
+│   ├── secure-log.js             # Redacción de logs
+│   └── security-headers.js       # Headers + HTTPS/HSTS
+├── services/
+│   ├── eda-auth-client.js        # Token client-credentials del Login Federado
+│   ├── emergency-events.js       # Builders de los eventos
+│   ├── incident-detection-job.js # Cada 60 s, con advisory lock
+│   ├── kafka.service.js          # Cliente Kafka (SASL/SSL), producer y health
+│   └── outbox-publisher.js
 ├── utils/
+│   ├── async-handler.js
 │   └── uuid.js                   # assertUuid: 400 antes de tocar Postgres
-├── db/
-│   └── pool.js                   # max/idleTimeout/connectionTimeout configurables
-└── tests/
-    ├── panic-button.test.js
-    ├── officer.test.js
-    ├── emergency-status.test.js
-    ├── auth.test.js
-    └── emergency.repository.integration.test.js
+└── tests/                        # Jest: unit (*.test.js) e integración (*.integration.test.js)
 
-db/migrations/                    # Fuente de verdad del schema (Flyway)
+db/migrations/                    # Fuente de verdad del schema (Flyway: V1…V16 y V21…V23)
+scripts/                          # migrate (Flyway), seed, anonimización, demo de DBSCAN
+docs/                             # Diagramas y documentos técnicos
+postman/                          # Colección y environment
 ```
 
 ---
@@ -549,55 +643,77 @@ Detalle del schema y migrations: [db/README.md](db/README.md). Plantilla de env:
 
 ---
 
-## Kafka Topics
+## Eventos (bus EDA)
 
-- `emergencias.boton-panico`: Eventos de botón de pánico
-- `emergencias.estado-actualizado`: Cambios de estado (incluye cancelación y cierre; el cierre dejó de publicar un evento aparte)
+### Cómo salen
 
-Si Kafka no está conectado, `publishEvent` responde **503** (no se pierde el evento en silencio).
+Cada operación que crea una emergencia o le cambia el estado deja su evento en `outbox_events` en la **misma transacción** (outbox transaccional). El `OutboxPublisher` reclama los pendientes cada 5 s y los manda a Kafka; si un envío falla, reintenta con backoff exponencial y, después de `OUTBOX_MAX_ATTEMPTS`, lo marca `FAILED`. Los `PUBLISHED` se purgan a las `OUTBOX_PUBLISHED_RETENTION_HOURS`. Al arrancar, el publisher pasa a `SKIPPED` los `PENDING` anteriores a `OUTBOX_PUBLISH_SINCE`.
 
----
+**En producción el publisher está apagado** (`OUTBOX_PUBLISHER_ENABLED=false`): Kafka está prendido solo para consumir y los eventos propios quedan `PENDING` en `outbox_events`. Se ven con `GET /api/outbox-events`. Con `KAFKA_ENABLED=false` pasa lo mismo: no se publica nada, pero tampoco se pierde.
 
-## Contrato de eventos (bus EDA)
+Tópicos actuales (los propios del módulo, no los FQN del gateway):
 
-Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https://github.com/G6D2/demo-repository/issues/48#issuecomment-6589800911). Reemplaza los criterios originales de ese issue y las convenciones viejas (`emergencyType`, `severity` en inglés, `userId`, etc.). **La base de datos no cambia**: los renombres se hacen al armar el evento, en `src/services/emergency-events.js`.
+| Evento (`type`) | Tópico (env → default) | Cuándo |
+|---|---|---|
+| `EmergenciaCreada` | `TOPIC_PANIC_BUTTON` → `emergencias.boton-panico` | Alta por `POST /api/panic-button`, y alta de una cobertura preventiva por el listener |
+| `EmergenciaActualizada` | `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO` → `emergencias.estado-actualizado` | Cada cambio de estado (`validate`, `discard`, `assign`, `return`, `en-route`, `on-scene`, `resolve`, `close`, `cancel`) y la cancelación de una cobertura preventiva. El cierre viaja acá con `estadoNuevo = CERRADA`: no hay `EmergenciaCerrada` |
+| `EmergenciaPriorizada` | `TOPIC_EMERGENCIA_PRIORIZADA` → `emergencias.priorizada` | Job de detección de incidentes (cada 60 s), solo si cambió la prioridad del incidente; uno por emergencia miembro |
 
-### `com.citypass.emergencias.EmergenciaCreada`
+Sobre de todos los eventos: `{ type, eventId, correlationId, data }`. `eventId` lo genera `insertOutboxEvent`; `correlationId` va en la raíz y también dentro de `data`. Se publica con `key: null`, así que no hay orden garantizado entre eventos de una misma emergencia (ver [`docs/diagramas/06-eventos.md`](docs/diagramas/06-eventos.md)).
 
-| Campo | Tipo | Fuente / Default |
+### Contrato de `EmergenciaCreada` y `EmergenciaActualizada`
+
+Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https://github.com/G6D2/demo-repository/issues/48#issuecomment-6589800911). Reemplaza los criterios originales de ese issue y las convenciones viejas (`emergencyType`, `severity` en inglés, `userId`, etc.). **La base de datos no cambia**: los renombres se hacen al armar el evento, en `src/services/emergency-events.js`. En el contrato los nombres son FQN (`com.citypass.emergencias.EmergenciaCreada`); el `type` que sale hoy es el nombre corto.
+
+#### `EmergenciaCreada`
+
+| Campo | Tipo | Fuente / valor hoy |
 |---|---|---|
 | `emergenciaId` | string | `emergencies.id` |
-| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`; pendiente sumar `TRANSITO` y `PREVENTIVA`) |
+| `categoria` | string | `emergency_type`: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA` |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
-| `barrio` | string \| null | null hasta #76. Lo leen Reclamos y Analítica |
+| `barrio` | string \| null | hoy siempre `null` (#76). Lo leen Reclamos y Analítica |
 | `ubicacion.barrio` | string \| null | el mismo valor, anidado para Espacios |
-| `afectaCirculacion` | boolean \| null | null hasta #76/#85 (con `false`, Reclamos descarta el evento) |
-| `latitud`, `longitud` | double \| null | null hasta que cierre la regla "mandar sólo con `afectaCirculacion = true`" (Juani con Valentina) |
-| `causaId`, `causaTipo` | string \| null / enum \| null | null hasta #77/#79/#80 (consumo de eventos externos) |
-| `prioridadOriginal` | enum \| null | null hasta #79/#85 |
-| `ciudadanoId` | string \| null | `user_id` |
+| `afectaCirculacion` | boolean \| null | hoy siempre `null` (con `false`, Reclamos descartaría el evento) |
+| `latitud`, `longitud` | double \| null | hoy siempre `null` |
+| `causaId`, `causaTipo` | string \| null | `causa_id` / `causa_tipo`. En un alta ciudadana, `null`; la cobertura preventiva manda el `eventoId` de Espacios y `EVENTO_PUBLICO` |
+| `prioridadOriginal` | enum \| null | hoy siempre `null` |
+| `ciudadanoId` | string \| null | `user_id`; `null` en las emergencias externas |
 | `correlationId` | string | `correlation_id` (fallback: `id`) |
 | `createdAt` | ISO-8601 UTC | `created_at` |
 
 **No viajan al bus:** `descripcion`, `titulo`, `direccion` (texto libre; analítica tiene columnas pero su código los deja null).
 
-### `com.citypass.emergencias.EmergenciaActualizada`
+#### `EmergenciaActualizada`
 
-Antes era `EmergenciaEstadoActualizado`. Reemplaza también a `EmergenciaCerrada` (eliminado del contrato): el cierre viaja como esta misma `EmergenciaActualizada` con `estadoNuevo = CERRADA`.
+Antes era `EmergenciaEstadoActualizado`, y reemplaza también a `EmergenciaCerrada`.
 
-| Campo | Tipo | Fuente / Default |
+| Campo | Tipo | Fuente / valor hoy |
 |---|---|---|
 | `emergenciaId` | string | `emergencies.id` |
 | `estadoAnterior`, `estadoNuevo` | string español | map desde `previousStatus`/`newStatus` del history |
 | `updatedAt` | ISO-8601 UTC | `emergencies.updated_at` |
-| `resueltoAt` | ISO-8601 UTC \| null | sólo en transición a `RESUELTA` |
-| `usuarioId` | string \| null | actor del request |
-| `asignadoA` | string \| null | `assigned_officer_id` sólo en `DESPACHADA` (#85 pide un evento por recurso) |
-| `areaResponsable` | string \| null | null hasta #85 |
-| `resolucion` | string \| null | `reason` del request |
+| `resueltoAt` | ISO-8601 UTC \| null | solo cuando `estadoNuevo = RESUELTA`: el momento en que se arma el evento (no hay columna `resolved_at`) |
+| `usuarioId` | string \| null | actor: `sub` de quien hizo el cambio; `eda:espacios` cuando cancela el listener |
+| `asignadoA` | string \| null | `assigned_officer_id`, solo en `DESPACHADA` (un evento por despacho) |
+| `areaResponsable` | string \| null | hoy siempre `null` |
+| `resolucion` | string \| null | `reason` del cambio: motivo de `discard`, `cancel` o `return`, `Assigned officer <id>` en `assign`; `null` en `validate`, `en-route`, `on-scene`, `resolve` y `close` |
 | `prioridad` | enum \| null | map desde `severity` |
 | `correlationId` | string | `correlation_id` (fallback: `id`) |
+
+#### `EmergenciaPriorizada`
+
+No forma parte del contrato del #48: conserva los nombres en inglés y la prioridad en minúscula.
+
+| Campo | Fuente |
+|---|---|
+| `id`, `correlationId` | la emergencia miembro |
+| `incidentId` | incidente al que pertenece |
+| `priorityIndividual` | `severity` de la emergencia |
+| `incidentPriority` | prioridad del incidente |
+| `priority` | prioridad final del miembro: la mayor entre las dos |
+| `score`, `reasonCodes`, `algorithmVersion` | resultado del Risk Engine (`dbscan-v1` o `rule-based-v1`) |
 
 ### Tabla de traducción de estados
 
@@ -619,6 +735,27 @@ Antes era `EmergenciaEstadoActualizado`. Reemplaza también a `EmergenciaCerrada
 - `descripcion`, `titulo`, `direccion` **nunca** van al bus (texto libre).
 - `EmergenciaCerrada` y `EmergenciaReportada.v2` quedaron descartados.
 - Los renombres se hacen al armar el evento. La base de datos sigue en inglés; el issue #63 no es bloqueante para este contrato.
+
+---
+
+## Consumo de eventos externos
+
+Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca los listeners de `src/listeners/` dentro del mismo proceso web. Hoy hay un caso, la **cobertura preventiva**, que escucha dos eventos de Espacios Públicos:
+
+| Evento | Topic (env) | Qué hace |
+|---|---|---|
+| `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox |
+| `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca |
+
+Cómo lee el bus:
+
+- Mensajes Avro en formato Confluent, con el schema del registry del gateway (`EDA_SCHEMA_REGISTRY_URL`). Un mensaje que no empieza con el byte mágico se lee como JSON (tests y Kafka local).
+- SASL/OAUTHBEARER con el token client-credentials del Login Federado (`EDA_OAUTH_*`) y SSL (`KAFKA_SSL=true`). El registry usa el mismo token.
+- `group.id` = `com.citypass.emergencias.<Listener>` (el broker solo acepta grupos con ese prefijo).
+- Dedup por `metadata.eventId` en `eventos_procesados` (V22), en la misma transacción que los efectos: un duplicado o una republicación no crean nada nuevo. Espacios republica `EventoComunitarioPublicado` cada vez que cambian los inscriptos; además, un índice único de V23 garantiza una sola `PREVENTIVA` por evento.
+- Un error transitorio (base o registry caídos) no confirma el offset y Kafka reentrega. Uno permanente (payload inválido, sin handler) queda como `DISCARDED` en `eventos_procesados` y el offset avanza. Un mensaje ilegible se loguea y se saltea.
+
+El servicio corre en Render free, que duerme sin tráfico: mientras duerme no consume. Al despertar, el grupo sigue desde su último offset confirmado.
 
 ---
 
@@ -651,16 +788,17 @@ La prioridad de diseño está en la lógica de dominio (transiciones de estado, 
 
 | Capa | Archivos en `src/tests/` | Qué prueban |
 |---|---|---|
-| **Controllers / API** | `auth.test.js`, `auth-local.test.js`, `user.test.js`, `panic-button.test.js`, `emergency.test.js`, `officer.test.js`, `assign.test.js`, `incident.controller.test.js`, `incident.test.js` | Endpoints HTTP: statuses, payloads, autorización, validación de input, errores 4xx/5xx. Se monta la app con `createApp(...)` y se ejercitan con supertest. |
+| **Controllers / API** | `auth.test.js`, `auth-local.test.js`, `auth-register.test.js`, `user.test.js`, `panic-button.test.js`, `emergency.test.js`, `officer.test.js`, `assign.test.js`, `return-emergency.test.js`, `operational-status.test.js`, `citizen-profile.test.js`, `incident.controller.test.js`, `incident.test.js` | Endpoints HTTP: statuses, payloads, autorización, validación de input, errores 4xx/5xx. Se monta la app con `createApp(...)` y se ejercitan con supertest. |
 | **Middlewares** | `authorize.test.js`, `cors.test.js`, `rate-limit.test.js`, `app-error-handler.test.js` | Comportamiento de cada middleware en isolation (roles, orígenes permitidos, throttling por IP, sanitización de errores). |
-| **Dominio** | `emergency-status.test.js`, `emergency-type.test.js`, `emergency-events.test.js`, `severity.test.js`, `incident-detector.test.js`, `risk-engine.test.js`, `rule-based-grouper.test.js`, `map-emergency.test.js` | Reglas puras: transiciones de estado, severidad derivada, priorización, agrupación por Union-Find. |
-| **Servicios** | `kafka.service.test.js`, `outbox-publisher.test.js`, `keep-warm.test.js`, `location-retention.test.js`, `incident-detection-job.test.js` | Publicación al bus (con `kafkajs` mockeado), poll del outbox, job de retención, detección con lock cross-instance. |
-| **Seguridad** | `security.test.js`, `secure-log.test.js`, `local-keys.test.js` | Headers, sanitización de logs (sin JWT ni lat/lng), rotación de keys. |
+| **Dominio** | `emergency-status.test.js`, `emergency-type.test.js`, `emergency-events.test.js`, `severity.test.js`, `incident-detector.test.js`, `incident-detection-strategy.test.js`, `dbscan-grouper.test.js`, `risk-engine.test.js`, `rule-based-grouper.test.js`, `map-emergency.test.js` | Reglas puras: transiciones de estado, severidad derivada, contrato de eventos, priorización, agrupación (DBSCAN y Union-Find). |
+| **Servicios** | `kafka.service.test.js`, `eda-auth-client.test.js`, `outbox-publisher.test.js`, `keep-warm.test.js`, `location-retention.test.js`, `incident-detection-job.test.js` | Cliente Kafka (con `kafkajs` mockeado), token del Login Federado, poll del outbox, job de retención, detección con lock cross-instance. |
+| **Listeners** | `listeners/*.test.js`, `listeners/cobertura-preventiva/*.test.js` | Decoder Avro/JSON, clasificación de errores, carga de reglas, `OutcomeFactory` con dedup, reglas y handlers de la cobertura preventiva. |
+| **Seguridad** | `security.test.js`, `security-hardening.test.js`, `secure-log.test.js`, `local-keys.test.js` | Headers, sanitización de logs (sin JWT ni lat/lng), rotación de keys. |
 | **Repositories (unit)** | `emergency.repository.test.js`, `incident.repository.test.js`, `officer.repository.test.js` | Queries con `pg` mockeado. |
-| **Repositories (integración)** | `emergency.repository.integration.test.js`, `incident.repository.integration.test.js`, `incident-detection-job.integration.test.js` | Postgres real (contenedor efímero + Flyway); en CI corren con el service `postgres:15-alpine`. |
+| **Repositories e integración** | `emergency.repository.integration.test.js`, `incident.repository.integration.test.js`, `incident-detection-job.integration.test.js`, `eventos-procesados.repository.integration.test.js`, `operational-status.integration.test.js`, `listeners/consumer.integration.test.js` | Postgres real (contenedor efímero + Flyway); en CI corren con el service `postgres:15-alpine`. |
 | **Infra** | `flyway.test.js`, `pool.test.js` | Aplicación de migraciones, configuración del pool. |
 
-Cobertura del último CI: ver `docs/diagramas/07-ci-cd.md` (statements ~97%, branches ~87%, functions ~96%, lines ~97%).
+Último CI de `main` (05/11/2026, [run 42050901474](https://github.com/G6D2/emergencias-backend/actions/runs/42050901474)): 739 tests unitarios y 75 de integración; cobertura statements 95,73 %, branches 84,78 %, functions 95,65 %, lines 96,54 %. El gate interno es 80 % (ver `docs/diagramas/07-ci-cd.md`).
 
 ### Respuesta para la presentación
 
@@ -694,14 +832,20 @@ eventos de dominio, CI/CD y despliegue — generados desde el código real, en M
 
 ---
 
-## Próximos Pasos
+## Estado
 
-- [x] Persistencia de emergencias (PostgreSQL)
-- [x] Cancelación de emergencias
-- [x] Integración con Login Federado (auth JWT CityPass+)
-- [x] Autorización por `groups` (citizen / dispatcher)
-- [x] Validar / descartar / asignar oficial + catálogo `/api/officers`
-- [x] Cifrado de ubicación + retención + logs seguros + auditoría de lecturas
-- [ ] Alinear contrato HTTP de location (`lat`/`lng` vs `latitude`/`longitude`)
-- [ ] Visualización en tiempo real (WebSockets/SSE) — hoy polling en front
-- [ ] Ops: borrar Postgres huérfano de Render si aún existe (dashboard)
+Implementado en `main`:
+
+- Botón de pánico y reporte con tipo, dirección cifrada y severidad derivada del tipo.
+- Ciclo de vida completo por API: validar, descartar, asignar, devolver, en camino, en el lugar, resolver, cerrar y cancelar.
+- Grupos `citizen`, `dispatcher` y `officer` con JWT del contrato CityPass+ (emitido por el propio backend, `AUTH_MODE=local`).
+- Detección de incidentes cada 60 s (DBSCAN con fallback a reglas) y prioridad efectiva.
+- Cifrado de ubicación y perfil, retención, logs seguros, rate limiting y auditoría de lectura en `GET /api/panic-button/:id`.
+- Outbox transaccional con los eventos del contrato del #48 y consumo de eventos de Espacios (cobertura preventiva).
+
+Lo que hoy no está:
+
+- Publicación al bus: el outbox no publica en producción (`OUTBOX_PUBLISHER_ENABLED=false`) y los tópicos son los propios, no los FQN del gateway.
+- Login federado: `AUTH_MODE=idp` está programado, pero producción usa `AUTH_MODE=local`.
+- Tiempo real: el front hace polling, no hay WebSocket ni SSE.
+- `barrio`, `afectaCirculacion`, `latitud`/`longitud` y `prioridadOriginal` salen siempre en `null` en `EmergenciaCreada`.

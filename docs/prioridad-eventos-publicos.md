@@ -1,7 +1,13 @@
 # Prioridad elevada cerca de eventos públicos
 
-**Estado:** diseño — pendiente de implementación
-**Contexto:** primer caso de negocio sobre el paquete `src/listeners/` (EventListener + reglas)
+**Estado:** diseño, **no implementado**. Nada de este documento existe en el código: no hay
+`PublicEvent`, `EDA_TOPIC_PUBLIC_EVENT`, tabla `priority_zones` ni aumento de prioridad en lectura.
+**Contexto:** caso de negocio propuesto sobre el paquete `src/listeners/` (EventListener + reglas)
+
+> El único consumo de eventos públicos que existe hoy es otro: la **cobertura preventiva**
+> (`src/listeners/cobertura-preventiva/`). Ante un `EventoComunitarioPublicado` de Espacios con
+> capacidad ≥ 500 crea una emergencia `PREVENTIVA`; no toca la prioridad de otras emergencias.
+> Ver `docs/diagramas/06-eventos.md`.
 
 ## Requisito
 
@@ -29,8 +35,8 @@ src/listeners/eventos-publicos/
       registrar-zona-prioritaria.rule.js
 ```
 
-- Agregar `eventos-publicos` a `PACKAGES` en `src/listeners/index.js` y
-  `EDA_TOPIC_PUBLIC_EVENT` a `.env.example`.
+- Agregar `eventos-publicos` a `PACKAGES` en `src/listeners/index.js` (hoy solo tiene
+  `cobertura-preventiva`) y `EDA_TOPIC_PUBLIC_EVENT` a `.env.example`.
 - Cancelaciones y modificaciones: un listener por tipo de evento en el mismo paquete (o el
   mismo listener si el productor las publica en el mismo topic), cada uno con sus reglas.
 
@@ -49,7 +55,7 @@ actualizadas.
 
 ### 2. Persistir la zona (factory)
 
-Migración `V<n>__create_priority_zones.sql` (la siguiente libre; V17 a V23 ya están tomadas o reservadas):
+Migración `V<n>__create_priority_zones.sql` (una versión mayor a la última aplicada, hoy V23: Flyway no acepta versiones menores a la última ya aplicada, así que V17 a V20 tampoco sirven):
 
 | Columna | Notas |
 |---|---|

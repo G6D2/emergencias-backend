@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph backendCD["emergencias-backend · CD (cd.yml)"]
         direction TB
-        bCdTrigger["on: push a main"]
+        bCdTrigger["on: workflow_run de CI sobre main<br/>(solo si CI terminó success en un push)"]
         bMigrate["npm run migrate (Flyway, DATABASE_URL secret)"]
         bDeploy["curl deploy hook de Render (si RENDER_DEPLOY_HOOK_URL existe)"]
         bCdNotify["notify-failure -> email"]
@@ -108,12 +108,12 @@ Hay tres números distintos que se confunden al presentar el pipeline:
 | **Gate interno del pipeline** | Umbral que fuerza el fallo del job en CI | **80%** en statements/branches/functions/lines |
 | **Valor real medido** | Cobertura obtenida en el último run de CI sobre `main` | Ver tabla abajo |
 
-### Último CI exitoso sobre `main` (2026-09-21)
+### Último CI exitoso sobre `main`
 
-| Repo | Statements | Branches | Functions | Lines | Run |
-|---|---|---|---|---|---|
-| `emergencias-backend` | **96.70 %** | **87.15 %** | **96.48 %** | **96.96 %** | [35665928569](https://github.com/G6D2/emergencias-backend/actions/runs/35665928569) |
-| `Frontend` | **96.12 %** | **89.59 %** | **95.18 %** | **98.43 %** | [35664969982](https://github.com/G6D2/Frontend/actions/runs/35664969982) |
+| Repo | Fecha | Statements | Branches | Functions | Lines | Run |
+|---|---|---|---|---|---|---|
+| `emergencias-backend` | 2026-11-05 | **95.73 %** | **84.78 %** | **95.65 %** | **96.54 %** | [42050901474](https://github.com/G6D2/emergencias-backend/actions/runs/42050901474) |
+| `Frontend` | 2026-09-21 | **96.12 %** | **89.59 %** | **95.18 %** | **98.43 %** | [35664969982](https://github.com/G6D2/Frontend/actions/runs/35664969982) |
 
 Los cuatro ejes están holgadamente por encima del gate interno (80%) y del requisito externo (60%). El eje más cerca del umbral en ambos repos es **branches**.
 
@@ -148,7 +148,7 @@ Si preguntan "¿SonarCloud es su quality gate?": **no**. El gate efectivo hoy es
 
 | Repo | Trigger | Pasos | Nota |
 |---|---|---|---|
-| `emergencias-backend` | `push` a `main` | `npm run migrate` (Flyway contra `DATABASE_URL` secret) → deploy hook de Render | Sin `FLYWAY_BASELINE_VERSION` a propósito (ver comentario en `cd.yml`): una base nueva necesita correr V1..V14 completas |
+| `emergencias-backend` | `workflow_run` de CI sobre `main`, si CI salió `success` en un push (deploya el SHA que CI aprobó) | `npm run migrate` (Flyway contra `DATABASE_URL` secret) → deploy hook de Render | Sin `FLYWAY_BASELINE_VERSION` a propósito (ver comentario en `cd.yml`): una base nueva necesita correr todas las migraciones (V1…V16 y V21…V23) |
 | `Frontend` | `push` a `main` | Deploy hook de Render únicamente | No corre migraciones (no tiene schema propio) |
 
 ## Failover manual: `activate-backup.yml`
