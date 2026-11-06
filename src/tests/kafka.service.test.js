@@ -172,6 +172,24 @@ describe('kafkaHealth (estado en memoria para GET /health)', () => {
     expect(kafkaHealth(service({ connected: false }), { outbox: outbox(true) }).kafka).toBe('disconnected');
   });
 
+  it('con el outbox publicando por el gateway no exige el producer (prod desde el 05/11)', () => {
+    const health = kafkaHealth(service({ connected: false }), {
+      outbox: { enabled: true, publisher: 'gateway', lastPollAt: null },
+      listeners: [listener('running'), listener('running')],
+    });
+
+    expect(health.kafka).toBe('connected');
+    expect(health.outbox).toMatchObject({ enabled: true, publisher: 'gateway', producerConnected: false });
+  });
+
+  it('con el gateway publicando y un listener caído, disconnected', () => {
+    const health = kafkaHealth(service(), {
+      outbox: { enabled: true, publisher: 'gateway', lastPollAt: null },
+      listeners: [listener('running'), listener('retrying')],
+    });
+    expect(health.kafka).toBe('disconnected');
+  });
+
   it('Kafka prendido sin nada que lo use: disconnected', () => {
     expect(kafkaHealth(service({ connected: true })).kafka).toBe('disconnected');
   });
