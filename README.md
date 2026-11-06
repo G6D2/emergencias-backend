@@ -269,8 +269,13 @@ sin perder los datos ya guardados.
 Las filas escritas antes de esta versión no tienen cabecera y se desencriptan
 probando las claves del keyring, así que la migración no requiere backfill.
 
+### Coords cifradas en el bus (`ubicacion.latitud` / `ubicacion.longitud`)
+En `EmergenciaCreada`, las coordenadas exactas van **solo** en `data.ubicacion.*`, cifradas con **`BUS_LOCATION_ENCRYPTION_KEY`** (distinta a la de DB).
+
+Guía **autocontenida** para mandar a otros equipos (sin depender del repo): **[docs/bus-ubicacion-para-consumidores.md](docs/bus-ubicacion-para-consumidores.md)**.
+
 ### Retención / minimización
-Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
+Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`. El **barrio** se conserva (y se deriva antes de borrar si faltaba). Al anonimizar también se ponen en `null` `ubicacion.latitud`/`longitud` en los payloads del outbox de esas emergencias.
 
 Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
@@ -288,6 +293,8 @@ Cada `GET /api/panic-button/:id` autorizado deja un registro en `emergency_acces
 | `LOCATION_ENCRYPTION_KEY` | AES-256 key (base64, 32 bytes) — **obligatoria** (salvo que se use `LOCATION_ENCRYPTION_KEYS`) |
 | `LOCATION_ENCRYPTION_KEYS` | Keyring para rotar: `id:base64key,id2:base64key2` (opcional) |
 | `LOCATION_ENCRYPTION_KEY_ID` | Id de la clave con la que se cifra (default: `1`, o la primera del keyring) |
+| `BUS_LOCATION_ENCRYPTION_KEY` | AES-256 para `ubicacion.latitud/longitud` en el bus (base64, 32 bytes). **Distinta** a la de DB. Opcional: sin ella esas coords salen null. Compartirla con consumidores por canal seguro |
+| `BUS_LOCATION_ENCRYPTION_KEYS` / `BUS_LOCATION_ENCRYPTION_KEY_ID` | Keyring de bus (mismo formato que at-rest) |
 | `LOCATION_RETENTION_HOURS` | Horas tras el cierre (`closed_at`) antes de anonimizar (default 72) |
 | `LOCATION_RETENTION_ENABLED` | `false` para desactivar el job |
 | `FORCE_HTTPS` | Forzar HTTPS aunque no sea production |
@@ -560,6 +567,17 @@ Si Kafka no está conectado, `publishEvent` responde **503** (no se pierde el ev
 
 ## Contrato de eventos (bus EDA)
 
+> **Spec AsyncAPI:** [`asyncapi.yaml`](asyncapi.yaml) (AsyncAPI 3.1) describe los eventos que
+> publicamos (`EmergenciaCreada`, `EmergenciaActualizada`, y el interno `EmergenciaPriorizada`)
+> y los que consumimos de Espacios (`EventoComunitarioPublicado`, `EventoCancelado`).
+> `src/tests/asyncapi.test.js` corre en `npm test` y falla si los builders de
+> `src/services/emergency-events.js` dejan de cumplir el spec: **si cambiás el contrato,
+> cambiá el YAML en el mismo PR.**
+>
+> - `npm run asyncapi:validate` — valida el spec con el parser oficial.
+> - `npm run asyncapi:docs` — genera la documentación HTML en `docs/asyncapi/` (no se versiona).
+> - También se puede pegar el YAML en [AsyncAPI Studio](https://studio.asyncapi.com).
+
 Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https://github.com/G6D2/demo-repository/issues/48#issuecomment-6589800911). Reemplaza los criterios originales de ese issue y las convenciones viejas (`emergencyType`, `severity` en inglés, `userId`, etc.). **La base de datos no cambia**: los renombres se hacen al armar el evento, en `src/services/emergency-events.js`.
 
 ### `com.citypass.emergencias.EmergenciaCreada`
@@ -567,13 +585,13 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | Campo | Tipo | Fuente / Default |
 |---|---|---|
 | `emergenciaId` | string | `emergencies.id` |
-| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`; pendiente sumar `TRANSITO` y `PREVENTIVA`) |
+| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; pendiente sumar `TRANSITO`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
-| `barrio` | string \| null | null hasta #76. Lo leen Reclamos y Analítica |
-| `ubicacion.barrio` | string \| null | el mismo valor, anidado para Espacios |
-| `afectaCirculacion` | boolean \| null | null hasta #76/#85 (con `false`, Reclamos descarta el evento) |
-| `latitud`, `longitud` | double \| null | null hasta que cierre la regla "mandar sólo con `afectaCirculacion = true`" (Juani con Valentina) |
+| `barrio` | string \| null | catálogo oficial CABA (48 barrios), en claro; lo leen Reclamos/Analítica |
+| `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
+| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null. **No** hay lat/lng en la raíz de `data` |
+| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA` (y `TRANSITO` cuando entre al catálogo); `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null / enum \| null | null hasta #77/#79/#80 (consumo de eventos externos) |
 | `prioridadOriginal` | enum \| null | null hasta #79/#85 |
 | `ciudadanoId` | string \| null | `user_id` |

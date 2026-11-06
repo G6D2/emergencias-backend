@@ -75,10 +75,19 @@ describe('ProgramarCoberturaPreventivaRule', () => {
           latitud: -34.6,
           longitud: -58.4,
           direccion: 'Av. Sarmiento 2704',
+          barrio: null,
           capacidad: 800,
           correlationId: 'evento-ev-1',
         },
       });
+    });
+
+    it('reenvía barrio texto del evento cuando viene', () => {
+      const { payload } = rule.apply(buildContext({
+        capacidad: 800,
+        barrio: 'Almagro',
+      }));
+      expect(payload.barrio).toBe('Almagro');
     });
 
     it('titulo default y coordenadas null cuando no vienen', () => {
@@ -87,6 +96,7 @@ describe('ProgramarCoberturaPreventivaRule', () => {
       expect(payload.latitud).toBeNull();
       expect(payload.longitud).toBeNull();
       expect(payload.direccion).toBeNull();
+      expect(payload.barrio).toBeNull();
       expect(payload.correlationId).toBeNull();
     });
   });
