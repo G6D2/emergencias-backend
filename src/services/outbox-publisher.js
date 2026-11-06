@@ -209,6 +209,8 @@ class OutboxPublisher {
   health() {
     return {
       enabled: this.timer !== null,
+      // 'kafka' publica con el producer; 'gateway' por HTTP (no usa producer).
+      publisher: this.publisher === this.kafkaService ? 'kafka' : 'gateway',
       lastPollAt: this.lastPollAt ? this.lastPollAt.toISOString() : null,
     };
   }

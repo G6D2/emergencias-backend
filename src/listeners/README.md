@@ -81,9 +81,13 @@ marca transitorios: si no consigue conexion, o si ni el `ROLLBACK` anda.
   final y pierde lo publicado mientras el servicio dormia (Render free lo
   duerme a los 15 min sin trafico). Con offset commiteado, kafkajs retoma
   desde ahi y esto no aplica.
-- Piso temporal: `EDA_CONSUMER_SINCE` (ISO 8601 UTC). Los mensajes con
-  timestamp de Kafka anterior se saltean sin decodificarlos y el offset
-  avanza. Sirve para no procesar los eventos de prueba viejos al leer desde el
+- Piso temporal: `EDA_CONSUMER_SINCE` (ISO 8601 con zona: `Z` u offset; si
+  no, el arranque falla, y también si la fecha está en el futuro). Los mensajes
+  con timestamp de Kafka anterior se saltean sin decodificarlos y el offset
+  avanza; los que no traen timestamp real (`-1`, vacío) se procesan.
+  **Tiene que quedar cargada siempre**: Kafka borra los offsets de un grupo que
+  pasa 7 días sin consumidores (con Render free y el keep-warm solo de jueves,
+  pasa) y un `OffsetOutOfRange` también vuelve a leer desde el principio. Sirve para no procesar los eventos de prueba viejos al leer desde el
   principio. Vacio = sin piso (la dedup por `eventId` cubre los repetidos).
 
 ## Agregar una regla
