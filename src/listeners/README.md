@@ -61,6 +61,16 @@ listeners/
 - SASL/OAUTHBEARER con el token client-credentials del Login Federado
   (`EDA_OAUTH_*`, ver `KafkaService`). Sin secreto se conecta sin SASL.
 - `KAFKA_SSL=true` en produccion (SASL_SSL).
+- Arranque sin offset commiteado (grupo nuevo, o que todavia no proceso
+  ningun mensaje): lee el topic desde el principio
+  (`EDA_CONSUMER_FROM_BEGINNING`, default `true`). Con `false` arranca en el
+  final y pierde lo publicado mientras el servicio dormia (Render free lo
+  duerme a los 15 min sin trafico). Con offset commiteado, kafkajs retoma
+  desde ahi y esto no aplica.
+- Piso temporal: `EDA_CONSUMER_SINCE` (ISO 8601 UTC). Los mensajes con
+  timestamp de Kafka anterior se saltean sin decodificarlos y el offset
+  avanza. Sirve para no procesar los eventos de prueba viejos al leer desde el
+  principio. Vacio = sin piso (la dedup por `eventId` cubre los repetidos).
 
 ## Agregar una regla
 

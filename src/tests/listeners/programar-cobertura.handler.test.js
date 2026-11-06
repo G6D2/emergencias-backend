@@ -2,6 +2,7 @@ const {
   createProgramarCoberturaHandler,
   PROGRAMAR_COBERTURA,
 } = require('../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
+const { setBusLocationCryptoForTests } = require('../../security/bus-location-crypto');
 
 function buildRepository(existing = []) {
   return {
@@ -29,6 +30,14 @@ describe('PROGRAMAR_COBERTURA', () => {
 });
 
 describe('createProgramarCoberturaHandler', () => {
+  beforeEach(() => {
+    setBusLocationCryptoForTests(null);
+  });
+
+  afterEach(() => {
+    setBusLocationCryptoForTests(undefined);
+  });
+
   it('falla sin emergencyRepository', () => {
     expect(() => createProgramarCoberturaHandler({})).toThrow(/emergencyRepository/);
   });
@@ -64,14 +73,27 @@ describe('createProgramarCoberturaHandler', () => {
     expect(result).toEqual({ emergencyId: input.id, created: true });
   });
 
-  it('el outbox lleva EmergenciaCreada con la causa y sin ciudadano', async () => {
+  it('el outbox lleva EmergenciaCreada con la causa, barrio y sin ciudadano', async () => {
     const emergencyRepository = buildRepository();
     const handler = createProgramarCoberturaHandler({ emergencyRepository });
     await handler(client, payload);
 
     const input = emergencyRepository.create.mock.calls[0][0];
+    expect(input).toMatchObject({
+      latitude: -34.615,
+      longitude: -58.371,
+      barrioText: null,
+    });
+
     const event = input.outboxEvent.payload(
-      { ...input, emergencyType: 'PREVENTIVA', createdAt: '2026-11-05T12:00:00.000Z' },
+      {
+        ...input,
+        emergencyType: 'PREVENTIVA',
+        barrio: 'SAN TELMO',
+        latitude: -34.615,
+        longitude: -58.371,
+        createdAt: '2026-11-05T12:00:00.000Z',
+      },
       'evt-1'
     );
     expect(event.type).toBe('EmergenciaCreada');
@@ -82,6 +104,32 @@ describe('createProgramarCoberturaHandler', () => {
       causaTipo: 'EVENTO_PUBLICO',
       causaId: 'ev-77',
       ciudadanoId: null,
+    });
+    expect(event.data.barrio).toBe('SAN TELMO');
+    expect(event.data.latitud).toBeUndefined();
+    expect(event.data.longitud).toBeUndefined();
+    expect(event.data.ubicacion).toEqual({
+      barrio: 'SAN TELMO',
+      latitud: null,
+      longitud: null,
+    });
+  });
+
+  it('pasa barrioText del evento al create para fallback sin coords', async () => {
+    const emergencyRepository = buildRepository();
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
+    await handler(client, {
+      ...payload,
+      latitud: null,
+      longitud: null,
+      barrio: 'Almagro',
+    });
+
+    expect(emergencyRepository.create.mock.calls[0][0]).toMatchObject({
+      latitude: null,
+      longitude: null,
+      barrioText: 'Almagro',
+      requiresManualValidation: true,
     });
   });
 

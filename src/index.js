@@ -8,6 +8,7 @@ const { CitizenProfileRepository } = require('./repositories/citizen-profile.rep
 const { createApp } = require('./app');
 const { createAuthSetup } = require('./auth/setup');
 const { createLocationCrypto } = require('./security/location-crypto');
+const { assertBusLocationCryptoAtBoot } = require('./security/bus-location-crypto');
 const { startLocationRetentionJob } = require('./security/location-retention');
 const { startCitizenProfileRetentionJob } = require('./security/citizen-profile-retention');
 const { startIncidentDetectionJob } = require('./services/incident-detection-job');
@@ -26,6 +27,8 @@ const PORT = process.env.PORT || 3000;
 async function start() {
   // Valida la key al boot (falla temprano si falta o es inválida).
   const locationCrypto = createLocationCrypto();
+  // Clave de bus: distinta a la de DB; si está mal configurada tumba el boot.
+  assertBusLocationCryptoAtBoot();
   const pool = getPool();
   const { AuthUserRepository } = require('./repositories/auth-user.repository');
   const authUserRepository = new AuthUserRepository(pool);
