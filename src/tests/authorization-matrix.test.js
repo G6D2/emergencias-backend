@@ -8,6 +8,10 @@
 //
 // Un test de inventario recorre las rutas montadas en la app: si alguien
 // agrega un endpoint y no lo suma acá, la suite falla.
+//
+// La matriz corre dos veces: con AUTH_MODE=local (como producción hoy) y con
+// AUTH_MODE=hybrid, donde conviven tokens locales y del Login Federado (IdP
+// simulado con un JWKS en memoria, ver helpers/hybrid-jwt.js).
 
 const { generateKeyPairSync } = require('crypto');
 const request = require('supertest');
@@ -15,6 +19,7 @@ const { createApp } = require('../app');
 const { createLocalKeySet } = require('../auth/local-keys');
 const { createLocalTokenIssuer } = require('../auth/local-token-issuer');
 const { createLocalJwtAuth } = require('./helpers/local-jwt');
+const { createFakeFederatedIdp, createHybridJwtAuth } = require('./helpers/hybrid-jwt');
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const ANY_AUTHENTICATED = 'cualquier token válido';
@@ -57,28 +62,62 @@ const PUBLIC_ROUTES = new Set([
   'POST /auth/dev/login',
 ]);
 
-const IDENTITIES = {
+const CITIZEN_SUB = 'CIT-matriz';
+
+// `groups` son los grupos internos con los que tiene que quedar la identidad:
+// de ahí sale el resultado esperado. En los federados, `claims` es lo que trae
+// el token del Login Federado (antes de IDP_GROUP_MAP).
+const LOCAL_IDENTITIES = {
   'sin token': null,
   'token sin grupo': { sub: 'U-sin-grupo', groups: [] },
-  citizen: { sub: 'CIT-matriz', groups: ['citizen'] },
+  citizen: { sub: CITIZEN_SUB, groups: ['citizen'] },
   dispatcher: { sub: 'DISP-matriz', groups: ['dispatcher'] },
   officer: { sub: 'of-001', groups: ['officer'] },
 };
 
-function expectedOutcome(allowed, identityName) {
-  const identity = IDENTITIES[identityName];
+const HYBRID_SUB_ALIASES = { U000902: 'of-001' };
+
+const HYBRID_IDENTITIES = {
+  'sin token': null,
+  'citizen local': { sub: CITIZEN_SUB, groups: ['citizen'] },
+  'dispatcher local': { sub: 'DISP-matriz', groups: ['dispatcher'] },
+  'federado con un grupo que el mapa no conoce': {
+    federated: { sub: 'U000900', groups: ['guardia-finde'] },
+    groups: [],
+  },
+  'federado DISPATCHERS (mayúsculas, aud string)': {
+    federated: { sub: 'U000901', groups: ['DISPATCHERS'], aud: 'citypass-emergencias-api' },
+    groups: ['dispatcher'],
+  },
+  'federado officer con alias a of-001': {
+    federated: { sub: 'U000902', groups: ['officer'] },
+    groups: ['officer'],
+  },
+  'federado delegado': {
+    federated: { sub: 'U000903', groups: ['delegados'] },
+    groups: ['delegado'],
+  },
+  'federado con citizen (no mapeado por default)': {
+    federated: { sub: CITIZEN_SUB, groups: ['citizen'] },
+    groups: [],
+  },
+};
+
+function expectedOutcome(allowed, identity) {
   if (!identity) return 401;
   if (allowed === ANY_AUTHENTICATED) return 'permitido';
   return identity.groups.some((group) => allowed.includes(group)) ? 'permitido' : 403;
 }
 
-const CASES = ENDPOINTS.flatMap(([method, route, allowed, body]) => Object.keys(IDENTITIES)
-  .map((identityName) => [method, route, identityName, expectedOutcome(allowed, identityName), body]));
+function casesFor(identities) {
+  return ENDPOINTS.flatMap(([method, route, allowed, body]) => Object.entries(identities)
+    .map(([name, identity]) => [method, route, name, expectedOutcome(allowed, identity), body]));
+}
 
 function createMockRepositories() {
   const emergency = {
     id: ID,
-    userId: IDENTITIES.citizen.sub,
+    userId: CITIZEN_SUB,
     status: 'PENDING',
     severity: 'critical',
     emergencyType: 'PANICO',
@@ -150,14 +189,83 @@ function mountedRoutes(app) {
   return routes;
 }
 
-describe('matriz de autorización (JWT real, repositorios mockeados)', () => {
+// Mismos claims que un token local, pero firmado con otra clave RSA: el JWKS
+// del middleware no la conoce.
+async function foreignLocalBearer(tokenConfig) {
+  const { privateKey: pem } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const keys = await createLocalKeySet(pem);
+  const issuer = createLocalTokenIssuer(keys.privateKey, tokenConfig);
+  const { access_token: token } = await issuer.issueAccessToken({ sub: 'DISP-matriz', groups: ['dispatcher'] });
+  return `Bearer ${token}`;
+}
+
+const LOCAL_TOKEN_CONFIG = {
+  issuer: 'https://idp.citypass.local',
+  audience: 'citypass-emergencias-api',
+  expectedTokenUse: 'human',
+  expectedVer: 1,
+  module: 'emergencias',
+  tokenTtlSeconds: 900,
+};
+
+const asBearer = async (token) => `Bearer ${await token}`;
+const FEDERATED_DISPATCHER = { sub: 'U000901', groups: ['dispatcher'] };
+
+// Cada modo: cómo se arma la auth, qué identidades prueba y qué tokens tienen
+// que dar 401 en todos los endpoints (funciones de la auth ya armada).
+const MODES = [
+  {
+    title: 'AUTH_MODE=local',
+    identities: LOCAL_IDENTITIES,
+    createAuth: createLocalJwtAuth,
+    invalidTokens: {
+      'un JWT firmado por otra clave': () => foreignLocalBearer(LOCAL_TOKEN_CONFIG),
+    },
+  },
+  {
+    title: 'AUTH_MODE=hybrid',
+    identities: HYBRID_IDENTITIES,
+    async createAuth() {
+      const hybrid = await createHybridJwtAuth({ IDP_SUB_ALIASES: JSON.stringify(HYBRID_SUB_ALIASES) });
+      return {
+        ...hybrid,
+        otherIdp: await createFakeFederatedIdp(),
+        bearerFor: (identity) => asBearer(identity.federated
+          ? hybrid.federatedToken(identity.federated)
+          : hybrid.localToken(identity)),
+      };
+    },
+    invalidTokens: {
+      'un JWT local firmado por otra clave': (auth) => foreignLocalBearer(auth.localConfig),
+      'un JWT federado firmado por una clave fuera del JWKS': (auth) => asBearer(
+        auth.otherIdp.sign(FEDERATED_DISPATCHER)
+      ),
+      'un JWT federado con iss desconocido': (auth) => asBearer(auth.federatedToken({
+        ...FEDERATED_DISPATCHER, iss: 'https://otro-idp.example',
+      })),
+      'un JWT federado para otra audience': (auth) => asBearer(auth.federatedToken({
+        ...FEDERATED_DISPATCHER, aud: ['citypass-reclamos-api'],
+      })),
+      'un token de servicio del Login Federado': (auth) => asBearer(auth.federatedToken({
+        ...FEDERATED_DISPATCHER, token_use: 'service',
+      })),
+    },
+  },
+];
+
+describe.each(MODES)('matriz de autorización con $title (JWT real, repositorios mockeados)', (mode) => {
   let app;
-  let auth;
   let repos;
   const bearers = {};
+  const invalidBearers = {};
+  const invalidNames = Object.keys(mode.invalidTokens);
 
   beforeAll(async () => {
-    auth = await createLocalJwtAuth();
+    const auth = await mode.createAuth();
     repos = createMockRepositories();
     app = createApp({ isEnabled: () => false, checkHealth: async () => false }, repos.emergencyRepository, {
       authenticate: auth.authenticate,
@@ -166,8 +274,11 @@ describe('matriz de autorización (JWT real, repositorios mockeados)', () => {
       incidentRepository: repos.incidentRepository,
       citizenProfileRepository: repos.citizenProfileRepository,
     });
-    for (const [name, identity] of Object.entries(IDENTITIES)) {
+    for (const [name, identity] of Object.entries(mode.identities)) {
       bearers[name] = identity ? await auth.bearerFor(identity) : null;
+    }
+    for (const [name, buildBearer] of Object.entries(mode.invalidTokens)) {
+      invalidBearers[name] = await buildBearer(auth);
     }
   });
 
@@ -188,7 +299,7 @@ describe('matriz de autorización (JWT real, repositorios mockeados)', () => {
     expect(protectedRoutes).toEqual(inMatrix);
   });
 
-  it.each(CASES)('%s %s con %s → %s', async (method, route, identityName, expected, body) => {
+  it.each(casesFor(mode.identities))('%s %s con %s → %s', async (method, route, identityName, expected, body) => {
     const res = await send(method, route, bearers[identityName], body);
 
     if (expected === 'permitido') {
@@ -207,43 +318,19 @@ describe('matriz de autorización (JWT real, repositorios mockeados)', () => {
   });
 
   describe('tokens que no valen', () => {
-    let foreignBearer;
-    let basicHeader;
+    const cases = invalidNames.flatMap((tokenName) => ENDPOINTS
+      .map(([method, route, , body]) => [method, route, tokenName, body]));
 
-    beforeAll(async () => {
-      // Mismo emisor y mismos claims, pero firmado con otra clave RSA: el
-      // JWKS del middleware no la conoce.
-      const { privateKey: pem } = generateKeyPairSync('rsa', {
-        modulusLength: 2048,
-        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-        publicKeyEncoding: { type: 'spki', format: 'pem' },
-      });
-      const keys = await createLocalKeySet(pem);
-      const issuer = createLocalTokenIssuer(keys.privateKey, {
-        issuer: 'https://idp.citypass.local',
-        audience: 'citypass-emergencias-api',
-        expectedTokenUse: 'human',
-        expectedVer: 1,
-        module: 'emergencias',
-        tokenTtlSeconds: 900,
-      });
-      const { access_token: token } = await issuer.issueAccessToken({ sub: 'DISP-matriz', groups: ['dispatcher'] });
-      foreignBearer = `Bearer ${token}`;
-      basicHeader = `Basic ${Buffer.from('DISP-matriz:x').toString('base64')}`;
+    it.each(cases)('%s %s con %s → 401', async (method, route, tokenName, body) => {
+      const res = await send(method, route, invalidBearers[tokenName], body);
+      expect(res.status).toBe(401);
+      for (const mock of allRepositoryMocks(repos)) {
+        expect(mock).not.toHaveBeenCalled();
+      }
     });
 
-    it.each(ENDPOINTS.map(([method, route, , body]) => [method, route, body]))(
-      '%s %s con un JWT firmado por otra clave → 401',
-      async (method, route, body) => {
-        const res = await send(method, route, foreignBearer, body);
-        expect(res.status).toBe(401);
-        for (const mock of allRepositoryMocks(repos)) {
-          expect(mock).not.toHaveBeenCalled();
-        }
-      }
-    );
-
     it('un esquema que no es Bearer → 401', async () => {
+      const basicHeader = `Basic ${Buffer.from('DISP-matriz:x').toString('base64')}`;
       await send('GET', '/api/emergencies', basicHeader).expect(401);
     });
   });

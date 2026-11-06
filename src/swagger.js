@@ -14,7 +14,8 @@ const options = {
       description:
         'API del módulo de Emergencias y Seguridad (CityPass+). Botón de pánico, ciclo de vida de '
         + 'emergencias, incidentes y perfil ciudadano. Autenticación con JWT del contrato CityPass+ '
-        + '(hoy emitido por el propio backend, AUTH_MODE=local).',
+        + '(AUTH_MODE=local: emitido por el propio backend; AUTH_MODE=hybrid: además acepta el del '
+        + 'Login Federado del Grupo 2).',
     },
     // Relativo: "Try it out" pega contra el mismo host que sirve /api-docs
     // (localhost, Render o el backup), sin URL fija.
@@ -27,7 +28,7 @@ const options = {
     tags: [
       { name: 'Health', description: 'Estado del servicio' },
       { name: 'User', description: 'Perfil del usuario autenticado' },
-      { name: 'Dev Auth', description: 'Registro, login y dev login locales (solo AUTH_MODE=local)' },
+      { name: 'Dev Auth', description: 'Registro, login y dev login locales (AUTH_MODE=local o hybrid)' },
       { name: 'Panic Button', description: 'Activación y consulta de botón de pánico' },
       { name: 'Emergencies', description: 'Listado, detalle y cambios de estado de emergencias' },
       { name: 'Officers', description: 'Catálogo de oficiales para asignación (dispatcher)' },
@@ -398,6 +399,24 @@ const options = {
                   example: ['citizen'],
                 },
                 module: { type: 'string', example: 'emergencias' },
+                hasAntipanicButton: { type: 'boolean' },
+                authSource: {
+                  type: 'string',
+                  enum: ['local', 'federated'],
+                  description: 'Solo AUTH_MODE=hybrid: quién emitió el token',
+                },
+                idpSub: {
+                  type: 'string',
+                  description: 'Solo tokens del Login Federado: sub original (antes de IDP_SUB_ALIASES)',
+                  example: 'U000123',
+                },
+                idpGroups: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: 'Solo tokens del Login Federado: grupos tal como vienen en el token, '
+                    + 'antes de IDP_GROUP_MAP',
+                  example: ['dispatchers'],
+                },
               },
             },
           },

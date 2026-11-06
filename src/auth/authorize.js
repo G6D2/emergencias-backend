@@ -1,8 +1,21 @@
 const { UnauthorizedError, ForbiddenError } = require('../errors/app-errors');
 const { GROUPS } = require('./groups');
 
+function normalizeGroup(group) {
+  return typeof group === 'string' ? group.trim().toLowerCase() : '';
+}
+
+/**
+ * ¿El usuario está en `group`? Ignora mayúsculas y espacios de los costados
+ * (idea del PR #65): 'Dispatcher' y 'dispatcher' son el mismo grupo. Un grupo
+ * vacío o que no es string nunca coincide.
+ */
 function userHasGroup(user, group) {
-  return Array.isArray(user?.groups) && user.groups.includes(group);
+  const wanted = normalizeGroup(group);
+  if (!wanted || !Array.isArray(user?.groups)) {
+    return false;
+  }
+  return user.groups.some((g) => normalizeGroup(g) === wanted);
 }
 
 function userHasAnyGroup(user, allowedGroups) {
@@ -57,9 +70,10 @@ function canCancelEmergency(user, emergency) {
  * tocar el controller ni el repository.
  *
  * El sub del token se compara contra emergencies.assigned_officer_id (el id
- * del catálogo de oficiales). Cuando el login federado entregue subs propios
- * (issue #75) habrá que mapear sub → oficial; hasta entonces el token de
- * desarrollo de un oficial lleva como sub el id del catálogo (ej. 'of-001').
+ * del catálogo de oficiales). El token de desarrollo de un oficial lleva como
+ * sub el id del catálogo (ej. 'of-001'); un oficial que entra por el Login
+ * Federado (AUTH_MODE=hybrid) llega con su sub ya traducido por
+ * IDP_SUB_ALIASES en authenticate (ver federated-claims.js, issue #75).
  */
 function canAdvanceEmergencyStatus(user, emergency) {
   if (!userHasGroup(user, GROUPS.OFFICER)) {

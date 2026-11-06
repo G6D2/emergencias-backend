@@ -29,13 +29,36 @@ services:
       - key: DB_POOL_MAX
         value: "10"
 
-      # Auth local (JWT propio con el contrato de CityPass+). /health devuelve
-      # authMode: local. DEV_LOGIN_STRICT limita /auth/dev/login a los subs
-      # demo de src/auth/dev-login-policy.js.
+      # Auth local (JWT propio con el contrato de CityPass+). DEV_LOGIN_STRICT
+      # limita /auth/dev/login a los subs demo de src/auth/dev-login-policy.js.
       - key: AUTH_MODE
         value: local
       - key: DEV_LOGIN_STRICT
         value: "true"
+      # Ya cargadas en el dashboard (valores ahí). En local, IDP_ISSUER e
+      # IDP_AUDIENCE son el iss/aud de los tokens propios; en hybrid, los del
+      # Login Federado.
+      - key: IDP_ISSUER
+        sync: false
+      - key: IDP_AUDIENCE
+        sync: false
+      - key: IDP_MODULE
+        sync: false
+      - key: IDP_CLOCK_TOLERANCE_SECONDS
+        sync: false
+      # Para aceptar también el Login Federado del Grupo 2 (personal) sin
+      # perder las cuentas locales (ciudadanos): AUTH_MODE=hybrid + lo de abajo
+      # (README > Login Federado + cuentas locales). No depende de NODE_ENV ni
+      # de ALLOW_LOCAL_AUTH. Revisar antes que IDP_ISSUER sea
+      # https://idp.citypass.local e IDP_AUDIENCE citypass-emergencias-api (o
+      # lo que traiga un token real). Volver atrás: AUTH_MODE=local.
+      # - key: AUTH_MODE
+      #   value: hybrid
+      # - key: IDP_JWKS_URI
+      #   value: https://api.citypass-login.pp.ua/.well-known/jwks.json
+      # Sub federado → id del catálogo de oficiales, cuando se conozcan.
+      # - key: IDP_SUB_ALIASES
+      #   value: '{"<sub-federado>":"of-001"}'
 
       # Bus del Grupo 1. Kafka está prendido solo para consumir: el outbox no
       # publica (OUTBOX_PUBLISHER_ENABLED=false) y los eventos propios quedan

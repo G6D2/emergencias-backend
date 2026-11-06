@@ -148,12 +148,12 @@ Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipá
 
 | Variable | Rol |
 |----------|-----|
-| `AUTH_MODE` | `local` (default) o `idp` |
+| `AUTH_MODE` | `local` (default), `idp` o `hybrid` (Login Federado + cuentas locales, ver abajo) |
 | `IDP_ISSUER` / `IDP_AUDIENCE` | Claims del token (defaults alineados al contrato) |
 | `LOCAL_TOKEN_TTL_SECONDS` | Vida del token local (default 900) |
 | `LOCAL_JWT_PRIVATE_KEY_PEM` | Opcional: misma clave entre reinicios |
 
-`AUTH_MODE=local` **no arranca con `NODE_ENV=production`** salvo que esté `ALLOW_LOCAL_AUTH=true` (ver abajo).
+`AUTH_MODE=local` **no arranca con `NODE_ENV=production`** salvo que esté `ALLOW_LOCAL_AUTH=true` (ver abajo). `AUTH_MODE=hybrid` no tiene esa traba.
 
 ### Producción (Render) sin Grupo 2
 
@@ -169,7 +169,7 @@ Con `DEV_LOGIN_STRICT=true`, `POST /auth/dev/login` solo emite tokens para estos
 
 Cualquiera que conozca esos `sub` puede pedir un token, incluido el de dispatcher: sirve para una demo de clase, no para un entorno abierto.
 
-Qué cambia con `NODE_ENV=production`: con `AUTH_MODE=local` el server no arranca sin `ALLOW_LOCAL_AUTH=true`, se prenden HSTS + redirect a HTTPS, `DEV_LOGIN_STRICT` pasa a ser `true` por default y, si falta `CORS_ALLOWED_ORIGINS`, CORS cae al frontend de Render con un `warn`. Fuera de `production`, sin `CORS_ALLOWED_ORIGINS` el default es `http://localhost:3001`; por eso producción la tiene seteada.
+Qué cambia con `NODE_ENV=production`: con `AUTH_MODE=local` el server no arranca sin `ALLOW_LOCAL_AUTH=true` (con `hybrid` no hace falta), se prenden HSTS + redirect a HTTPS, `DEV_LOGIN_STRICT` pasa a ser `true` por default y, si falta `CORS_ALLOWED_ORIGINS`, CORS cae al frontend de Render con un `warn`. Fuera de `production`, sin `CORS_ALLOWED_ORIGINS` el default es `http://localhost:3001`; por eso producción la tiene seteada.
 
 ### Keep-warm (Render plan free)
 
@@ -213,20 +213,89 @@ Sin cambios de código: el middleware sigue validando RS256 + claims. El fronten
 
 Validaciones: firma RS256 vía JWKS, `iss`, `aud` (lista), `exp`, `token_use: human`, `ver: 1`.
 
+`idp` sigue tal cual: contrato estricto y sin login local, así que deja afuera a los ciudadanos. Para tener el Login Federado del personal y las cuentas locales de los ciudadanos a la vez está `hybrid`.
+
 La identidad queda en `req.user` (`sub`, `groups`, `username`, `jti`, …).  
 **No se confía en `userId` ni `actor` del body** — salen del claim `sub`.
 
 Token ausente o inválido → **401**. Sin grupo o sin permiso → **403**.
 
+### Login Federado + cuentas locales (`AUTH_MODE=hybrid`)
+
+Desde G6D2/Frontend#56 el front loguea al personal (dispatchers, oficiales, delegados) contra el Login Federado del Grupo 2 (`POST https://api.citypass-login.pp.ua/auth/login` con `clientId: citypass-emergencias-web`) y manda ese token al backend. Los ciudadanos siguen con cuenta local. `idp` deja afuera a los ciudadanos y `local` rechaza el token federado; `hybrid` acepta los dos:
+
+- El `iss` del token decide cómo se valida: si es `IDP_ISSUER`, contra el JWKS del Login Federado (`IDP_JWKS_URI`) con `IDP_AUDIENCE`; si es `LOCAL_JWT_ISSUER`, contra la clave local con las mismas reglas que en `local`. Cualquier otro `iss` da **401**.
+- `/auth/login`, `/auth/register` y `/auth/dev/login` siguen disponibles, con la misma política (`DEV_LOGIN_STRICT`).
+- **No depende de `NODE_ENV`**: arranca igual con `production` y no pide `ALLOW_LOCAL_AUTH`, porque elegir `hybrid` ya es declarar que se aceptan tokens locales (`ALLOW_LOCAL_AUTH` se ignora). Lo que sí cambia con `production` es lo de siempre: HSTS, CORS estricto y `DEV_LOGIN_STRICT=true` por default.
+- Los tokens locales salen con `iss=urn:citypass:emergencias:local` (o `LOCAL_JWT_ISSUER`): el Login Federado emite `iss=https://idp.citypass.local`, el mismo texto que usan los tokens locales en `local`. Al pasar de `local` a `hybrid`, los tokens locales vigentes (15 min) dan 401 y hay que volver a loguearse.
+
+| | Token local | Token del Login Federado |
+|---|---|---|
+| Firma | RS256, clave local | RS256, JWKS de `IDP_JWKS_URI` |
+| `iss` | `LOCAL_JWT_ISSUER` | `IDP_ISSUER` |
+| `aud` | lista que incluye `LOCAL_JWT_AUDIENCE` | string o lista que incluye `IDP_AUDIENCE` |
+| `exp` | obligatorio | obligatorio |
+| `token_use` | obligatorio, `human` | si viene, `human` (un token de servicio da 401); obligatorio con `IDP_REQUIRE_TOKEN_USE=true` |
+| `ver` | obligatorio, `1` | si viene, `1`; obligatorio con `IDP_REQUIRE_TOKEN_VER=true` |
+| Usuario | `sub` | claim `IDP_SUBJECT_CLAIM` (default `sub`), traducido por `IDP_SUB_ALIASES` |
+| Grupos | `groups` | claim `IDP_GROUPS_CLAIM` (default `groups`), traducido por `IDP_GROUP_MAP` |
+
+**Grupos (`IDP_GROUP_MAP`).** JSON `{"grupo-federado": "interno"}` o `{"grupo-federado": ["interno", ...]}`; las claves no distinguen mayúsculas. Si se define, **reemplaza** al default. El default usa los mismos nombres que reconoce el front (`app/lib/auth-roles.js`):
+
+| Grupo federado | Grupo interno |
+|---|---|
+| `dispatcher`, `dispatchers`, `operador` | `dispatcher` |
+| `officer` | `officer` |
+| `delegado`, `delegados` | `delegado` (no habilita ninguna ruta) |
+
+Un grupo que no está en el mapa no otorga nada. `citizen` no está en el default a propósito: en `hybrid` los ciudadanos entran con cuenta local, y los tokens locales y federados comparten el espacio de `sub` (el contrato del Grupo 2 usa subs como `U000042`, que también es un sub demo local). Un federado con `citizen` podría ver las emergencias de un ciudadano local con el mismo `sub`. Si hace falta, se agrega con `IDP_GROUP_MAP`.
+
+**Delegado.** Administra usuarios y grupos en el panel del Login Federado, pero no opera emergencias. Queda como grupo interno `delegado` sin permisos: `GET /api/user` lo devuelve (el front lo usa para mandarlo al panel) y cualquier otra ruta da 403.
+
+**Oficiales (`IDP_SUB_ALIASES`).** Las rutas del oficial comparan `req.user.sub` con `assigned_officer_id` (`of-001`, `of-002`...). Con `{"sub-federado": "of-001"}`, `authenticate` le reemplaza el `sub` a ese token federado por el id del catálogo antes de autorizar. A partir de ahí todo ve el id interno: el chequeo de oficial asignado, el `actor` del historial y de los eventos y el rate limit. El sub federado queda en `req.user.idpSub`. No se aplica a tokens locales. Usar solo ids del catálogo de oficiales: un alias al `sub` de un ciudadano local lo dejaría operar como ese ciudadano.
+
+**`GET /api/user`** devuelve además `authSource` (`local` o `federated`) y, en tokens federados, `idpSub` e `idpGroups` (los grupos tal como vinieron). Con eso se ve qué trae el token real y se arman `IDP_GROUP_MAP` e `IDP_SUB_ALIASES`.
+
+| Variable (hybrid) | Default | Rol |
+|---|---|---|
+| `IDP_ISSUER` | obligatoria | `iss` del Login Federado. El contrato del Grupo 2 dice `https://idp.citypass.local` |
+| `IDP_AUDIENCE` | obligatoria | Audience que tiene que estar en `aud`. Por el contrato, `citypass-emergencias-api` (a confirmar con un token real) |
+| `IDP_JWKS_URI` | obligatoria | `https://api.citypass-login.pp.ua/.well-known/jwks.json`. Solo `https` (`http` únicamente contra localhost) |
+| `IDP_CLOCK_TOLERANCE_SECONDS` | `60` | Tolerancia de reloj para `exp`, en los dos tipos de token |
+| `IDP_REQUIRE_TOKEN_USE` | `false` | `true`: `token_use` obligatorio en tokens federados |
+| `IDP_REQUIRE_TOKEN_VER` | `false` | `true`: `ver` obligatorio en tokens federados |
+| `IDP_SUBJECT_CLAIM` | `sub` | Claim con el id del usuario. El contrato dice `sub` y pide no usar nunca `preferred_username` como clave |
+| `IDP_GROUPS_CLAIM` | `groups` | Claim con los grupos (lista de strings o un string) |
+| `IDP_GROUP_MAP` | el de la tabla | JSON grupo federado → grupo interno |
+| `IDP_SUB_ALIASES` | vacío | JSON sub federado → id interno |
+| `LOCAL_JWT_ISSUER` | `urn:citypass:emergencias:local` | `iss` de los tokens locales; tiene que ser distinto de `IDP_ISSUER` |
+| `LOCAL_JWT_AUDIENCE` | `citypass-emergencias-api` | `aud` de los tokens locales |
+
+`LOCAL_TOKEN_TTL_SECONDS` y `LOCAL_JWT_PRIVATE_KEY_PEM` funcionan igual que en `local`. Una variable mal formada (JSON roto, grupo interno que no existe, `IDP_JWKS_URI` sin https, booleano que no es `true`/`false`, issuers iguales) frena el arranque con el error.
+
+**Para prenderlo en Render:**
+
+```env
+AUTH_MODE=hybrid
+IDP_ISSUER=https://idp.citypass.local
+IDP_AUDIENCE=citypass-emergencias-api
+IDP_JWKS_URI=https://api.citypass-login.pp.ua/.well-known/jwks.json
+```
+
+`IDP_ISSUER` e `IDP_AUDIENCE` ya existen en Render: hay que revisar que tengan esos valores (o los que muestre un token real). `IDP_JWKS_URI` falta cargarla. `IDP_SUB_ALIASES` se carga cuando se sepa el `sub` de cada oficial. Para volver atrás alcanza con `AUTH_MODE=local`.
+
+**A confirmar con un token real** (decodificar solo el payload, sin pegar el token entero en ningún lado): que `iss` sea `https://idp.citypass.local`; qué trae `aud` y si es lista o string; si vienen `token_use: "human"` y `ver: 1` (si vienen, prender `IDP_REQUIRE_TOKEN_USE` e `IDP_REQUIRE_TOKEN_VER`); que el usuario esté en `sub`; y cómo se llaman los grupos de dispatchers, oficiales y delegados en el panel. El contrato de referencia es la guía de integración del Grupo 2 (`docs/externo/GRUPO-2-AUTENTICACION.md` del repo `carlos-illobre/citypass-event-gateway`).
+
 ### Autorización por `groups`
 
-Grupo desconocido no otorga nada. Mapa actual del módulo:
+Grupo desconocido no otorga nada. La comparación ignora mayúsculas y espacios de los costados (`Dispatcher` = `dispatcher`). Mapa actual del módulo:
 
 | Grupo | Permisos |
 |-------|----------|
 | `citizen` | Activar pánico; ver y cancelar **solo sus** emergencias; perfil y ubicaciones frecuentes propias |
 | `dispatcher` | Ver cualquier emergencia; validar, descartar, asignar, devolver y cerrar; ver oficiales, incidentes y el outbox |
 | `officer` | Avanzar el estado operativo (en camino, en el lugar, resuelta) **solo** de la emergencia que tiene asignada: el `sub` del token tiene que ser `assigned_officer_id` |
+| `delegado` | Nada: solo lo informa `GET /api/user` (llega del Login Federado en `hybrid`) |
 
 ### Endpoints
 
@@ -236,10 +305,10 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 |----------|--------|-------------|
 | `GET /health` | público | estado en memoria de Kafka (`connected`, `disconnected` o `disabled`), del outbox y de cada listener |
 | `GET /api-docs`, `GET /api-docs.json` | público | Swagger UI y spec OpenAPI |
-| `POST /auth/register` | público, solo `AUTH_MODE=local` | 20 req/min por IP |
-| `POST /auth/login` | público, solo `AUTH_MODE=local` | 20 req/min por IP |
-| `POST /auth/dev/login` | público, solo `AUTH_MODE=local` | 10 req/min por IP; allowlist con `DEV_LOGIN_STRICT` |
-| `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT |
+| `POST /auth/register` | público, `AUTH_MODE=local` o `hybrid` | 20 req/min por IP |
+| `POST /auth/login` | público, `AUTH_MODE=local` o `hybrid` | 20 req/min por IP |
+| `POST /auth/dev/login` | público, `AUTH_MODE=local` o `hybrid` | 10 req/min por IP; allowlist con `DEV_LOGIN_STRICT` |
+| `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT; en `hybrid`, además `authSource` y, si el token es federado, `idpSub` e `idpGroups` |
 | `POST /api/panic-button` | `citizen` | 5 req/min por IP; `emergencyType=PREVENTIVA` → 400 |
 | `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena); deja registro de auditoría |
 | `GET /api/emergencies` | `citizen` o `dispatcher` | citizen: solo propias y sin `incident`/`effectivePriority` |
@@ -273,7 +342,7 @@ En dev login sin modo estricto podés probar groups distintos:
 { "sub": "of-001", "groups": ["officer"] }
 ```
 
-Token ausente o inválido → **401 Unauthorized**. `/health`, `/api-docs*` y `/auth/*` (solo `AUTH_MODE=local`) son públicos.
+Token ausente o inválido → **401 Unauthorized**. `/health`, `/api-docs*` y `/auth/*` (`AUTH_MODE=local` o `hybrid`) son públicos.
 
 ---
 
@@ -391,7 +460,7 @@ Perfil del usuario autenticado (groups del JWT). Requiere Bearer token.
 }
 ```
 
-### POST `/auth/dev/login` (solo `AUTH_MODE=local`)
+### POST `/auth/dev/login` (`AUTH_MODE=local` o `hybrid`)
 
 Emite un access token de desarrollo. Ver ejemplo y allowlist arriba.
 
@@ -583,15 +652,18 @@ src/
 ├── app.js                        # Express factory (inyectable en tests), /health y Swagger
 ├── swagger.js                    # OpenAPI 3 base (schemas); los paths salen del JSDoc de app.js y routes/
 ├── auth/
-│   ├── authenticate.js           # Middleware Bearer JWT → req.user
+│   ├── authenticate.js           # Middleware Bearer JWT → req.user (+ IDP_SUB_ALIASES)
 │   ├── authorize.js              # requireGroups + reglas de dueño y de oficial asignado
-│   ├── config.js                 # AUTH_MODE + IDP_* desde env
+│   ├── config.js                 # AUTH_MODE + IDP_* / LOCAL_JWT_* desde env
 │   ├── dev-login-policy.js       # Allowlist de /auth/dev/login (DEV_LOGIN_STRICT)
-│   ├── groups.js                 # citizen / dispatcher / officer + permisos
-│   ├── jwt-verifier.js           # verify() RS256 + claims CityPass+
-│   ├── local-keys.js             # RSA local (AUTH_MODE=local)
+│   ├── federated-claims.js       # IDP_GROUP_MAP e IDP_SUB_ALIASES (hybrid)
+│   ├── federated-verifier.js     # verify() RS256 de tokens del Login Federado (hybrid)
+│   ├── groups.js                 # citizen / dispatcher / officer / delegado + permisos
+│   ├── hybrid-verifier.js        # Elige verifier local o federado según el iss
+│   ├── jwt-verifier.js           # verify() RS256 + claims CityPass+ (tokens locales e idp)
+│   ├── local-keys.js             # RSA local (AUTH_MODE=local y hybrid)
 │   ├── local-token-issuer.js     # Emite los JWT locales
-│   └── setup.js                  # local vs idp (factory)
+│   └── setup.js                  # local, idp o hybrid (factory)
 ├── controllers/
 │   ├── auth.controller.js        # /auth/register y /auth/login
 │   ├── citizen-profile.controller.js
@@ -910,7 +982,7 @@ La prioridad de diseño está en la lógica de dominio (transiciones de estado, 
 | **Listeners** | `listeners/*.test.js`, `listeners/cobertura-preventiva/*.test.js` | Decoder Avro/JSON, clasificación de errores, carga de reglas, `OutcomeFactory` con dedup, reglas y handlers de la cobertura preventiva. |
 | **Seguridad** | `security.test.js`, `security-hardening.test.js`, `secure-log.test.js`, `local-keys.test.js` | Headers, sanitización de logs (sin JWT ni lat/lng), rotación de keys. |
 | **Repositories (unit)** | `emergency.repository.test.js`, `incident.repository.test.js`, `officer.repository.test.js` | Queries con `pg` mockeado. |
-| **Autorización** | `authorization-matrix.test.js` | Cada endpoint protegido × {sin token, token sin grupo, citizen, dispatcher, officer} con JWT RS256 real: 401, 403 o pasa, según `src/auth/authorize.js`. Falla si se agrega una ruta y no se suma a la matriz. |
+| **Autorización** | `authorization-matrix.test.js` | Cada endpoint protegido × {sin token, token sin grupo, citizen, dispatcher, officer} con JWT RS256 real: 401, 403 o pasa, según `src/auth/authorize.js`. Corre también con `AUTH_MODE=hybrid` (tokens locales y del Login Federado simulado: grupos en mayúsculas, alias de oficial, delegado, iss y audience ajenos, token de servicio). Falla si se agrega una ruta y no se suma a la matriz. |
 | **Repositories e integración** | `emergency.repository.integration.test.js`, `incident.repository.integration.test.js`, `incident-detection-job.integration.test.js`, `eventos-procesados.repository.integration.test.js`, `operational-status.integration.test.js`, `listeners/consumer.integration.test.js` | Postgres real (contenedor efímero + Flyway); en CI corren con el service `postgres:15-alpine`. |
 | **Flujos de punta a punta (integración)** | `emergency-lifecycle.integration.test.js`, `emergency-rules-v26.integration.test.js`, `outbox-contract.integration.test.js`, `listeners/consumer-avro.integration.test.js` | Ciclo completo por HTTP con JWT local real (estado, historial, oficial, `closed_at`, outbox) y ramas cancel/discard/return; validate/return con estado de origen, `closed_at` en terminales y V26; el outbox real contra el JSON Schema de `docs/contratos`; el consumer con Avro en formato Confluent y un registry HTTP local. |
 | **Infra** | `flyway.test.js`, `pool.test.js` | Aplicación de migraciones, configuración del pool. |
