@@ -20,8 +20,9 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     summary: Lista emergencias paginadas
    *     description: |
    *       Requiere grupo `citizen` o `dispatcher`. Dispatcher ve todas; citizen solo las propias
-   *       (se fuerza el filtro por el sub del JWT).
+   *       (se fuerza el filtro por el sub del JWT) y sin `incident` ni `effectivePriority`.
    *       Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
+   *       Un filtro inválido responde 400 (no una lista vacía ni un 500).
    *     security:
    *       - bearerAuth: []
    *     parameters:
@@ -29,21 +30,26 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *         name: status
    *         schema:
    *           type: string
-   *         description: Lista de statuses separados por coma (ej. PENDING,VALIDATED)
+   *         description: |
+   *           Lista de statuses separados por coma (ej. PENDING,VALIDATED). Valores válidos:
+   *           PENDING, VALIDATED, DISPATCHED, EN_ROUTE, ON_SCENE, RESOLVED, CLOSED, CANCELLED, DISCARDED.
    *       - in: query
    *         name: severity
    *         schema:
    *           type: string
+   *           enum: [low, medium, high, critical]
    *       - in: query
    *         name: from
    *         schema:
    *           type: string
    *           format: date-time
+   *         description: Fecha ISO 8601 (ej. 2026-11-05 o 2026-11-05T10:00:00-03:00), sobre createdAt
    *       - in: query
    *         name: to
    *         schema:
    *           type: string
    *           format: date-time
+   *         description: Fecha ISO 8601, sobre createdAt
    *       - in: query
    *         name: assignedOfficerId
    *         schema:
@@ -79,6 +85,14 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     responses:
    *       200:
    *         description: Página de emergencias
+   *       400:
+   *         description: |
+   *           Filtro inválido: status desconocido, severity o emergencyType fuera del catálogo,
+   *           o from/to que no son una fecha ISO 8601
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    *       401:
    *         description: Token ausente o inválido
    *       403:
@@ -103,8 +117,11 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *       Reglas de acceso:
    *       - `dispatcher`: puede ver cualquier emergencia.
    *       - `citizen`: solo las propias. Si la emergencia es de otro usuario responde **404**
-   *         (no 403) para no revelar la existencia de ids ajenos.
+   *         (no 403) para no revelar la existencia de ids ajenos. Igual que en el listado, no
+   *         recibe `incident` ni `effectivePriority` (información operativa).
    *       - Cualquier otro grupo: 403.
+   *
+   *       Cada lectura autorizada queda registrada en la auditoría de accesos (actor y emergencia).
    *
    *       `observations` y `reinforcementRequests` se devuelven siempre como listas vacías hasta que
    *       existan esas funcionalidades; el contrato ya contempla los campos para que el front no cambie.
@@ -156,7 +173,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *               $ref: '#/components/schemas/ErrorResponse'
    */
   router.get('/:id', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
-    const result = await controller.getEmergencyDetail(req.params.id, req.user);
+    const result = await controller.getEmergencyDetail(req.params.id, req.user, { audit: true });
     res.json(result);
   }));
 
@@ -167,8 +184,9 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     tags: [Emergencies]
    *     summary: Valida una emergencia pendiente
    *     description: |
-   *       Requiere grupo `dispatcher`. Solo permite la transición PENDING -> VALIDATED.
-   *       Registra el actor y publica EmergencyStatusUpdated en Kafka.
+   *       Requiere grupo `dispatcher`. Solo permite la transición PENDING -> VALIDATED; una
+   *       emergencia DISPATCHED se devuelve con `/return`, no con `/validate`.
+   *       Registra el actor en el historial y publica `EmergenciaActualizada`.
    *     security:
    *       - bearerAuth: []
    *     parameters:
@@ -181,6 +199,8 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     responses:
    *       200:
    *         description: Emergencia validada
+   *       400:
+   *         description: id inválido
    *       401:
    *         description: Token ausente o inválido
    *       403:
@@ -188,9 +208,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *       404:
    *         description: Emergencia no encontrada
    *       409:
-   *         description: La emergencia no está pendiente
-   *       503:
-   *         description: Kafka no disponible
+   *         description: La emergencia no está PENDING
    */
   router.patch('/:id/validate', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
     const result = await controller.validateEmergency(req.params.id, req.user);
@@ -204,8 +222,9 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     tags: [Emergencies]
    *     summary: Descarta una emergencia pendiente
    *     description: |
-   *       Requiere grupo `dispatcher`. Solo permite la transición PENDING -> DISCARDED.
-   *       El motivo es obligatorio, se registra con el actor y se publica EmergencyStatusUpdated en Kafka.
+   *       Requiere grupo `dispatcher`. Solo permite la transición PENDING -> DISCARDED y registra closedAt.
+   *       El motivo es obligatorio y debe ser string: se le redacta la PII y se recorta a 280 caracteres.
+   *       Se registra con el actor en el historial y se publica `EmergenciaActualizada`.
    *     security:
    *       - bearerAuth: []
    *     parameters:
@@ -225,7 +244,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *       200:
    *         description: Emergencia descartada
    *       400:
-   *         description: El motivo es obligatorio
+   *         description: id inválido, o motivo faltante, vacío o que no es string
    *       401:
    *         description: Token ausente o inválido
    *       403:
@@ -234,8 +253,6 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *         description: Emergencia no encontrada
    *       409:
    *         description: La emergencia no está pendiente
-   *       503:
-   *         description: Kafka no disponible
    */
   router.patch('/:id/discard', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
     const result = await controller.discardEmergency(req.params.id, req.body || {}, req.user);
@@ -327,16 +344,26 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *   patch:
    *     tags: [Emergencies]
    *     summary: Devuelve una emergencia despachada para reasignar (DISPATCHED → VALIDATED)
-   *     description: Dispatcher-only. Libera al oficial asignado. `reason` opcional en el body.
+   *     description: |
+   *       Dispatcher-only. Solo desde DISPATCHED. Libera al oficial asignado y deja `assignedOfficerId`
+   *       en null. `reason` es opcional; si viene debe ser string (PII redactada, recorte a 280 caracteres).
    *     security: [{ bearerAuth: [] }]
    *     parameters:
    *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+   *     requestBody:
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               reason: { type: string, nullable: true, maxLength: 280, example: Despacho equivocado }
    *     responses:
    *       200: { description: Emergencia devuelta a VALIDATED; oficial liberado }
+   *       400: { description: id inválido o reason que no es string }
    *       401: { description: Token ausente o inválido }
    *       403: { description: Grupo insuficiente }
    *       404: { description: Emergencia no encontrada }
-   *       409: { description: La emergencia no permite la devolución desde su estado actual }
+   *       409: { description: La emergencia no está DISPATCHED }
    */
   router.patch('/:id/return', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
     const result = await controller.returnEmergency(req.params.id, req.body || {}, req.user);
@@ -430,7 +457,8 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     summary: Cancela una emergencia
    *     description: |
    *       Requiere grupo `citizen` y ser dueño de la emergencia. Solo si el status actual es PENDING o VALIDATED.
-   *       El actor se toma del JWT (claim `sub`). Publica EmergencyStatusUpdated en Kafka.
+   *       Registra closedAt. El actor se toma del JWT (claim `sub`). `reason` es opcional; si viene debe ser
+   *       string (PII redactada, recorte a 280 caracteres). Publica `EmergenciaActualizada`.
    *     security:
    *       - bearerAuth: []
    *     parameters:
@@ -457,6 +485,12 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *                   type: boolean
    *                 data:
    *                   $ref: '#/components/schemas/Emergency'
+   *       400:
+   *         description: id inválido o reason que no es string
+   *         content:
+   *           application/json:
+   *             schema:
+   *               $ref: '#/components/schemas/ErrorResponse'
    *       401:
    *         description: Token ausente o inválido
    *         content:
@@ -477,12 +511,6 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *               $ref: '#/components/schemas/ErrorResponse'
    *       409:
    *         description: Estado no cancelable
-   *         content:
-   *           application/json:
-   *             schema:
-   *               $ref: '#/components/schemas/ErrorResponse'
-   *       503:
-   *         description: Kafka no disponible
    *         content:
    *           application/json:
    *             schema:

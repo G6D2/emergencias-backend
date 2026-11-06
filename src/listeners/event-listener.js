@@ -78,6 +78,12 @@ class EventListener {
     this.decoder = options.decoder || createEventDecoder();
     this.loadedRules = null;
     this.consumer = null;
+    // Estado para /health (ver status()).
+    this.running = false;
+    this.lastPollAt = null;
+    // Lo setea quien supervisa el listener (listener-supervisor.js) para
+    // volver a levantarlo si el consumer se cae sin que kafkajs lo reinicie.
+    this.onCrash = null;
   }
 
   async handle(event) {
@@ -126,12 +132,14 @@ class EventListener {
     this.rules();
 
     this.consumer = this.kafka.consumer({ groupId: this.groupId });
+    this.watchConsumer(this.consumer);
     try {
       await this.consumer.connect();
       await this.consumer.subscribe({ topic: this.topic, fromBeginning: this.fromBeginning });
       await this.consumer.run({
         eachMessage: async ({ message }) => this.onMessage(message),
       });
+      this.running = true;
       secureLog('info', `${this.constructor.name} escuchando`, {
         topic: this.topic,
         groupId: this.groupId,
@@ -145,6 +153,34 @@ class EventListener {
       this.consumer = null;
       throw error;
     }
+  }
+
+  // Cada fetch al broker marca lastPollAt: kafkajs hace long polling, así que
+  // pasa cada pocos segundos aunque no haya mensajes. Un CRASH sin restart
+  // deja el consumer desconectado y kafkajs no lo vuelve a levantar.
+  watchConsumer(consumer) {
+    const { FETCH_START, CRASH } = consumer.events;
+    consumer.on(FETCH_START, () => {
+      this.lastPollAt = new Date();
+    });
+    consumer.on(CRASH, ({ payload }) => {
+      if (payload.restart || this.consumer !== consumer) return;
+      this.running = false;
+      this.consumer = null;
+      secureLog('error', `${this.constructor.name} se cayó y kafkajs no lo reinicia`, {
+        message: payload.error?.message,
+      });
+      if (this.onCrash) this.onCrash(payload.error);
+    });
+  }
+
+  // Estado en memoria para GET /health.
+  status() {
+    return {
+      name: this.constructor.name,
+      running: this.running,
+      lastPollAt: this.lastPollAt ? this.lastPollAt.toISOString() : null,
+    };
   }
 
   // true si el mensaje es anterior a EDA_CONSUMER_SINCE. Sin timestamp
@@ -214,6 +250,7 @@ class EventListener {
   }
 
   async stop() {
+    this.running = false;
     if (!this.consumer) return;
     try {
       await this.consumer.disconnect();

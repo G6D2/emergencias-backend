@@ -99,10 +99,10 @@ grupos leen Avro de los FQN `com.citypass.*`. Por eso `OUTBOX_PUBLISHER_ENABLED=
 prender Kafka solo para consumir sin publicar directo en el bus. El contrato que vale para los
 otros módulos es el del modo `gateway`.
 
-Estado de los entornos según `render.yaml`: `KAFKA_ENABLED=false` y sin `EDA_PUBLISHER_MODE`
-(o sea, modo `kafka` deshabilitado). En ese caso `OutboxPublisher` no reclama eventos y quedan
-`PENDING` en `outbox_events`. Al prender el bus, `OUTBOX_PUBLISH_SINCE` descarta como `SKIPPED`
-los `PENDING` viejos (issue #71). `TOPIC_EMERGENCIA_CERRADA`, que sigue en `render.yaml`, ya no
+Producción corre desde el 05/11 con `EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`
+y `OUTBOX_PUBLISH_SINCE=2026-11-05T15:06:00Z`: al prender el bus descartó como `SKIPPED` los
+`PENDING` anteriores (issue #71). Sin `OUTBOX_PUBLISHER_ENABLED=true`, `OutboxPublisher` no
+reclama eventos y quedan `PENDING` en `outbox_events`. `TOPIC_EMERGENCIA_CERRADA`, que sigue en `render.yaml`, ya no
 lo lee ningún código.
 
 ## Campos del contrato todavía sin poblar
@@ -111,9 +111,7 @@ Viajan con su valor por defecto (`null`) hasta que se cierren los issues corresp
 
 | Campo | Evento | Pendiente de |
 |---|---|---|
-| `barrio`, `ubicacion.barrio` | `EmergenciaCreada` | #76 (resolver barrio desde lat/lng) |
-| `afectaCirculacion` | `EmergenciaCreada` | #76 / #85 (con `false`, Reclamos descarta el evento) |
-| `latitud`, `longitud` | `EmergenciaCreada` | Regla de cuándo mandarlas (Juani con Valentina) |
+| `ubicacion.latitud`, `ubicacion.longitud` | `EmergenciaCreada` | Cargar `BUS_LOCATION_ENCRYPTION_KEY` en Render (sin clave salen `null`) |
 | `causaId`, `causaTipo` | `EmergenciaCreada` | Solo los completa hoy la cobertura preventiva; el resto llega con #77 / #79 / #80 |
 | `prioridadOriginal` | `EmergenciaCreada` | #79 / #85 |
 | `areaResponsable` | `EmergenciaActualizada` | #85 |

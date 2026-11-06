@@ -1,8 +1,8 @@
 # Secuencias
 
-Para qué sirve: mostrar paso a paso los tres flujos que se muestran en la demo del Hito 1, con
-los nombres reales de funciones/archivos de front y back, para que sirvan de guion de demo y de
-referencia de debugging.
+Para qué sirve: mostrar paso a paso los flujos que se muestran en la demo, con los nombres
+reales de funciones/archivos de front y back, para que sirvan de guion de demo y de referencia
+de debugging.
 
 ## a) Ciudadano dispara el botón SOS
 
@@ -43,11 +43,12 @@ sequenceDiagram
     Front->>Ciudadano: notificación "Alerta enviada" + redirect a /mis-alertas/:emergencyId
 ```
 
-## b) Dispatcher: listado, validar, asignar oficial, cerrar
+## b) Dispatcher y oficial: listado, validar, asignar, seguimiento del oficial, cerrar
 
 ```mermaid
 sequenceDiagram
     actor Dispatcher
+    actor Oficial
     participant Front as Front (DispatcherView)
     participant BFF as BFF (/api/backend/*)
     participant Back as Backend (/api/emergencies, /api/officers)
@@ -67,7 +68,7 @@ sequenceDiagram
     Front->>BFF: PATCH /api/backend/api/emergencies/:id/validate
     BFF->>Back: PATCH /api/emergencies/:id/validate (Bearer dispatcher)
     Back->>Back: assertTransition(PENDING, VALIDATED)
-    Back->>DB: BEGIN, UPDATE status, INSERT history, INSERT outbox (EmergenciaEstadoActualizado), COMMIT
+    Back->>DB: BEGIN, UPDATE status, INSERT history, INSERT outbox (EmergenciaActualizada), COMMIT
     Back-->>Front: 200 { data } (vía BFF)
 
     Dispatcher->>Front: abre modal, elige oficial disponible
@@ -76,16 +77,22 @@ sequenceDiagram
     Back->>Back: assertTransition(VALIDATED, DISPATCHED)
     Back->>DB: BEGIN, SELECT officer FOR UPDATE, verifica status=disponible
     Back->>DB: UPDATE emergencies (status=DISPATCHED, assigned_officer_id), UPDATE officers (status=ocupado)
-    Back->>DB: INSERT history, INSERT outbox (EmergenciaEstadoActualizado, reason="Assigned officer X"), COMMIT
+    Back->>DB: INSERT history, INSERT outbox (EmergenciaActualizada DESPACHADA, asignadoA=X), COMMIT
     Back-->>Front: 200 { data, assignedOfficer } (vía BFF)
 
-    Note over Dispatcher,Back: RESOLVED llega hoy sin endpoint propio (ver 04-maquina-de-estados.md)
+    Note over Oficial,Back: el front no tiene vista de oficial: estos tres pasos se hacen por API (token officer, sub = id del oficial)
+    Oficial->>Back: PATCH /api/emergencies/:id/en-route (Bearer officer)
+    Back->>Back: canAdvanceEmergencyStatus (sub === assigned_officer_id, si no 404) + assertTransition(DISPATCHED, EN_ROUTE)
+    Back->>DB: BEGIN, SELECT ... FOR UPDATE (oficial sigue asignado), UPDATE status, INSERT history, INSERT outbox (EmergenciaActualizada), COMMIT
+    Back-->>Oficial: 200 { data }
+    Oficial->>Back: PATCH /api/emergencies/:id/on-scene (EN_ROUTE → ON_SCENE, mismo patrón)
+    Oficial->>Back: PATCH /api/emergencies/:id/resolve (ON_SCENE → RESOLVED, resueltoAt en el evento)
 
     Dispatcher->>Front: click "Cerrar" (emergencia en RESOLVED)
     Front->>BFF: PATCH /api/backend/api/emergencies/:id/close
     BFF->>Back: PATCH /api/emergencies/:id/close (Bearer dispatcher)
     Back->>Back: assertTransition(RESOLVED, CLOSED)
-    Back->>DB: BEGIN, UPDATE status=CLOSED, closed_at=now(), INSERT history, INSERT outbox (EmergenciaCerrada), COMMIT
+    Back->>DB: BEGIN, UPDATE status=CLOSED, closed_at=now(), INSERT history, oficial a disponible, INSERT outbox (EmergenciaActualizada CERRADA), COMMIT
     Back-->>Front: 200 { data } (vía BFF)
 ```
 
@@ -99,7 +106,7 @@ sequenceDiagram
     participant Back as Backend (/api/emergencies/:id/cancel)
     participant DB as outbox_events (Neon Postgres)
     participant Pub as OutboxPublisher (poll cada 5000ms)
-    participant Kafka as Kafka (KAFKA_ENABLED)
+    participant Kafka as Kafka (bus del Grupo 1)
 
     Ciudadano->>Front: confirma "Cancelar asistencia" (motivo opcional)
     Front->>BFF: PATCH /api/backend/api/emergencies/:id/cancel { reason }
@@ -107,9 +114,13 @@ sequenceDiagram
     Back->>Back: canCancelEmergency(user, emergency) — solo dueño
     Back->>Back: assertTransition(status, CANCELLED)
     Back->>DB: BEGIN, UPDATE status=CANCELLED, libera oficial si estaba asignado
-    Back->>DB: INSERT history, INSERT outbox_events (status=PENDING, payload=EmergenciaEstadoActualizado), COMMIT
+    Back->>DB: INSERT history, INSERT outbox_events (status=PENDING, payload=EmergenciaActualizada CANCELADA), COMMIT
     Back-->>Front: 200 { data } (vía BFF)
 
+    alt OUTBOX_PUBLISHER_ENABLED distinto de true
+        Note over Pub,Kafka: el publisher no arranca: el evento queda PENDING en outbox_events (se ve en GET /api/outbox-events)
+    else publisher prendido
+    Pub->>DB: al arrancar, skipPendingBefore(): PENDING anteriores a OUTBOX_PUBLISH_SINCE pasan a SKIPPED
     loop runOnce() cada intervalMs (default 5000ms)
         alt kafkaService.isEnabled() === true
             Pub->>DB: claimBatch() — UPDATE ... SET PROCESSING FOR UPDATE SKIP LOCKED LIMIT 50
@@ -123,10 +134,11 @@ sequenceDiagram
                     Pub->>DB: markFailed(id, attempts) — backoff exponencial hasta OUTBOX_MAX_ATTEMPTS, luego FAILED
                 end
             end
-        else kafkaService.isEnabled() === false (Render prod hoy: KAFKA_ENABLED=false)
-            Note over Pub,Kafka: no se llama claimBatch(): los eventos quedan PENDING indefinidamente
+        else kafkaService.isEnabled() === false (KAFKA_ENABLED=false)
+            Note over Pub,Kafka: no se llama claimBatch(): los eventos quedan PENDING
         end
         Pub->>DB: purgePublished() — borra PUBLISHED con más de OUTBOX_PUBLISHED_RETENTION_HOURS (168h)
+    end
     end
 ```
 
@@ -188,6 +200,47 @@ sequenceDiagram
     end
 ```
 
+## e) Cobertura preventiva (consumo de un evento de Espacios)
+
+```mermaid
+sequenceDiagram
+    participant Esp as Espacios Públicos
+    participant Bus as Bus del Grupo 1 (Kafka + registry)
+    participant L as EventoComunitarioPublicadoListener
+    participant F as OutcomeFactory
+    participant DB as Neon Postgres
+
+    Esp->>Bus: EventoComunitarioPublicado (Avro)
+    Bus->>L: mensaje (consumer group com.citypass.emergencias.EventoComunitarioPublicadoListener)
+    L->>Bus: decode: schema por id (Bearer del Login Federado)
+    L->>L: regla ProgramarCoberturaPreventivaRule: capacidad >= 500 y estado != CANCELLED
+    alt la regla no aplica
+        L->>F: process([], context) — solo registra el eventId
+    else aplica
+        L->>F: process([ProgramarCobertura], context)
+    end
+    F->>DB: BEGIN, INSERT eventos_procesados (ON CONFLICT DO NOTHING)
+    alt eventId ya procesado (duplicado o republicación)
+        F->>DB: ROLLBACK (sin efectos)
+    else nuevo
+        opt hay un ProgramarCobertura
+            F->>DB: findByCausa(EVENTO_PUBLICO, eventoId) FOR UPDATE
+            alt ya hay cobertura para ese evento
+                Note over F,DB: no crea otra (además lo impide el índice único de V23)
+            else no hay
+                F->>DB: INSERT emergencies (PREVENTIVA, EXTERNAL, user_id NULL, severity low, PENDING)
+                F->>DB: INSERT outbox_events (EmergenciaCreada con causaTipo/causaId)
+            end
+        end
+        F->>DB: COMMIT
+    end
+    Note over L,Bus: kafkajs confirma el offset. Un error transitorio no lo confirma (reentrega). Uno permanente queda DISCARDED en eventos_procesados
+```
+
+`EventoCancelado` sigue el mismo camino con `CancelarCoberturaPreventivaRule`: si la cobertura
+de ese `eventoId` está en `PENDING` o `VALIDATED`, la pasa a `CANCELLED` (actor `eda:espacios`)
+con historial y `EmergenciaActualizada`.
+
 ## Leyenda
 
 | Elemento | Notas |
@@ -195,7 +248,8 @@ sequenceDiagram
 | BFF | Next.js del repo `Frontend`, corre server-side en Render; guarda el JWT en cookie `httpOnly` (`citypass_session`) y nunca lo expone al browser |
 | `fetchBackend` | Reintenta 502/503/504 hasta 6 veces (~24s) porque Render (free) duerme el backend tras 15 min sin tráfico |
 | Outbox transaccional | El `INSERT` en `emergencies`/`emergency_status_history` y el `INSERT` en `outbox_events` van en la **misma transacción**: si Kafka está caído, la emergencia igual queda persistida |
-| `KAFKA_ENABLED=false` | Configurado así en `render.yaml` de producción hoy: el flujo (c) nunca llega a la rama que publica de verdad; los eventos se acumulan `PENDING` |
+| `OUTBOX_PUBLISHER_ENABLED=false` | El publisher del flujo (c) no arranca y los eventos se acumulan `PENDING`. Producción corre desde el 05/11 con `true` y `EDA_PUBLISHER_MODE=gateway` |
+| Oficial (b) | El grupo `officer` y sus tres endpoints existen en el backend; el `Frontend` no tiene vista de oficial, así que en la demo se usan por Swagger o Postman con el token de `of-001`/`of-002` |
 | `address` en el SOS | La dirección legible que resuelve el front (`resolveEmergencyAddress`, geocode inverso con timeout 2.5s) viaja al backend en el mismo body que `latitude`/`longitude`, como campo `address` (≤200 caracteres); `normalizeAddress` la sanea y `locationCrypto.encryptLocation` la guarda **dentro del mismo blob cifrado** que la ubicación (ver `02-modelo-entidad-relacion.md`) |
 | Advisory lock del job (d) | `pg_try_advisory_lock` no bloquea: si otra instancia del backend (p. ej. el stack de backup activado) ya tiene el lock, esa corrida se saltea en vez de esperar — hay otra corrida 60s después |
 | `EmergenciaPriorizada` condicional | Solo se publica si `applyScoringDecision` detecta que la `priority` del incidente cambió respecto a la que tenía antes (`NULL` cuenta como distinta, así que la primera vez siempre notifica); si no cambió, la corrida no genera evento nuevo aunque haya recalculado el score |
@@ -204,5 +258,6 @@ sequenceDiagram
 ## Fuente en el código
 
 - Front (`Frontend`): `app/(citizen)/inicio/InicioClient.js`, `app/lib/sosController.js`, `app/lib/api.js`, `app/lib/geocoding.js`, `lib/geocode-server.js`, `lib/backend-fetch.js`, `app/api/backend/[...path]/route.js`, `app/api/geocode/route.js`, `app/components/DispatcherView.js`, `app/(citizen)/mis-alertas/[id]/page.js`
-- Back (`emergencias-backend`): `src/controllers/panic-button.controller.js` (`normalizeAddress`), `src/controllers/emergency.controller.js`, `src/repositories/emergency.repository.js`, `src/security/location-crypto.js`, `src/services/outbox-publisher.js`, `src/services/kafka.service.js`, `src/services/emergency-events.js`
+- Back (`emergencias-backend`): `src/controllers/panic-button.controller.js` (`normalizeAddress`), `src/controllers/emergency.controller.js` (`advanceOperationalStatus`), `src/repositories/emergency.repository.js`, `src/security/location-crypto.js`, `src/services/outbox-publisher.js`, `src/services/kafka.service.js`, `src/services/emergency-events.js`
+- Consumo (secuencia e): `src/listeners/event-listener.js`, `src/listeners/event-decoder.js`, `src/listeners/outcome-factory.js`, `src/listeners/cobertura-preventiva/`, `src/repositories/eventos-procesados.repository.js`
 - Motor de incidentes (secuencia d): `src/services/incident-detection-job.js` (`withDetectionLock`, `DETECTION_LOCK_KEY`), `src/domain/incident-detector.js`, `src/domain/incident-detection-strategy.js` (`detectGroups`), `src/domain/dbscan-grouper.js`, `src/domain/rule-based-grouper.js`, `src/domain/risk-engine.js`, `src/repositories/incident.repository.js` (`applyScoringDecision`)

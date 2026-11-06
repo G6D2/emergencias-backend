@@ -1,35 +1,79 @@
+# Servicio de producción (emergencias-backend-34go.onrender.com) tal como
+# corre hoy. El servicio se creó desde el dashboard: este archivo documenta su
+# configuración y sirve para recrearlo, pero Render no lo sincroniza solo.
+# Los secretos van con `sync: false` y se cargan en el dashboard, nunca acá.
 services:
   - type: web
     name: emergencias-backend
-    env: node
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     region: oregon
     plan: free
-    buildCommand: npm ci --omit=dev
-    startCommand: node src/index.js
+    # Sin auto-deploy: el CD (.github/workflows/cd.yml) migra Neon y después
+    # dispara el deploy hook.
+    autoDeployTrigger: "off"
     envVars:
+      # Producción NO corre con NODE_ENV=production: las respuestas no traen
+      # Strict-Transport-Security (verificado el 05/11/2026). El valor vive en
+      # el dashboard. Con production se prenden HSTS + redirect a HTTPS y CORS
+      # estricto, y AUTH_MODE=local pasa a exigir ALLOW_LOCAL_AUTH=true.
       - key: NODE_ENV
-        value: production
-      # Neon (ver ADR "Elegir base de datos"): pegar en el dashboard de Render la
-      # connection string *pooled* con sslmode=require. No se usa Postgres de Render.
+        sync: false
+
+      # Neon (ver ADR "Elegir base de datos"): connection string *pooled* con
+      # sslmode=require. No se usa Postgres de Render.
       - key: DATABASE_URL
         sync: false
-      - key: KAFKA_BROKER
-        sync: false
-      # Poner en 'false' si todavia no hay un broker Kafka real desplegado
-      # (evita reintentos de conexion ruidosos en los logs, no bloquea el arranque).
+      # Máximo de conexiones del pool de pg (ver README > Pool de conexiones).
+      - key: DB_POOL_MAX
+        value: "10"
+
+      # Auth local (JWT propio con el contrato de CityPass+). /health devuelve
+      # authMode: local. DEV_LOGIN_STRICT limita /auth/dev/login a los subs
+      # demo de src/auth/dev-login-policy.js.
+      - key: AUTH_MODE
+        value: local
+      - key: DEV_LOGIN_STRICT
+        value: "true"
+
+      # Bus del Grupo 1. Kafka está prendido solo para consumir: el outbox no
+      # publica (OUTBOX_PUBLISHER_ENABLED=false) y los eventos propios quedan
+      # PENDING en outbox_events.
       - key: KAFKA_ENABLED
-        value: "false"
+        value: "true"
+      - key: KAFKA_BROKER
+        value: test.citypass.mrfranco.net.ar:9092
+      - key: KAFKA_SSL
+        value: "true"
       - key: KAFKA_CLIENT_ID
         value: emergencias-backend
+      - key: KAFKA_CONSUMER_ENABLED
+        value: "true"
+      - key: OUTBOX_PUBLISHER_ENABLED
+        value: "false"
+      # Listeners de cobertura preventiva (eventos de Espacios).
+      - key: EDA_TOPIC_EVENTO_PUBLICADO
+        value: com.citypass.espacios.EventoComunitarioPublicado
+      - key: EDA_TOPIC_EVENTO_CANCELADO
+        value: com.citypass.espacios.EventoCancelado
+      # Schema registry del gateway (Avro); usa el mismo token que el broker.
+      - key: EDA_SCHEMA_REGISTRY_URL
+        value: https://test.citypass.mrfranco.net.ar/api/v1
+      # Secreto del cliente de servicio del Login Federado (SASL/OAUTHBEARER).
+      # EDA_OAUTH_TOKEN_URL y EDA_OAUTH_CLIENT_ID usan el default del código.
+      - key: EDA_OAUTH_CLIENT_SECRET
+        sync: false
+      # Topic de EmergenciaCreada. EmergenciaActualizada y EmergenciaPriorizada
+      # usan el default del código (emergencias.estado-actualizado y
+      # emergencias.priorizada).
       - key: TOPIC_PANIC_BUTTON
         value: emergencias.boton-panico
-      - key: TOPIC_EMERGENCIA_CERRADA
-        value: emergencias.cerrada
-      # Setear en el dashboard de Render (openssl rand -base64 32).
-      # Sin esto el servicio no arranca.
+
+      # Clave AES-256-GCM de ubicaciones (openssl rand -base64 32). Sin esto el
+      # servicio no arranca. Para rotar: ver README (Seguridad de datos).
       - key: LOCATION_ENCRYPTION_KEY
         sync: false
-      # Para rotar la clave: ver README (Seguridad de datos).
       # - key: LOCATION_ENCRYPTION_KEYS
       #   sync: false
       # - key: LOCATION_ENCRYPTION_KEY_ID
@@ -45,21 +89,18 @@ services:
         value: "72"
       - key: LOCATION_RETENTION_ENABLED
         value: "true"
-      # Sin esta variable el server igual arranca: cae al frontend de Render
-      # (https://frontend-krds.onrender.com) y deja un warn en el log. Se
-      # recomienda setearla explícita para no depender del fallback.
+
+      # Obligatoria mientras NODE_ENV no sea production: sin ella, CORS cae a
+      # http://localhost:3001 y el frontend de Render queda bloqueado.
       - key: CORS_ALLOWED_ORIGINS
         value: https://frontend-krds.onrender.com
-      # Máximo de conexiones del pool de pg (ver README > Pool de conexiones).
-      - key: DB_POOL_MAX
-        value: "10"
-      # Rate limit de /auth/dev/login (10 req/min) y POST /api/panic-button
-      # (5 req/min) por IP. 'false' lo apaga.
+      # Rate limit por IP (ver README > Rate limiting). 'false' lo apaga.
       - key: RATE_LIMIT_ENABLED
         value: "true"
-      # Keep-warm in-process (ver README > Deploy > Keep-warm): en horario de
-      # clase el backend se pega a sí mismo (URL pública) y al frontend cada
-      # 8 min para que Render (free) no los duerma. El cron de GitHub
+
+      # Keep-warm in-process (ver README > Keep-warm): en horario de clase el
+      # backend se pega a sí mismo (URL pública) y al frontend cada 8 min para
+      # que Render (free) no los duerma. El cron de GitHub
       # (.github/workflows/keep-warm.yml) solo hace el primer despertar.
       - key: KEEP_WARM_ENABLED
         value: "true"
@@ -71,9 +112,3 @@ services:
         value: America/Argentina/Buenos_Aires
       - key: KEEP_WARM_INTERVAL_MS
         value: "480000"
-      # Primera entrega sin IdP (Grupo 2): descomentar o setear en el dashboard de Render
-      # - key: AUTH_MODE
-      #   value: local
-      # - key: ALLOW_LOCAL_AUTH
-      #   value: "true"
-      # Cuando conecten IdP: AUTH_MODE=idp + IDP_ISSUER + IDP_AUDIENCE + IDP_JWKS_URI

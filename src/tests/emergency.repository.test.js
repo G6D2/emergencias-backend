@@ -1,6 +1,7 @@
 const { EmergencyRepository, mapEmergency } = require('../repositories/emergency.repository');
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
 const { createLocationCrypto } = require('../security/location-crypto');
+const { TERMINAL_STATUSES } = require('../domain/emergency-status');
 
 const fakeCrypto = {
   encryptLocation: () => 'encrypted-blob',
@@ -747,6 +748,84 @@ describe('EmergencyRepository.updateStatus', () => {
   });
 });
 
+describe('EmergencyRepository.updateStatus: estado de origen, closed_at y oficial asignado', () => {
+  function clientWithCurrent(current) {
+    return createClient((sql, params) => {
+      if (sql.includes('SELECT status, assigned_officer_id')) return { rows: [current] };
+      if (sql.startsWith('UPDATE emergencies')) return { rows: [{ id: 'e-1', status: params[0] }] };
+      if (sql.includes('INSERT INTO emergency_status_history')) {
+        return { rows: [{ id: 1, previous_status: current.status, new_status: params[2] }] };
+      }
+      return { rows: [] };
+    });
+  }
+
+  it('con requireStatus distinto del estado bajo lock responde ConflictError sin tocar la fila', async () => {
+    const client = clientWithCurrent({ status: 'DISPATCHED', assigned_officer_id: 'o-1' });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await expect(repo.updateStatus('e-1', { newStatus: 'VALIDATED', requireStatus: 'PENDING' }))
+      .rejects.toThrow(new ConflictError('Emergency e-1 is DISPATCHED, expected PENDING'));
+
+    expect(client.calls.some((c) => c.sql.startsWith('UPDATE emergencies'))).toBe(false);
+    expect(client.calls.some((c) => c.sql.includes('officers'))).toBe(false);
+    expect(client.calls.some((c) => c.sql === 'ROLLBACK')).toBe(true);
+  });
+
+  it('con requireStatus igual al estado bajo lock aplica la transición', async () => {
+    const client = clientWithCurrent({ status: 'DISPATCHED', assigned_officer_id: 'o-1' });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    const result = await repo.updateStatus('e-1', { newStatus: 'VALIDATED', requireStatus: 'DISPATCHED' });
+
+    expect(result.emergency.status).toBe('VALIDATED');
+    expect(client.calls.some((c) => c.sql === 'COMMIT')).toBe(true);
+  });
+
+  it.each([
+    ['CLOSED', 'RESOLVED'],
+    ['CANCELLED', 'VALIDATED'],
+    ['DISCARDED', 'PENDING'],
+  ])('setea closed_at al pasar a %s (terminal)', async (newStatus, from) => {
+    const client = clientWithCurrent({ status: from, assigned_officer_id: null });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await repo.updateStatus('e-1', { newStatus });
+
+    const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
+    expect(update.sql).toMatch(/closed_at = CASE WHEN \$3::boolean THEN now\(\) ELSE closed_at END/);
+    expect(update.params).toEqual([newStatus, 'e-1', true]);
+  });
+
+  it.each([
+    ['VALIDATED', 'PENDING'],
+    ['EN_ROUTE', 'DISPATCHED'],
+    ['RESOLVED', 'ON_SCENE'],
+  ])('no toca closed_at al pasar a %s (no terminal)', async (newStatus, from) => {
+    const client = clientWithCurrent({ status: from, assigned_officer_id: null });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await repo.updateStatus('e-1', { newStatus });
+
+    const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
+    expect(update.params).toEqual([newStatus, 'e-1', false]);
+  });
+
+  it('al pasar a VALIDATED limpia assigned_officer_id y libera al oficial en la misma transacción', async () => {
+    const client = clientWithCurrent({ status: 'DISPATCHED', assigned_officer_id: 'o-1' });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await repo.updateStatus('e-1', { newStatus: 'VALIDATED', requireStatus: 'DISPATCHED' });
+
+    const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
+    expect(update.sql).toMatch(/assigned_officer_id = CASE WHEN \$1 = 'VALIDATED' THEN NULL ELSE assigned_officer_id END/);
+    const release = client.calls.find((c) => c.sql.includes("UPDATE officers SET status = 'disponible'"));
+    expect(release.params).toEqual(['o-1']);
+    const sqls = client.calls.map((c) => c.sql);
+    expect(sqls.indexOf(release.sql)).toBeLessThan(sqls.indexOf('COMMIT'));
+  });
+});
+
 describe('EmergencyRepository.setIncidentId', () => {
   it('lanza NotFoundError si no actualiza ninguna fila', async () => {
     const pool = createPool({ query: async () => ({ rows: [] }) });
@@ -914,12 +993,13 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
     const pool = createPool({
       query: async (sql, params) => {
         expect(sql).toMatch(/FROM emergencies/);
-        expect(params).toEqual(['INCENDIO', since]);
+        expect(params).toEqual([['INCENDIO'], since, ['CLOSED', 'CANCELLED', 'DISCARDED']]);
         return {
           rows: [{
             id: 'e1',
             correlation_id: 'c1',
             user_id: 'u1',
+            emergency_type: 'INCENDIO',
             latitude: null,
             longitude: null,
             location_encrypted: null,
@@ -938,12 +1018,37 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
       id: 'e1',
       correlationId: 'c1',
       userId: 'u1',
+      emergencyType: 'INCENDIO',
       latitude: null,
       longitude: null,
       severity: 'low',
       incidentId: null,
       createdAt: 'c',
     }]);
+  });
+
+  it('con emergencyTypes pide varios tipos en una sola query y excluye los estados terminales', async () => {
+    const since = new Date('2026-01-01T00:00:00.000Z');
+    const query = jest.fn(async () => ({
+      rows: [
+        {
+          id: 'e5', correlation_id: 'c5', user_id: 'u5', emergency_type: 'PANICO', location_encrypted: null, severity: 'high', incident_id: null, created_at: 'c',
+        },
+        {
+          id: 'e6', correlation_id: 'c6', user_id: 'u6', emergency_type: 'MEDICA', location_encrypted: null, severity: 'medium', incident_id: null, created_at: 'c',
+        },
+      ],
+    }));
+    const repo = new EmergencyRepository(createPool({ query }), { locationCrypto: crypto });
+
+    const candidates = await repo.findRecentByType({ emergencyTypes: ['PANICO', 'MEDICA'], since });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/emergency_type = ANY\(\$1::text\[\]\)/);
+    expect(sql).toMatch(/status <> ALL\(\$3::text\[\]\)/);
+    expect(params).toEqual([['PANICO', 'MEDICA'], since, TERMINAL_STATUSES]);
+    expect(candidates.map((c) => [c.id, c.emergencyType])).toEqual([['e5', 'PANICO'], ['e6', 'MEDICA']]);
   });
 
   it('descifra la ubicación cuando hay ciphertext válido', async () => {

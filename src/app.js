@@ -14,6 +14,7 @@ const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
 const { secureLog } = require('./security/secure-log');
 const { resolveCorsOrigins } = require('./security/cors');
+const { kafkaHealth } = require('./services/kafka.service');
 
 /**
  * @param {object} kafkaService
@@ -21,7 +22,7 @@ const { resolveCorsOrigins } = require('./security/cors');
  * @param {{
  *   authenticate?: import('express').RequestHandler,
  *   devAuthRouter?: import('express').Router|null,
- *   authMode?: string,
+ *   health?: () => object,
  *   officerRepository?: object|null,
  *   incidentRepository?: object|null,
  *   citizenProfileRepository?: object|null,
@@ -29,6 +30,7 @@ const { resolveCorsOrigins } = require('./security/cors');
  */
 function createApp(kafkaService, emergencyRepository, options = {}) {
   const app = express();
+  app.disable('x-powered-by');
   const authenticate = options.authenticate || createAuthenticateMiddleware();
   const officerRepository = options.officerRepository || null;
   const incidentRepository = options.incidentRepository || null;
@@ -60,7 +62,10 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
    *   get:
    *     tags: [Health]
    *     summary: Health check del servicio
-   *     description: Tirás esto para ver si el servicio está vivo y cómo anda Kafka.
+   *     description: >
+   *       Tirás esto para ver si el servicio está vivo y cómo anda Kafka. Responde con
+   *       el estado que el proceso ya tiene en memoria (producer del outbox y cada
+   *       listener): no abre conexiones al broker ni a la base.
    *     responses:
    *       200:
    *         description: Servicio operativo
@@ -69,16 +74,11 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
    *             schema:
    *               $ref: '#/components/schemas/HealthResponse'
    */
-  app.get('/health', async (req, res) => {
-    const kafkaDisabled =
-      kafkaService && typeof kafkaService.isEnabled === 'function' && !kafkaService.isEnabled();
-    const kafkaConnected = kafkaService && !kafkaDisabled ? await kafkaService.checkHealth() : false;
-
+  app.get('/health', (req, res) => {
     res.json({
       status: 'ok',
       timestamp: new Date().toISOString(),
-      kafka: kafkaDisabled ? 'disabled' : kafkaConnected ? 'connected' : 'disconnected',
-      authMode: options.authMode || undefined,
+      ...(options.health ? options.health() : kafkaHealth(kafkaService)),
     });
   });
 

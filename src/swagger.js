@@ -2,6 +2,9 @@ const swaggerJsdoc = require('swagger-jsdoc');
 const { EMERGENCY_STATUSES } = require('./domain/emergency-status');
 const { EMERGENCY_TYPES } = require('./domain/emergency-type');
 
+// Mismo vocabulario que el CHECK de outbox_events (V6, V8 y V21).
+const OUTBOX_STATUSES = ['PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'SKIPPED'];
+
 const options = {
   definition: {
     openapi: '3.0.3',
@@ -9,28 +12,28 @@ const options = {
       title: 'Emergencias Backend API',
       version: '0.1.0',
       description:
-        'API del módulo de Emergencias y Seguridad (CityPass+). Botón de pánico y cambios de estado de emergencies. Autenticación vía JWT del IdP CityPass+.',
+        'API del módulo de Emergencias y Seguridad (CityPass+). Botón de pánico, ciclo de vida de '
+        + 'emergencias, incidentes y perfil ciudadano. Autenticación con JWT del contrato CityPass+ '
+        + '(hoy emitido por el propio backend, AUTH_MODE=local).',
     },
+    // Relativo: "Try it out" pega contra el mismo host que sirve /api-docs
+    // (localhost, Render o el backup), sin URL fija.
     servers: [
       {
-        url: 'http://localhost:{port}',
-        description: 'Local',
-        variables: {
-          port: {
-            default: '3000',
-          },
-        },
+        url: '/',
+        description: 'Mismo host que sirve esta documentación',
       },
     ],
     tags: [
       { name: 'Health', description: 'Estado del servicio' },
       { name: 'User', description: 'Perfil del usuario autenticado' },
-      { name: 'Dev Auth', description: 'Login de desarrollo (solo AUTH_MODE=local)' },
+      { name: 'Dev Auth', description: 'Registro, login y dev login locales (solo AUTH_MODE=local)' },
       { name: 'Panic Button', description: 'Activación y consulta de botón de pánico' },
       { name: 'Emergencies', description: 'Listado, detalle y cambios de estado de emergencias' },
       { name: 'Officers', description: 'Catálogo de oficiales para asignación (dispatcher)' },
       { name: 'Incidents', description: 'Resultado del motor de detección de incidentes (dispatcher)' },
       { name: 'CitizenProfile', description: 'Perfil personal y ubicaciones frecuentes del ciudadano' },
+      { name: 'Outbox', description: 'Estado operativo de los eventos pendientes de publicar (dispatcher)' },
     ],
     components: {
       securitySchemes: {
@@ -59,7 +62,13 @@ const options = {
               format: 'uuid',
               description: 'Igual al id al crear (ADR-001). Traza creación → priorización → despacho en los eventos.',
             },
-            userId: { type: 'string', example: 'U000042', description: 'Claim sub del JWT' },
+            userId: {
+              type: 'string',
+              nullable: true,
+              example: 'U000042',
+              description: 'Claim sub del JWT de quien reportó. null en las emergencias EXTERNAL '
+                + '(no tienen ciudadano, p. ej. la cobertura preventiva).',
+            },
             latitude: { type: 'number', nullable: true, example: -34.6037 },
             longitude: { type: 'number', nullable: true, example: -58.3816 },
             address: {
@@ -97,7 +106,49 @@ const options = {
               type: 'string',
               nullable: true,
               example: null,
-              description: 'Oficial asignado (null hasta el despacho)',
+              description: 'Id del oficial asignado (catálogo de /api/officers). null hasta el despacho. '
+                + 'Al devolver (return), cancelar o cerrar, el oficial vuelve a disponible pero el id queda en la fila.',
+            },
+            assignedOfficer: {
+              type: 'string',
+              nullable: true,
+              example: 'Oficial Carlos Gómez',
+              description: 'Nombre del oficial asignado (JOIN con officers). Viene en el listado, el detalle '
+                + 'y la respuesta de assign; en las respuestas de los demás cambios de estado viene null.',
+            },
+            incidentId: {
+              type: 'string',
+              format: 'uuid',
+              nullable: true,
+              description: 'Id del incidente al que la agrupó el motor de detección, o null. Viene en todas '
+                + 'las respuestas, también al citizen: el listado le recorta incident, pero no este id.',
+            },
+            source: {
+              type: 'string',
+              enum: ['INTERNAL', 'EXTERNAL'],
+              example: 'INTERNAL',
+              description: 'INTERNAL: reportada por un ciudadano. EXTERNAL: creada por un listener de '
+                + 'eventos de otro módulo (hoy, la cobertura preventiva de Espacios).',
+            },
+            requiresManualValidation: {
+              type: 'boolean',
+              example: false,
+              description: 'true si la emergencia externa llegó sin ubicación y el dispatcher tiene que revisarla.',
+            },
+            causaTipo: {
+              type: 'string',
+              nullable: true,
+              enum: ['EVENTO_CLIMATICO', 'RECLAMO', 'INCIDENTE_VIAL', 'EVENTO_PUBLICO', 'RESERVA', null],
+              example: null,
+              description: 'Qué originó la emergencia (CHECK de V23). null en las reportadas por un ciudadano; '
+                + 'hoy solo se completa con EVENTO_PUBLICO (cobertura preventiva).',
+            },
+            causaId: {
+              type: 'string',
+              nullable: true,
+              example: null,
+              description: 'Id de la causa en el módulo de origen (p. ej. eventoId de Espacios). '
+                + 'Va junto con causaTipo: los dos o ninguno.',
             },
             locationUnavailable: {
               type: 'boolean',
@@ -112,15 +163,16 @@ const options = {
               nullable: true,
               description: 'Incidente al que fue agrupada esta emergencia (motor de detección de '
                 + 'incidentes, corre cada 60s), o null si todavía no fue agrupada a ninguno. '
-                + 'SOLO en la respuesta al dispatcher: un citizen nunca recibe este campo '
-                + '(no se filtra información operativa a quien reporta).',
+                + 'Solo viene en el listado y el detalle. En el listado (GET /api/emergencies) se le '
+                + 'recorta al citizen; el detalle (GET /api/emergencies/{id} y GET /api/panic-button/{id}) '
+                + 'lo devuelve también al citizen dueño.',
             },
             effectivePriority: {
               type: 'string',
               enum: ['low', 'medium', 'high', 'critical'],
               example: 'critical',
               description: 'Máximo entre severity y incident.priority (nunca menor a severity). '
-                + 'SOLO en la respuesta al dispatcher, igual que incident.',
+                + 'Misma visibilidad que incident.',
             },
           },
         },
@@ -365,6 +417,13 @@ const options = {
             message: { type: 'string' },
           },
         },
+        OutboxStatus: {
+          type: 'string',
+          enum: OUTBOX_STATUSES,
+          description: 'PENDING: espera publicación. PROCESSING: reclamado por el publisher. '
+            + 'PUBLISHED: Kafka confirmó el envío. FAILED: agotó OUTBOX_MAX_ATTEMPTS. '
+            + 'SKIPPED: PENDING anterior a OUTBOX_PUBLISH_SINCE, descartado al arrancar el publisher (V21).',
+        },
         HealthResponse: {
           type: 'object',
           properties: {
@@ -372,13 +431,35 @@ const options = {
             timestamp: { type: 'string', format: 'date-time' },
             kafka: {
               type: 'string',
-              enum: ['connected', 'disconnected'],
+              enum: ['connected', 'disconnected', 'disabled'],
               example: 'connected',
+              description: 'disabled con KAFKA_ENABLED=false. connected si el producer (cuando el outbox publica) '
+                + 'y cada listener con topic están arriba. Sale del estado en memoria del proceso, sin conectarse al broker.',
             },
-            authMode: {
-              type: 'string',
-              enum: ['local', 'idp'],
-              example: 'local',
+            outbox: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean', example: false },
+                producerConnected: { type: 'boolean', example: false },
+                lastPollAt: { type: 'string', format: 'date-time', nullable: true },
+              },
+            },
+            listeners: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string', example: 'EventoCanceladoListener' },
+                  running: { type: 'boolean', example: true },
+                  status: {
+                    type: 'string',
+                    enum: ['starting', 'running', 'retrying', 'disabled', 'stopped'],
+                    example: 'running',
+                  },
+                  lastPollAt: { type: 'string', format: 'date-time', nullable: true },
+                  nextRetryAt: { type: 'string', format: 'date-time', nullable: true },
+                },
+              },
             },
           },
         },
@@ -391,6 +472,19 @@ const options = {
   ],
 };
 
-const swaggerSpec = swaggerJsdoc(options);
+// El filtro `status` de GET /api/outbox-events trae su propio enum en el
+// JSDoc de la ruta; se apunta al schema OutboxStatus para que la doc liste
+// los mismos estados que acepta la base (incluido SKIPPED).
+function useOutboxStatusSchema(spec) {
+  const parameters = spec.paths?.['/api/outbox-events']?.get?.parameters || [];
+  for (const parameter of parameters) {
+    if (parameter.in === 'query' && parameter.name === 'status') {
+      parameter.schema = { $ref: '#/components/schemas/OutboxStatus' };
+    }
+  }
+  return spec;
+}
+
+const swaggerSpec = useOutboxStatusSchema(swaggerJsdoc(options));
 
 module.exports = { swaggerSpec };

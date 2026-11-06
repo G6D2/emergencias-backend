@@ -1,5 +1,5 @@
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
-const { assertTransition } = require('../domain/emergency-status');
+const { assertTransition, isTerminal, TERMINAL_STATUSES } = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { resolveBarrio } = require('../domain/barrio');
 const { createLocationCrypto } = require('../security/location-crypto');
@@ -313,7 +313,8 @@ class EmergencyRepository {
 
   /**
    * Borra ciphertext de ubicaciones cerradas hace más de retentionHours.
-   * Solo aplica a emergencias con closed_at; las abiertas se conservan.
+   * Solo aplica a emergencias con closed_at (lo setea toda transición a un
+   * estado terminal: CLOSED, CANCELLED, DISCARDED); las abiertas se conservan.
    * Las filas siguen existiendo; lat/lng quedan null (minimización).
    * Si barrio aún es null, lo deriva del ciphertext/coords legacy ANTES de
    * borrar la ubicación (evita perder el dato agregado en el deploy).
@@ -653,14 +654,18 @@ class EmergencyRepository {
    *   tomar el lock de la fila. Cierra la carrera "se comprobó el oficial,
    *   pero el dispatcher devolvió y reasignó antes del UPDATE". Si no
    *   coincide responde NotFound, igual que una emergencia ajena.
+   * @param {string|null} [options.requireStatus] - si viene, la transición
+   *   solo se aplica si la emergencia sigue en ese estado con la fila
+   *   bloqueada; si no, ConflictError (409). Lo usan validar (PENDING) y
+   *   devolver (DISPATCHED), que llegan las dos a VALIDATED.
    * @param {object|null} [options.client] - con `client`, la transición corre
    *   en la transacción del caller (la del OutcomeFactory) sin abrir una propia.
    */
   async updateStatus(id, {
     newStatus, actor = null, reason = null, outboxEvent = null, requireAssignedOfficerId = null,
-    client: externalClient = null,
+    requireStatus = null, client: externalClient = null,
   }) {
-    const options = { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId };
+    const options = { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId, requireStatus };
     if (externalClient) {
       return this.applyStatusUpdate(externalClient, id, options);
     }
@@ -678,7 +683,9 @@ class EmergencyRepository {
     }
   }
 
-  async applyStatusUpdate(client, id, { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId = null }) {
+  async applyStatusUpdate(client, id, {
+    newStatus, actor, reason, outboxEvent, requireAssignedOfficerId = null, requireStatus = null,
+  }) {
     const current = await client.query(
       'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
       [id]
@@ -692,15 +699,23 @@ class EmergencyRepository {
       throw new NotFoundError(`Emergency with ID ${id} not found`);
     }
     assertTransition(previousStatus, newStatus);
+    if (requireStatus !== null && previousStatus !== requireStatus) {
+      throw new ConflictError(`Emergency ${id} is ${previousStatus}, expected ${requireStatus}`);
+    }
 
+    // closed_at marca el fin de la emergencia en cualquier estado terminal
+    // (CLOSED, CANCELLED, DISCARDED): la retención de ubicaciones cuenta las
+    // 72 h desde ahí. Al pasar a VALIDATED (validar o devolver) la emergencia
+    // queda sin oficial asignado; el oficial se libera más abajo.
     const updated = await client.query(
       `UPDATE emergencies
        SET status = $1,
            updated_at = now(),
-           closed_at = CASE WHEN $1 = 'CLOSED' THEN now() ELSE closed_at END
+           closed_at = CASE WHEN $3::boolean THEN now() ELSE closed_at END,
+           assigned_officer_id = CASE WHEN $1 = 'VALIDATED' THEN NULL ELSE assigned_officer_id END
        WHERE id = $2
        RETURNING *`,
-      [newStatus, id]
+      [newStatus, id, isTerminal(newStatus)]
     );
 
     const history = await client.query(
@@ -754,21 +769,27 @@ class EmergencyRepository {
   }
 
   /**
-   * Candidatos recientes de un emergencyType para el job de deteccion de
-   * incidentes (#60): sin JOIN a officers, sin paginacion, sin COUNT --
-   * el consumidor es el job, no un endpoint HTTP. Devuelve lat/lng ya
-   * descifrados porque el job los pasa directo a groupNearbyEmergencies.
+   * Candidatos recientes para el job de deteccion de incidentes (#60): sin
+   * JOIN a officers, sin paginacion, sin COUNT -- el consumidor es el job,
+   * no un endpoint HTTP. Recibe un tipo (`emergencyType`) o varios
+   * (`emergencyTypes`): el job pide todos los agrupables en UNA sola query y
+   * los separa en memoria por emergencyType. Las emergencias en estado
+   * terminal (cerradas, canceladas, descartadas) no son candidatas.
+   * Devuelve lat/lng ya descifrados porque el job los pasa directo a
+   * groupNearbyEmergencies.
    * Una fila cuyo ciphertext no se puede descifrar se excluye del
    * resultado (no puede tumbar la corrida del job), dejando constancia
    * con secureLog de cual id se excluyo y por que.
    */
-  async findRecentByType({ emergencyType, since }) {
+  async findRecentByType({ emergencyType, emergencyTypes = [emergencyType], since }) {
     const result = await this.pool.query(
-      `SELECT id, correlation_id, user_id, latitude, longitude, location_encrypted,
+      `SELECT id, correlation_id, user_id, emergency_type, latitude, longitude, location_encrypted,
               severity, incident_id, created_at
        FROM emergencies
-       WHERE emergency_type = $1 AND created_at >= $2`,
-      [emergencyType, since]
+       WHERE emergency_type = ANY($1::text[])
+         AND created_at >= $2
+         AND status <> ALL($3::text[])`,
+      [emergencyTypes, since, TERMINAL_STATUSES]
     );
 
     const candidates = [];
@@ -778,6 +799,7 @@ class EmergencyRepository {
           id: row.id,
           correlationId: row.correlation_id,
           userId: row.user_id,
+          emergencyType: row.emergency_type,
           latitude: null,
           longitude: null,
           severity: row.severity,
@@ -793,6 +815,7 @@ class EmergencyRepository {
           id: row.id,
           correlationId: row.correlation_id,
           userId: row.user_id,
+          emergencyType: row.emergency_type,
           latitude: location.latitude,
           longitude: location.longitude,
           severity: row.severity,

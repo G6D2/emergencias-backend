@@ -1,4 +1,9 @@
-const { startIncidentDetectionJob, withDetectionLock, DETECTION_LOCK_KEY } = require('../services/incident-detection-job');
+const {
+  startIncidentDetectionJob,
+  withDetectionLock,
+  DETECTION_LOCK_KEY,
+  GROUPABLE_EMERGENCY_TYPES,
+} = require('../services/incident-detection-job');
 
 const BASE_LATITUDE = -34.6037;
 const BASE_LONGITUDE = -58.3816;
@@ -8,6 +13,7 @@ function closeCandidate(overrides = {}) {
     id: 'default-id',
     correlationId: 'default-id',
     userId: 'default-user',
+    emergencyType: 'INCENDIO',
     latitude: BASE_LATITUDE,
     longitude: BASE_LONGITUDE,
     createdAt: new Date(),
@@ -76,9 +82,7 @@ describe('incident-detection-job', () => {
       closeCandidate({ id: 'e1', correlationId: 'e1', userId: 'u1' }),
       closeCandidate({ id: 'e2', correlationId: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002 }),
     ];
-    emergencyRepository.findRecentByType.mockImplementation(({ emergencyType }) => (
-      Promise.resolve(emergencyType === 'INCENDIO' ? candidates : [])
-    ));
+    emergencyRepository.findRecentByType.mockResolvedValue(candidates);
     incidentRepository.create.mockResolvedValue({ id: 'incident-1' });
 
     const job = createJob(emergencyRepository, incidentRepository);
@@ -100,9 +104,7 @@ describe('incident-detection-job', () => {
         id: 'e2', correlationId: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002, incidentId: null,
       }),
     ];
-    emergencyRepository.findRecentByType.mockImplementation(({ emergencyType }) => (
-      Promise.resolve(emergencyType === 'INCENDIO' ? candidates : [])
-    ));
+    emergencyRepository.findRecentByType.mockResolvedValue(candidates);
 
     const job = createJob(emergencyRepository, incidentRepository);
     await job.runOnce();
@@ -122,9 +124,7 @@ describe('incident-detection-job', () => {
         id: 'e2', correlationId: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002, incidentId: 'inc-2',
       }),
     ];
-    emergencyRepository.findRecentByType.mockImplementation(({ emergencyType }) => (
-      Promise.resolve(emergencyType === 'INCENDIO' ? candidates : [])
-    ));
+    emergencyRepository.findRecentByType.mockResolvedValue(candidates);
 
     const job = createJob(emergencyRepository, incidentRepository);
     await job.runOnce();
@@ -134,7 +134,58 @@ describe('incident-detection-job', () => {
     expect(incidentRepository.applyScoringDecision).not.toHaveBeenCalled();
   });
 
-  it('si findRecentByType rechaza para un tipo, runOnce() no relanza y el job sigue funcionando en la siguiente corrida', async () => {
+  it('trae los candidatos de todos los tipos agrupables en una sola query, sin PREVENTIVA', async () => {
+    const { emergencyRepository, incidentRepository } = buildRepos();
+
+    const job = createJob(emergencyRepository, incidentRepository, { INCIDENT_WINDOW_MIN: '15' });
+    const before = Date.now();
+    await job.runOnce();
+
+    expect(emergencyRepository.findRecentByType).toHaveBeenCalledTimes(1);
+    const [{ emergencyTypes, since }] = emergencyRepository.findRecentByType.mock.calls[0];
+    expect(emergencyTypes).toEqual(GROUPABLE_EMERGENCY_TYPES);
+    expect(emergencyTypes).toContain('PANICO');
+    expect(emergencyTypes).not.toContain('PREVENTIVA');
+    expect(before - since.getTime()).toBeGreaterThanOrEqual(15 * 60000);
+  });
+
+  it('agrupa en memoria por emergencyType: dos reportes iguales de tipos distintos no se mezclan', async () => {
+    const { emergencyRepository, incidentRepository } = buildRepos();
+    emergencyRepository.findRecentByType.mockResolvedValue([
+      closeCandidate({ id: 'f1', userId: 'u1', emergencyType: 'INCENDIO' }),
+      closeCandidate({ id: 'm1', userId: 'u2', emergencyType: 'MEDICA' }),
+      closeCandidate({
+        id: 'f2', userId: 'u3', emergencyType: 'INCENDIO', latitude: BASE_LATITUDE + 0.0002,
+      }),
+      closeCandidate({
+        id: 'm2', userId: 'u4', emergencyType: 'MEDICA', latitude: BASE_LATITUDE + 0.0002,
+      }),
+    ]);
+    incidentRepository.create.mockImplementation(async ({ emergencyType }) => ({ id: `inc-${emergencyType}` }));
+
+    const job = createJob(emergencyRepository, incidentRepository);
+    await job.runOnce();
+
+    expect(incidentRepository.create).toHaveBeenCalledTimes(2);
+    expect(incidentRepository.create).toHaveBeenCalledWith({ emergencyType: 'INCENDIO' });
+    expect(incidentRepository.create).toHaveBeenCalledWith({ emergencyType: 'MEDICA' });
+    expect(incidentRepository.addMember.mock.calls).toEqual(expect.arrayContaining([
+      ['inc-INCENDIO', 'f1'], ['inc-INCENDIO', 'f2'], ['inc-MEDICA', 'm1'], ['inc-MEDICA', 'm2'],
+    ]));
+    expect(incidentRepository.addMember).toHaveBeenCalledTimes(4);
+  });
+
+  it('sin candidatos no toca el repository de incidentes', async () => {
+    const { emergencyRepository, incidentRepository } = buildRepos();
+
+    const job = createJob(emergencyRepository, incidentRepository);
+    await job.runOnce();
+
+    expect(incidentRepository.create).not.toHaveBeenCalled();
+    expect(incidentRepository.applyScoringDecision).not.toHaveBeenCalled();
+  });
+
+  it('si findRecentByType rechaza, runOnce() no relanza y el job sigue funcionando en la siguiente corrida', async () => {
     const { emergencyRepository, incidentRepository } = buildRepos();
     emergencyRepository.findRecentByType.mockRejectedValueOnce(new Error('db down'));
     emergencyRepository.findRecentByType.mockResolvedValue([]);
@@ -153,17 +204,25 @@ describe('incident-detection-job', () => {
     expect(emergencyRepository.findRecentByType.mock.calls.length).toBeGreaterThan(callsAfterFirstRun);
   });
 
-  describe('withDetectionLock (lock entre instancias, pg_try_advisory_lock)', () => {
-    function createLockClient(locked) {
+  describe('withDetectionLock (lock entre instancias, pg_try_advisory_xact_lock)', () => {
+    function createLockClient(locked, { commitError = null } = {}) {
       return {
         query: jest.fn(async (sql) => {
-          if (/pg_try_advisory_lock/.test(sql)) return { rows: [{ locked }] };
-          if (/pg_advisory_unlock/.test(sql)) return { rows: [{}] };
+          if (sql === 'BEGIN') return { rows: [] };
+          if (/pg_try_advisory_xact_lock/.test(sql)) return { rows: [{ locked }] };
+          if (sql === 'COMMIT') {
+            if (commitError) throw commitError;
+            return { rows: [] };
+          }
           throw new Error(`query inesperada: ${sql}`);
         }),
         release: jest.fn(),
       };
     }
+
+    const statements = (client) => client.query.mock.calls.map(([sql]) => (
+      /pg_try_advisory_xact_lock/.test(sql) ? 'LOCK' : sql
+    ));
 
     it('sin pool, corre fn() directo (compatibilidad con callers que no pasan pool)', async () => {
       const fn = jest.fn().mockResolvedValue('resultado');
@@ -174,7 +233,7 @@ describe('incident-detection-job', () => {
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
-    it('lock libre: toma el advisory lock, corre fn() y lo libera en el finally', async () => {
+    it('lock libre: abre la transacción, toma el lock, corre fn() y el COMMIT lo suelta', async () => {
       const client = createLockClient(true);
       const pool = { connect: jest.fn(async () => client) };
       const fn = jest.fn().mockResolvedValue('ok');
@@ -183,12 +242,22 @@ describe('incident-detection-job', () => {
 
       expect(result).toBe('ok');
       expect(fn).toHaveBeenCalledTimes(1);
-      expect(client.query).toHaveBeenCalledWith('SELECT pg_try_advisory_lock($1) AS locked', [DETECTION_LOCK_KEY]);
-      expect(client.query).toHaveBeenCalledWith('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
-      expect(client.release).toHaveBeenCalledTimes(1);
+      expect(statements(client)).toEqual(['BEGIN', 'LOCK', 'COMMIT']);
+      expect(client.query).toHaveBeenCalledWith(expect.stringContaining('pg_try_advisory_xact_lock($1)'), [DETECTION_LOCK_KEY]);
+      expect(client.release).toHaveBeenCalledWith(undefined);
     });
 
-    it('lock ocupado: no corre fn(), no intenta liberar el lock, y libera igual la conexión dedicada', async () => {
+    it('apaga idle_in_transaction_session_timeout solo para la transacción del lock', async () => {
+      const client = createLockClient(true);
+      const pool = { connect: jest.fn(async () => client) };
+
+      await withDetectionLock(pool, jest.fn());
+
+      const lockSql = client.query.mock.calls.find(([sql]) => /pg_try_advisory_xact_lock/.test(sql))[0];
+      expect(lockSql).toMatch(/set_config\('idle_in_transaction_session_timeout', '0', true\)/);
+    });
+
+    it('lock ocupado: no corre fn(), cierra la transacción y libera la conexión dedicada', async () => {
       const client = createLockClient(false);
       const pool = { connect: jest.fn(async () => client) };
       const fn = jest.fn();
@@ -197,20 +266,29 @@ describe('incident-detection-job', () => {
 
       expect(result).toBeUndefined();
       expect(fn).not.toHaveBeenCalled();
-      expect(client.query).toHaveBeenCalledWith('SELECT pg_try_advisory_lock($1) AS locked', [DETECTION_LOCK_KEY]);
-      expect(client.query).not.toHaveBeenCalledWith('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
+      expect(statements(client)).toEqual(['BEGIN', 'LOCK', 'COMMIT']);
       expect(client.release).toHaveBeenCalledTimes(1);
     });
 
-    it('libera el lock y la conexión aunque fn() lance', async () => {
+    it('cierra la transacción y devuelve la conexión al pool aunque fn() lance', async () => {
       const client = createLockClient(true);
       const pool = { connect: jest.fn(async () => client) };
       const fn = jest.fn().mockRejectedValue(new Error('boom'));
 
       await expect(withDetectionLock(pool, fn)).rejects.toThrow('boom');
 
-      expect(client.query).toHaveBeenCalledWith('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
-      expect(client.release).toHaveBeenCalledTimes(1);
+      expect(statements(client)).toEqual(['BEGIN', 'LOCK', 'COMMIT']);
+      expect(client.release).toHaveBeenCalledWith(undefined);
+    });
+
+    it('si el COMMIT falla, la conexión está rota: se descarta del pool (release con el error)', async () => {
+      const commitError = new Error('Connection terminated unexpectedly');
+      const client = createLockClient(true, { commitError });
+      const pool = { connect: jest.fn(async () => client) };
+
+      await expect(withDetectionLock(pool, jest.fn().mockResolvedValue('ok'))).resolves.toBe('ok');
+
+      expect(client.release).toHaveBeenCalledWith(commitError);
     });
 
     it('runOnce() con lock ocupado no llama a findRecentByType ni a ningun metodo de los repositories', async () => {
@@ -228,7 +306,7 @@ describe('incident-detection-job', () => {
       expect(client.release).toHaveBeenCalledTimes(1);
     });
 
-    it('runOnce() con lock libre corre normalmente y libera el lock al terminar', async () => {
+    it('runOnce() con lock libre: 4 sentencias en total (BEGIN, lock, la query de candidatos y COMMIT)', async () => {
       const { emergencyRepository, incidentRepository } = buildRepos();
       const client = createLockClient(true);
       const pool = { connect: jest.fn(async () => client) };
@@ -238,8 +316,8 @@ describe('incident-detection-job', () => {
 
       await job.runOnce();
 
-      expect(emergencyRepository.findRecentByType).toHaveBeenCalled();
-      expect(client.query).toHaveBeenCalledWith('SELECT pg_advisory_unlock($1)', [DETECTION_LOCK_KEY]);
+      expect(emergencyRepository.findRecentByType).toHaveBeenCalledTimes(1);
+      expect(statements(client)).toEqual(['BEGIN', 'LOCK', 'COMMIT']);
       expect(client.release).toHaveBeenCalledTimes(1);
     });
   });

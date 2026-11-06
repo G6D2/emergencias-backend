@@ -35,8 +35,12 @@ class OutboxPublisher {
     this.publishSince = resolvePublishSince(
       options.publishSince !== undefined ? options.publishSince : process.env.OUTBOX_PUBLISH_SINCE
     );
+    // La purga de PUBLISHED viejos no necesita correr en cada poll.
+    this.purgeIntervalMs = options.purgeIntervalMs || 60 * 60 * 1000;
     this.timer = null;
+    this.purgeTimer = null;
     this.running = false;
+    this.lastPollAt = null;
   }
 
   async skipPendingBefore() {
@@ -151,38 +155,62 @@ class OutboxPublisher {
 
   async runOnce() {
     if (this.running) return 0;
+    // Sin publisher habilitado (KAFKA_ENABLED para KafkaService,
+    // EDA_PUBLISHER_MODE=gateway para el GatewayPublisher) no hay nada que
+    // publicar: sale sin tocar la base (cada query mantiene despierto el compute
+    // de Neon) ni gastar intentos de los eventos.
+    if (!this.publisher.isEnabled()) return 0;
     this.running = true;
     let published = 0;
     try {
-      if (this.publisher.isEnabled()) {
-        const events = await this.claimBatch();
-        for (const event of events) {
-          try {
-            const sent = await this.publisher.publishEvent(event.topic, event.payload);
-            if (!sent) throw new Error('Publisher disabled or not connected');
-            if (typeof sent === 'object' && sent.skipped) {
-              await this.markSkipped(event.id);
-              continue;
-            }
-            // GatewayPublisher devuelve objeto { eventId, payloadHash };
-            // KafkaService devuelve true. markPublished tolera ambos.
-            const result = typeof sent === 'object' ? sent : null;
-            await this.markPublished(event.id, result);
-            published += 1;
-          } catch (error) {
-            await this.markFailed(event.id, event.attempts, error);
-            secureLog('warn', 'Outbox event delivery failed', {
-              ...summarizeEventForLog(event.topic, event.payload),
-              message: error.message,
-            });
+      // El producer de Kafka se conecta acá y no al arrancar el proceso: con el
+      // publisher apagado no queda una conexión ociosa al bus. Si se cae (un
+      // send fallido lo marca desconectado), se reintenta en el próximo poll.
+      // Con el GatewayPublisher (HTTP) no hay producer que conectar.
+      if (this.publisher === this.kafkaService
+        && !this.kafkaService.isConnected() && !(await this.kafkaService.connect())) {
+        return 0;
+      }
+      const events = await this.claimBatch();
+      this.lastPollAt = new Date();
+      for (const event of events) {
+        try {
+          const sent = await this.publisher.publishEvent(event.topic, event.payload);
+          if (!sent) throw new Error('Publisher disabled or not connected');
+          if (typeof sent === 'object' && sent.skipped) {
+            await this.markSkipped(event.id);
+            continue;
           }
+          // GatewayPublisher devuelve { eventId, payloadHash }; KafkaService
+          // devuelve true. markPublished tolera ambos.
+          const result = typeof sent === 'object' ? sent : null;
+          await this.markPublished(event.id, result);
+          published += 1;
+        } catch (error) {
+          await this.markFailed(event.id, event.attempts, error);
+          secureLog('warn', 'Outbox event delivery failed', {
+            ...summarizeEventForLog(event.topic, event.payload),
+            message: error.message,
+          });
         }
       }
-      await this.purgePublished();
       return published;
     } finally {
       this.running = false;
     }
+  }
+
+  purgeExpired() {
+    return this.purgePublished()
+      .catch((error) => secureLog('error', 'Outbox purge failed', { message: error.message }));
+  }
+
+  // Estado en memoria para /health (no consulta la base).
+  health() {
+    return {
+      enabled: this.timer !== null,
+      lastPollAt: this.lastPollAt ? this.lastPollAt.toISOString() : null,
+    };
   }
 
   start() {
@@ -203,20 +231,28 @@ class OutboxPublisher {
       this.runOnce().catch((error) => secureLog('error', 'Outbox poll failed', { message: error.message }));
     }, this.intervalMs);
     if (typeof this.timer.unref === 'function') this.timer.unref();
+    // Purga al arrancar y después cada hora: Render free reinicia seguido,
+    // así que la del arranque es la que más corre. purgeExpired no rechaza.
+    void this.purgeExpired();
+    this.purgeTimer = setInterval(() => this.purgeExpired(), this.purgeIntervalMs);
+    if (typeof this.purgeTimer.unref === 'function') this.purgeTimer.unref();
     return this;
   }
 
   stop() {
     if (this.timer) clearInterval(this.timer);
+    if (this.purgeTimer) clearInterval(this.purgeTimer);
     this.timer = null;
+    this.purgeTimer = null;
   }
 }
 
-// OUTBOX_PUBLISHER_ENABLED=false deja Kafka prendido solo para consumir. Hasta
-// que el outbox publique por el gateway (#69), escribir directo en el bus
-// mandaría JSON con los tópicos viejos a tópicos que otros grupos leen en Avro.
+// Opt-in: publica solo con OUTBOX_PUBLISHER_ENABLED=true. Sin la variable, Kafka
+// queda prendido solo para consumir. Hasta que el outbox publique por el
+// gateway (#69), escribir directo en el bus mandaría JSON con los tópicos
+// viejos a tópicos que otros grupos leen en Avro.
 function isOutboxPublisherEnabled(env = process.env) {
-  return env.OUTBOX_PUBLISHER_ENABLED !== 'false';
+  return env.OUTBOX_PUBLISHER_ENABLED === 'true';
 }
 
 module.exports = { OutboxPublisher, resolvePublishSince, isOutboxPublisherEnabled };

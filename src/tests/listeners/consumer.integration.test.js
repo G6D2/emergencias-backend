@@ -243,6 +243,37 @@ describe('errores del consumer (integration)', () => {
     expect(await eventosProcesadosRepo.findById(evento.metadata.eventId)).toBeNull();
   });
 
+  it('un eventId que no es UUID se descarta sin lanzar, sin abrir la transacción ni escribir nada', async () => {
+    const evento = {
+      metadata: { ...PUBLICADO.metadata, eventId: 'timeout-no-es-uuid' },
+      data: PUBLICADO.data,
+    };
+
+    await expect(publicado.onMessage(buildMessage(evento))).resolves.toBeNull();
+    // La reentrega tampoco lanza: el offset avanza.
+    await expect(publicado.onMessage(buildMessage(evento))).resolves.toBeNull();
+
+    expect(await coberturas()).toHaveLength(0);
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM eventos_procesados');
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('un 22P02 de Postgres es permanente aunque el mensaje diga "timeout": queda DISCARDED', async () => {
+    const datoInvalido = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
+    datoInvalido.register(CANCELAR_COBERTURA, async (client) => {
+      // Error real de Postgres: invalid input syntax for type uuid: "timeout-123"
+      await client.query('SELECT $1::uuid', ['timeout-123']);
+    });
+    const listener = new EventoCanceladoListener(fakeKafka(), { factory: datoInvalido });
+    const evento = cancelacion('c1000000-0000-4000-8000-000000000003');
+
+    await expect(listener.onMessage(buildMessage(evento))).resolves.toBeNull();
+
+    const row = await eventosProcesadosRepo.findById(evento.metadata.eventId);
+    expect(row.status).toBe('DISCARDED');
+    expect(row.discardReason).toMatch(/invalid input syntax for type uuid: "timeout-123"/);
+  });
+
   it('un mensaje ilegible se descarta sin lanzar', async () => {
     await expect(publicado.onMessage({ value: Buffer.from('no-es-json') })).resolves.toBeNull();
   });

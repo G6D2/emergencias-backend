@@ -2,7 +2,11 @@ const { randomUUID } = require('crypto');
 const { getPool, closePool } = require('../db/pool');
 const { EmergencyRepository } = require('../repositories/emergency.repository');
 const { IncidentRepository } = require('../repositories/incident.repository');
-const { processEmergencyTypeCandidates } = require('../domain/incident-detector');
+const {
+  startIncidentDetectionJob,
+  detectIncidents,
+  DETECTION_LOCK_KEY,
+} = require('../services/incident-detection-job');
 
 describe('incident-detection-job pipeline (integración contra Postgres real, sin mocks)', () => {
   let emergencyRepository;
@@ -30,52 +34,24 @@ describe('incident-detection-job pipeline (integración contra Postgres real, si
     };
   }
 
-  // Replica el loop interno de incident-detection-job.js (runOnce + processDecision)
-  // sin el setTimeout/setInterval del job real, para poder correrlo una vez por
-  // test contra Postgres real. Elegido como helper local en vez de exportar
-  // processDecision desde el job: el job envuelve todo en try/catch y traga
-  // errores (secureLog + return), lo que ocultaria fallas reales del test.
-  // Si el loop del job cambia, este helper hay que sincronizarlo a mano.
+  // Una pasada del job (detectIncidents, el mismo código que corre runOnce)
+  // sin el setTimeout/setInterval ni el try/catch de runOnce, que traga los
+  // errores y ocultaría fallas reales del test. Se limita a un tipo para que
+  // los datos de otros archivos de integración no se mezclen en el test.
   async function runIncidentDetectionPipeline({
     emergencyType,
     radiusMeters = 300,
     minUniqueCitizens = 2,
     windowMinutes = 15,
   }) {
-    const since = new Date(Date.now() - windowMinutes * 60000);
-    const candidates = await emergencyRepository.findRecentByType({ emergencyType, since });
-    const decisions = await processEmergencyTypeCandidates(candidates, {
+    await detectIncidents({
+      emergencyRepository,
+      incidentRepository,
+      since: new Date(Date.now() - windowMinutes * 60000),
       radiusMeters,
       minUniqueCitizens,
-      emergencyType,
+      emergencyTypes: [emergencyType],
     });
-
-    for (const decision of decisions) {
-      if (decision.skippedReason) continue;
-
-      let { incidentId } = decision;
-      if (incidentId == null) {
-        const incident = await incidentRepository.create({ emergencyType: decision.emergencyType });
-        incidentId = incident.id;
-      }
-
-      for (const member of decision.members) {
-        if (!member.alreadyLinked) {
-          await incidentRepository.addMember(incidentId, member.emergencyId);
-        }
-      }
-
-      await incidentRepository.applyScoringDecision(incidentId, {
-        priority: decision.priority,
-        score: decision.score,
-        reasonCodes: decision.reasonCodes,
-        factors: decision.factors,
-        algorithmVersion: decision.algorithmVersion,
-        members: decision.members,
-      });
-    }
-
-    return decisions;
   }
 
   describe('agrupamiento incremental de un mismo foco (INCENDIO)', () => {
@@ -196,6 +172,106 @@ describe('incident-detection-job pipeline (integración contra Postgres real, si
       const foundMemberB = await emergencyRepository.findById(memberB.id);
       expect(foundMemberA.incidentId).toBe(incidentA.id);
       expect(foundMemberB.incidentId).toBe(incidentB.id);
+    });
+  });
+
+  describe('job real: runOnce() con el lock de transacción y una sola query de candidatos', () => {
+    // Coordenadas propias (Mendoza), lejos de los otros clusters del archivo.
+    const BASE_LATITUDE = -32.8895;
+    const BASE_LONGITUDE = -68.8458;
+
+    function createJob() {
+      const job = startIncidentDetectionJob(emergencyRepository, incidentRepository, {
+        pool: getPool(),
+        env: { INCIDENT_DETECTION_INTERVAL_MS: '60000' },
+      });
+      job.stop();
+      return job;
+    }
+
+    const isCandidateQuery = ([sql]) => typeof sql === 'string' && sql.includes('emergency_type = ANY');
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('agrupa PANICO y MEDICA con una sola query, sin sumar la emergencia cancelada', async () => {
+      const panicoA = buildEmergency({
+        emergencyType: 'PANICO', userId: 'user-mza-1', latitude: BASE_LATITUDE, longitude: BASE_LONGITUDE,
+      });
+      const panicoB = buildEmergency({
+        emergencyType: 'PANICO', userId: 'user-mza-2', latitude: BASE_LATITUDE + 0.0002, longitude: BASE_LONGITUDE,
+      });
+      const panicoCancelado = buildEmergency({
+        emergencyType: 'PANICO', userId: 'user-mza-3', latitude: BASE_LATITUDE + 0.0001, longitude: BASE_LONGITUDE,
+      });
+      const medicaA = buildEmergency({
+        emergencyType: 'MEDICA', userId: 'user-mza-4', latitude: BASE_LATITUDE, longitude: BASE_LONGITUDE,
+      });
+      const medicaB = buildEmergency({
+        emergencyType: 'MEDICA', userId: 'user-mza-5', latitude: BASE_LATITUDE + 0.0002, longitude: BASE_LONGITUDE,
+      });
+      for (const emergency of [panicoA, panicoB, panicoCancelado, medicaA, medicaB]) {
+        await emergencyRepository.create(emergency);
+      }
+      await getPool().query("UPDATE emergencies SET status = 'CANCELLED' WHERE id = $1", [panicoCancelado.id]);
+
+      const querySpy = jest.spyOn(getPool(), 'query');
+      await createJob().runOnce();
+
+      expect(querySpy.mock.calls.filter(isCandidateQuery)).toHaveLength(1);
+
+      const foundPanicoA = await emergencyRepository.findById(panicoA.id);
+      const foundPanicoB = await emergencyRepository.findById(panicoB.id);
+      const foundCancelado = await emergencyRepository.findById(panicoCancelado.id);
+      const foundMedicaA = await emergencyRepository.findById(medicaA.id);
+      const foundMedicaB = await emergencyRepository.findById(medicaB.id);
+
+      expect(foundPanicoA.incidentId).toBeTruthy();
+      expect(foundPanicoB.incidentId).toBe(foundPanicoA.incidentId);
+      expect(foundCancelado.incidentId).toBeNull();
+      expect(foundMedicaA.incidentId).toBeTruthy();
+      expect(foundMedicaB.incidentId).toBe(foundMedicaA.incidentId);
+      expect(foundMedicaA.incidentId).not.toBe(foundPanicoA.incidentId);
+
+      const { rows } = await getPool().query(
+        'SELECT id, emergency_type FROM incidents WHERE id = ANY($1::uuid[])',
+        [[foundPanicoA.incidentId, foundMedicaA.incidentId]]
+      );
+      const typeById = new Map(rows.map((row) => [row.id, row.emergency_type]));
+      expect(typeById.get(foundPanicoA.incidentId)).toBe('PANICO');
+      expect(typeById.get(foundMedicaA.incidentId)).toBe('MEDICA');
+    });
+
+    it('si otra conexión tiene el lock, la corrida se saltea sin buscar candidatos', async () => {
+      const holder = await getPool().connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query('SELECT pg_advisory_xact_lock($1)', [DETECTION_LOCK_KEY]);
+
+        const querySpy = jest.spyOn(getPool(), 'query');
+        await createJob().runOnce();
+
+        expect(querySpy.mock.calls.filter(isCandidateQuery)).toHaveLength(0);
+      } finally {
+        await holder.query('COMMIT');
+        holder.release();
+      }
+    });
+
+    it('el COMMIT suelta el lock: una corrida termina y la siguiente lo vuelve a tomar', async () => {
+      const job = createJob();
+      await job.runOnce();
+
+      const querySpy = jest.spyOn(getPool(), 'query');
+      await job.runOnce();
+
+      expect(querySpy.mock.calls.filter(isCandidateQuery)).toHaveLength(1);
+      const { rows } = await getPool().query(
+        "SELECT COUNT(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND objid = $1",
+        [DETECTION_LOCK_KEY]
+      );
+      expect(rows[0].n).toBe(0);
     });
   });
 

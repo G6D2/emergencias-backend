@@ -1,6 +1,7 @@
 const { EventListener } = require('./event-listener');
 const { BusinessRule } = require('./business-rule');
 const { OutcomeFactory } = require('./outcome-factory');
+const { superviseListener } = require('./listener-supervisor');
 const coberturaPreventiva = require('./cobertura-preventiva');
 
 // Paquete de listeners de eventos externos.
@@ -22,4 +23,5 @@ module.exports = {
   OutcomeFactory,
   coberturaPreventiva,
   createListeners,
+  superviseListener,
 };

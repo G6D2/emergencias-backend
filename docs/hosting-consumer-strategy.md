@@ -1,10 +1,32 @@
 # Estrategia de hosting y consumer de eventos
 
-**Estado:** propuesta técnica — pendiente de decisión del PM y Backend
+**Estado:** propuesta técnica del 21/09/2026 (Hito 1). La parte de "qué existe hoy" quedó vieja: ver abajo.
 **Autor:** DevOps (Kevin)
 **Contexto:** hallazgo #17 — "El hosting actual se presenta como solución compatible con consumo continuo de eventos"
 
-## Problema
+## Estado al 05/11/2026
+
+Lo que este documento describe como inexistente ya está en `main` y en producción:
+
+- **Hay consumer Kafka.** `src/listeners/` (cobertura preventiva) consume `EventoComunitarioPublicado`
+  y `EventoCancelado` de Espacios. Corre **dentro del mismo servicio web** de Render (free), no en
+  un worker aparte: no se implementó el escenario B tal como está escrito.
+- **El broker es el bus del Grupo 1** (`test.citypass.mrfranco.net.ar:9092`, SASL/OAUTHBEARER +
+  SSL, Avro con schema registry), no Upstash ni un Kafka propio.
+- **Kafka está prendido** (`KAFKA_ENABLED=true`, `KAFKA_CONSUMER_ENABLED=true`), pero el outbox
+  **no publica** (`OUTBOX_PUBLISHER_ENABLED=false`): los eventos propios siguen quedando `PENDING`
+  en `outbox_events`.
+- Los tópicos `emergencias.cerrada` y `TOPIC_EMERGENCIA_CERRADA` ya no existen: el cierre viaja
+  como `EmergenciaActualizada` (ver `docs/diagramas/06-eventos.md`).
+
+El problema de fondo del punto 1 sigue igual: Render free duerme sin tráfico, y mientras duerme el
+consumer no lee. Al despertar sigue desde el último offset confirmado de su consumer group, así
+que los eventos no se pierden mientras el broker los retenga, pero llegan con demora. El
+keep-warm solo cubre la ventana de clase.
+
+El resto del documento se conserva como estaba, como registro de la decisión del Hito 1.
+
+## Problema (al 21/09/2026)
 
 Hoy presentamos el stack de producción (Render + Kafka) como si soportara consumo continuo de eventos. Dos cosas rompen ese discurso:
 
@@ -68,7 +90,8 @@ Grupo 8 o para acciones internas basadas en eventos externos— necesitamos otra
 ### Escenario B — Hito 2/3 con consumer real (mínimo viable)
 
 - **Broker:** Upstash Kafka (free tier). Un tópico por evento (`emergencias.boton-panico`,
-  `emergencias.estado-actualizado`, `emergencias.cerrada` — ya definidos en `render.yaml`).
+  `emergencias.estado-actualizado`, `emergencias.cerrada` — los que había en `render.yaml` en
+  ese momento; `emergencias.cerrada` ya no existe).
 - **Backend HTTP:** seguir en Render free + keep-warm (funciona hoy).
 - **Consumer:** proceso Node.js separado (`src/services/consumer.js`, nuevo) en:
   - **Preferido:** Render Starter (~USD 7/mes) — mismo dashboard, `plan: starter` en un

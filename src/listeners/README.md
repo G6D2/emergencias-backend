@@ -11,6 +11,7 @@ listeners/
   outcome-factory.js           # ejecuta los resultados en una transaccion con dedup
   event-decoder.js             # Avro (formato Confluent) o JSON -> { metadata, data }
   error-classifier.js          # errores transitorios vs permanentes
+  listener-supervisor.js       # arranque con reintentos y estado para /health
   index.js                     # createListeners(kafka, { factory, decoder }) + PACKAGES
   <caso-de-negocio>/           # un subpaquete por caso de negocio
     index.js                   # exporta `listeners: [ ... ]`
@@ -47,11 +48,20 @@ listeners/
 
 `error-classifier.js` decide:
 
-- **Transitorio** (base caida, timeout, registry inalcanzable): el error se
-  propaga a kafkajs, que no confirma el offset y reentrega el mensaje.
+- **Transitorio** (base caida, conexion cortada, registry inalcanzable): el
+  error se propaga a kafkajs, que no confirma el offset y reentrega el mensaje.
 - **Permanente** (mensaje ilegible, payload invalido, `type` sin handler,
-  constraint): se loguea, queda en `eventos_procesados` como `DISCARDED` con
-  el motivo y el offset avanza. Un evento roto nunca frena el topico.
+  `metadata.eventId` que no es UUID, constraint): se loguea, queda en
+  `eventos_procesados` como `DISCARDED` con el motivo y el offset avanza. Un
+  evento roto nunca frena el topico. Un `eventId` que no es UUID no entra en
+  `eventos_procesados` (la columna es uuid): queda solo en el log.
+
+Se decide solo por codigo (SQLSTATE: 22xxx y 23xxx permanentes; 08xxx, 53xxx,
+57xxx, 40001 y 40P01 transitorios; `ECONNRESET` y demas codigos de red
+transitorios) o por la marca `transient`/`permanent` que ponen el decoder y el
+`OutcomeFactory`. Nunca por el texto del mensaje: puede traer datos del evento.
+`pg` tira los cortes de conexion sin SQLSTATE, asi que el `OutcomeFactory` los
+marca transitorios: si no consigue conexion, o si ni el `ROLLBACK` anda.
 
 ## Conexion al bus
 
@@ -61,6 +71,10 @@ listeners/
 - SASL/OAUTHBEARER con el token client-credentials del Login Federado
   (`EDA_OAUTH_*`, ver `KafkaService`). Sin secreto se conecta sin SASL.
 - `KAFKA_SSL=true` en produccion (SASL_SSL).
+- Si un listener no arranca (o kafkajs lo da por muerto: `CRASH` sin
+  restart), `listener-supervisor.js` lo reintenta a los 5 s, 30 s, 2 min y
+  despues cada 2 min. El estado de cada uno (`running`, `retrying`, ultimo
+  fetch al broker) sale en `GET /health`.
 - Arranque sin offset commiteado (grupo nuevo, o que todavia no proceso
   ningun mensaje): lee el topic desde el principio
   (`EDA_CONSUMER_FROM_BEGINNING`, default `true`). Con `false` arranca en el

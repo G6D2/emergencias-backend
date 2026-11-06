@@ -8,7 +8,7 @@ flowchart TB
     subgraph renderAccount["Cuenta de Render (primaria)"]
         direction TB
         feNode["emergencias-frontend<br/>(Next.js, plan free, region oregon)"]
-        beNode["emergencias-backend<br/>(Express, plan free, region oregon)"]
+        beNode["emergencias-backend<br/>(Docker: Express + listeners Kafka, plan free, region oregon)"]
     end
 
     subgraph renderBackup["Render — cuenta de backup"]
@@ -17,6 +17,8 @@ flowchart TB
     end
 
     neonNode[("Neon Postgres<br/>(único proyecto, pooled)")]
+    busNode["Bus del Grupo 1<br/>Kafka SASL_SSL + schema registry"]
+    loginNode["Login Federado Grupo 2<br/>(token de servicio)"]
 
     subgraph githubOrg["GitHub — G6D2"]
         direction TB
@@ -29,6 +31,8 @@ flowchart TB
 
     feNode -->|"API_URL"| beNode
     beNode -->|"DATABASE_URL"| neonNode
+    busNode -->|"KAFKA_BROKER, EDA_SCHEMA_REGISTRY_URL (solo consumo)"| beNode
+    beNode -->|"EDA_OAUTH_CLIENT_SECRET"| loginNode
     backupNode -.->|"contra la misma Neon (config del servicio backup fuera de este repo)"| neonNode
     repoBack --> actionsNode
     repoFront --> actionsNode
@@ -46,21 +50,32 @@ flowchart TB
 
 | Variable | Para qué |
 |---|---|
-| `NODE_ENV` | `production` fuerza HTTPS/HSTS y exige `CORS_ALLOWED_ORIGINS` |
+| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH`. Producción hoy **no** corre con `production` (no manda HSTS) |
 | `DATABASE_URL` | Connection string pooled de Neon, `sslmode=require` |
+| `DATABASE_SSL`, `DATABASE_SSL_VERIFY`, `DATABASE_SSL_CA` | SSL del pool (por default cifra sin verificar el certificado) |
 | `DB_POOL_MAX` | Tope de conexiones del pool `pg` |
-| `KAFKA_ENABLED`, `KAFKA_BROKER`, `KAFKA_CLIENT_ID` | Producer de eventos (hoy `KAFKA_ENABLED=false`) |
-| `TOPIC_PANIC_BUTTON`, `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO`, `TOPIC_EMERGENCIA_CERRADA` | Nombres de tópico por tipo de evento |
-| `LOCATION_ENCRYPTION_KEY` / `LOCATION_ENCRYPTION_KEYS` / `LOCATION_ENCRYPTION_KEY_ID` | Cifrado AES-256-GCM de ubicación at-rest (obligatoria, el server no arranca sin ella) |
+| `KAFKA_ENABLED`, `KAFKA_BROKER`, `KAFKA_SSL`, `KAFKA_CLIENT_ID` | Conexión al bus del Grupo 1 (en producción: prendido, SSL, `test.citypass.mrfranco.net.ar:9092`) |
+| `KAFKA_CONSUMER_ENABLED`, `KAFKA_CONSUMER_GROUP_PREFIX`, `EDA_TOPIC_EVENTO_PUBLICADO`, `EDA_TOPIC_EVENTO_CANCELADO`, `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` | Listeners de cobertura preventiva (en producción: prendidos) |
+| `EDA_CONSUMER_FROM_BEGINNING`, `EDA_CONSUMER_SINCE` | Grupo sin offset: lee desde el principio salteando lo anterior al piso (en producción: `EDA_CONSUMER_SINCE=2026-11-05T15:00:00Z`; tiene que quedar cargada) |
+| `EDA_PUBLISHER_MODE`, `EDA_API_URL` | Publicación por el gateway (en producción: `gateway`, `https://test.citypass.mrfranco.net.ar`) |
+| `EDA_SCHEMA_REGISTRY_URL` (+ `_USERNAME`/`_PASSWORD` opcionales) | Registry del gateway para decodificar Avro |
+| `EDA_OAUTH_TOKEN_URL`, `EDA_OAUTH_CLIENT_ID`, `EDA_OAUTH_CLIENT_SECRET` | Token client-credentials del Login Federado para el broker (SASL/OAUTHBEARER) y el registry. Solo el secreto se setea en producción |
+| `OUTBOX_PUBLISHER_ENABLED`, `OUTBOX_PUBLISH_SINCE`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_MAX_BACKOFF_MS`, `OUTBOX_PUBLISHED_RETENTION_HOURS` | Publisher del outbox (en producción: prendido desde el 05/11, con `EDA_PUBLISHER_MODE=gateway`) |
+| `TOPIC_PANIC_BUTTON`, `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO`, `TOPIC_EMERGENCIA_PRIORIZADA` | Tópicos de `EmergenciaCreada`, `EmergenciaActualizada` y `EmergenciaPriorizada` |
+| `LOCATION_ENCRYPTION_KEY` / `LOCATION_ENCRYPTION_KEYS` / `LOCATION_ENCRYPTION_KEY_ID` | Cifrado AES-256-GCM de ubicación (obligatoria, el server no arranca sin ella) |
 | `BUS_LOCATION_ENCRYPTION_KEY` / `BUS_*_KEYS` / `BUS_*_KEY_ID` | Cifrado de `ubicacion.latitud/longitud` en el bus (opcional; distinta a la de DB) |
 | `LOCATION_RETENTION_HOURS`, `LOCATION_RETENTION_ENABLED` | Job de anonimización |
 | `CORS_ALLOWED_ORIGINS` | Origins permitidos (sin ella, producción cae a un default con warning) |
 | `RATE_LIMIT_ENABLED` | Apaga el rate limit (login, panic-button) |
 | `KEEP_WARM_ENABLED`, `KEEP_WARM_URLS`, `KEEP_WARM_WINDOWS`, `KEEP_WARM_TZ`, `KEEP_WARM_INTERVAL_MS` | Job in-process que evita el sleep de Render (free) |
 | `AUTH_MODE`, `ALLOW_LOCAL_AUTH` | `local` (JWT propio) hoy; `idp` cuando conecte el Grupo 2 |
+| `DEV_LOGIN_STRICT` | `true` en producción: `/auth/dev/login` solo emite tokens para los subs demo |
 | `IDP_ISSUER`, `IDP_AUDIENCE`, `IDP_MODULE`, `IDP_CLOCK_TOLERANCE_SECONDS`, `IDP_JWKS_URI` | Claims/validación esperados del IdP real (previsto) |
 | `LOCAL_TOKEN_TTL_SECONDS`, `LOCAL_JWT_PRIVATE_KEY_PEM` | Solo `AUTH_MODE=local` |
 | `FORCE_HTTPS` | Forzar HTTPS fuera de `production` |
+| `CITIZEN_PII_RETENTION_*`, `INCIDENT_*`, `LOCATION_RETENTION_INTERVAL_MS` | Jobs de retención del perfil y de detección de incidentes (defaults del código en producción) |
+
+La lista completa, con defaults y comentarios, está en `.env.example`.
 
 ### `Frontend` (`render.yaml`)
 
@@ -103,7 +118,7 @@ flowchart TB
 
 ## Fuente en el código
 
-- `render.yaml` (backend), `Frontend/render.yaml`
+- `render.yaml` (backend: servicio Docker con `autoDeployTrigger: off`), `Frontend/render.yaml`
 - `.env.example` (backend)
 - `.github/workflows/*.yml` (backend y frontend), incluido `.github/workflows/activate-backup.yml`
 - `src/jobs/keep-warm.js`, `Frontend/app/api/warmup/route.js`, `Frontend/app/components/BackendWarmup.js`

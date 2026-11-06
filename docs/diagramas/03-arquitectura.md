@@ -8,22 +8,25 @@ contenedores) y después abrir el backend en sus componentes internos.
 ```mermaid
 flowchart TB
     ciudadano(["Ciudadano / Dispatcher (browser)"]):::actor
+    oficial(["Oficial (Swagger / Postman)"]):::actor
 
     subgraph rfe["Render · Frontend"]
         bff["Next.js 16 (BFF)<br/>/api/auth/*, /api/backend/[...path], /api/geocode"]
     end
 
-    subgraph rbe["Render · Backend"]
-        api["Express API<br/>/api/*, /auth/dev/* (solo AUTH_MODE=local)"]
+    subgraph rbe["Render · Backend (Docker, plan free)"]
+        api["Express API<br/>/api/*, /auth/* (solo AUTH_MODE=local)<br/>+ listeners Kafka en el mismo proceso"]
     end
 
     neon[("Neon Postgres<br/>(pooled, sslmode=require)")]
 
-    subgraph edaGroup["Bus de eventos"]
-        kafka["Kafka<br/>KAFKA_ENABLED=false en prod hoy"]:::planned
+    subgraph edaGroup["Bus de eventos (Grupo 1)"]
+        kafka["Kafka SASL_SSL<br/>test.citypass.mrfranco.net.ar:9092"]
+        registry["Schema registry del gateway<br/>/api/v1"]
     end
 
-    idp["IdP Grupo 2<br/>(previsto, AUTH_MODE=idp)"]:::planned
+    login["Login Federado Grupo 2<br/>token de servicio del bus"]
+    idp["IdP Grupo 2 para usuarios<br/>(previsto, AUTH_MODE=idp)"]:::planned
 
     subgraph geo["Geocodificación externa"]
         bdc["BigDataCloud<br/>(primario)"]
@@ -41,9 +44,13 @@ flowchart TB
     backup["Backend backup (otra cuenta Render)<br/>activate-backup.yml, manual"]:::backup
 
     ciudadano -->|HTTPS| bff
+    oficial -->|"HTTPS + Bearer (officer)"| api
     bff -->|"Bearer JWT (cookie httpOnly server-side) + retry 502/503/504"| api
     api -->|"pg pool, DB_POOL_MAX"| neon
-    api -.->|"outbox -> producer.send (deshabilitado en prod)"| kafka
+    kafka -->|"consume EventoComunitarioPublicado / EventoCancelado"| api
+    api -->|"decodifica Avro (Bearer)"| registry
+    api -->|"client-credentials"| login
+    api -->|"outbox -> GatewayPublisher (EDA_PUBLISHER_MODE=gateway)"| kafka
     api -.->|"verify RS256 via JWKS (previsto)"| idp
     bff -->|"GET reverse-geocode"| bdc
     bff -.->|"respaldo si BigDataCloud falla"| nom
@@ -77,21 +84,22 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    routes["routes<br/>panic-button, emergencies, officer, user, outbox, dev-auth, incidents"]
-    auth["auth<br/>authenticate, authorize, jwt-verifier, groups, setup"]
-    controllers["controllers<br/>panic-button, emergency, officer, user, incident"]
+    routes["routes<br/>panic-button, emergencies, officer, user, outbox, dev-auth, incidents, citizen-profile"]
+    auth["auth<br/>authenticate, authorize, jwt-verifier, groups, dev-login-policy, setup"]
+    controllers["controllers<br/>panic-button, emergency, officer, user, incident, auth, citizen-profile"]
     domain["domain<br/>emergency-status, emergency-type, severity"]
     incidentDomain["domain · motor de incidentes<br/>incident-detector, risk-engine"]:::incident
     strategy["incident-detection-strategy<br/>detectGroups(candidates, options, {primary, fallback})"]:::incident
     dbscanGrouper["dbscan-grouper<br/>(estrategia primaria, DBSCAN vía density-clustering)"]:::incident
     ruleGrouper["rule-based-grouper<br/>(estrategia fallback, Union-Find + Haversine)"]:::incident
-    repositories["repositories<br/>emergency, officer, incident"]
-    services["services<br/>emergency-events, kafka.service, outbox-publisher"]
+    repositories["repositories<br/>emergency, officer, incident, citizen-profile, auth-user, eventos-procesados"]
+    services["services<br/>emergency-events, kafka.service, outbox-publisher, eda-auth-client"]
+    listeners["listeners<br/>EventListener + cobertura-preventiva<br/>(reglas, OutcomeFactory con dedup)"]:::consumer
     detectionJob["incident-detection-job<br/>cada 60s, pg_try_advisory_lock"]:::incident
     security["security<br/>location-crypto, location-retention, cors, rate-limit, secure-log, security-headers"]
-    jobs["jobs / procesos en background<br/>OutboxPublisher, location-retention,<br/>incident-detection-job, keep-warm"]
+    jobs["jobs / procesos en background<br/>OutboxPublisher (apagado en prod), location-retention,<br/>citizen-profile-retention, incident-detection-job, keep-warm"]
     db[("Neon Postgres")]
-    kafkaC["Kafka (KafkaService, deshabilitado en prod)"]:::planned
+    kafkaC["Kafka (KafkaService: consumer + producer)"]
 
     routes --> auth
     routes --> controllers
@@ -105,6 +113,8 @@ flowchart TB
     jobs --> repositories
     jobs --> services
     services --> kafkaC
+    kafkaC -->|"mensajes de Espacios"| listeners
+    listeners -->|"create / updateStatus en la transacción del OutcomeFactory"| repositories
 
     detectionJob --> incidentDomain
     incidentDomain --> strategy
@@ -116,6 +126,7 @@ flowchart TB
 
     classDef planned fill:#f1f3f5,stroke:#adb5bd,color:#495057,stroke-width:1px,stroke-dasharray: 4 3;
     classDef incident fill:#d3f9d8,stroke:#2f9e44,color:#1b4332,stroke-width:1.5px;
+    classDef consumer fill:#e7f5ff,stroke:#1971c2,color:#0b3d91,stroke-width:1.5px;
 ```
 
 > **Sobre `IncidentDetectionStrategy`:** implementada en el PR #51 (tarea #61, ADR-002
@@ -136,8 +147,10 @@ flowchart TB
 |---|---|
 | Línea sólida | Conexión activa hoy en el ambiente productivo |
 | Línea punteada | Deshabilitado, previsto o de respaldo (no es el camino feliz actual) |
-| `Kafka` | El código de producer existe (`src/services/kafka.service.js`) pero `render.yaml` fija `KAFKA_ENABLED=false`: los eventos quedan en `outbox_events` sin publicarse (ver `05-secuencias.md`) |
-| `IdP Grupo 2` | Previsto: hoy corre `AUTH_MODE=local` (JWT propio con el mismo contrato de claims que usaría el IdP real, ver `src/auth/setup.js`) |
+| `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) para consumir: los listeners de cobertura preventiva leen los eventos de Espacios. Los eventos propios salen por HTTP al gateway (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`), no por el producer de Kafka (ver `06-eventos.md`) |
+| `Login Federado` | En uso solo para el token client-credentials del bus (`EDA_OAUTH_*`, `src/services/eda-auth-client.js`) |
+| `IdP Grupo 2` | Previsto para usuarios: hoy corre `AUTH_MODE=local` (JWT propio con el mismo contrato de claims que usaría el IdP real, ver `src/auth/setup.js`) |
+| Render free | El backend duerme sin tráfico; mientras duerme no consume. Al despertar, el consumer group sigue desde su último offset confirmado |
 | SonarCloud | Corre en los dos repos (secret `SONAR_TOKEN` cargado en backend y, desde el 21/09, en `Frontend`); sigue siendo `continue-on-error: true`, no bloquea el pipeline |
 | Stack de backup | Confirmado en el código por `.github/workflows/activate-backup.yml` (PR #38); manual, sin failover automático (ver nota arriba) |
 | `IncidentDetectionStrategy` | Implementada desde el PR #51 (verificado en producción el 23/09): `incident-detector.js` llama a `detectGroups()`, que corre `DbscanGrouper` como primaria y cae a `RuleBasedGrouper` solo ante una excepción de DBSCAN. Ver nota arriba |
@@ -146,6 +159,7 @@ flowchart TB
 
 - `src/app.js` (montaje de rutas y middlewares), `src/index.js` (composition root, arranca `startIncidentDetectionJob`)
 - `src/routes/*.js` (incluido `incidents.routes.js`), `src/controllers/*.js` (incluido `incident.controller.js`), `src/domain/*.js` (incluidos `rule-based-grouper.js`, `dbscan-grouper.js`, `incident-detection-strategy.js`, `risk-engine.js`, `incident-detector.js`), `src/repositories/*.js` (incluido `incident.repository.js`), `src/services/*.js` (incluido `incident-detection-job.js`), `src/security/*.js`, `src/auth/*.js`, `scripts/demo-dbscan.js` (dataset sintético de demo)
+- `src/listeners/` (consumer y cobertura preventiva), `src/services/eda-auth-client.js`
 - `render.yaml` (backend), `Frontend/render.yaml`, `Frontend/app/api/backend/[...path]/route.js`, `Frontend/app/api/geocode/route.js`, `Frontend/lib/geocode-server.js`
 - `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/workflows/keep-warm.yml`, `.github/workflows/activate-backup.yml` (backend) y sus equivalentes en `Frontend/.github/workflows/`
 - `sonar-project.properties` (backend y frontend)

@@ -37,8 +37,8 @@ src/listeners/eventos-publicos/
       registrar-zona-prioritaria.rule.js
 ```
 
-- Agregar `eventos-publicos` a `PACKAGES` en `src/listeners/index.js` y
-  `EDA_TOPIC_PUBLIC_EVENT` a `.env.example`.
+- Agregar `eventos-publicos` a `PACKAGES` en `src/listeners/index.js` (hoy solo tiene
+  `cobertura-preventiva`) y `EDA_TOPIC_PUBLIC_EVENT` a `.env.example`.
 - Cancelaciones y modificaciones: un listener por tipo de evento en el mismo paquete (o el
   mismo listener si el productor las publica en el mismo topic), cada uno con sus reglas.
 
@@ -57,7 +57,7 @@ actualizadas.
 
 ### 2. Persistir la zona (factory)
 
-Migración `V<n>__create_priority_zones.sql` (la siguiente libre; V17 a V23 ya están tomadas o reservadas):
+Migración `V<n>__create_priority_zones.sql` (una versión mayor a la última aplicada, hoy V23: Flyway no acepta versiones menores a la última ya aplicada, así que V17 a V20 tampoco sirven):
 
 | Columna | Notas |
 |---|---|

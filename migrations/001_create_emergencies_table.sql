@@ -1,6 +1,0 @@
--- ARCHIVO VIEJO (no se ejecuta).
--- Quedó consolidado en db/migrations/V1__create_emergencias.sql (Flyway).
--- Mirá migrations/README.md.
---
--- El borrador del pipeline usaba lat/lng y status 'creada'.
--- Schema actual: emergencies + latitude/longitude + status 'CREATED'.

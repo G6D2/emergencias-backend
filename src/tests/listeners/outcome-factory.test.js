@@ -1,4 +1,5 @@
 const { OutcomeFactory } = require('../../listeners/outcome-factory');
+const { isTransientError } = require('../../listeners/error-classifier');
 
 function buildPool() {
   const client = { query: jest.fn().mockResolvedValue({ rowCount: 0, rows: [] }), release: jest.fn() };
@@ -10,6 +11,11 @@ function buildDedupRepo(fresh = true) {
 }
 
 const queries = (client) => client.query.mock.calls.map(([sql]) => sql);
+
+const EV1 = 'a1000000-0000-4000-8000-000000000001';
+const EV_DUP = 'a1000000-0000-4000-8000-000000000002';
+const EV_NOOPS = 'a1000000-0000-4000-8000-000000000003';
+const CAUSATION = 'c1000000-0000-4000-8000-000000000001';
 
 describe('OutcomeFactory', () => {
   it('requiere un pool', () => {
@@ -47,7 +53,7 @@ describe('OutcomeFactory', () => {
       const a = jest.fn(async () => order.push('a'));
       const b = jest.fn(async () => order.push('b'));
       const f = new OutcomeFactory(pool).register('A', a).register('B', b);
-      const context = { metadata: { eventId: 'e1' }, data: {} };
+      const context = { metadata: { eventId: EV1 }, data: {} };
 
       await f.process([{ type: 'A', payload: { x: 1 } }, { type: 'B', payload: { y: 2 } }], context);
 
@@ -90,12 +96,12 @@ describe('OutcomeFactory', () => {
       const dedupRepo = buildDedupRepo(true);
       const handler = jest.fn().mockResolvedValue(undefined);
       const f = new OutcomeFactory(pool, { dedupRepo }).register('A', handler);
-      const context = { metadata: { eventId: 'ev-1', source: 'com.espacios', eventType: 'EventoComunitarioPublicado' }, data: {} };
+      const context = { metadata: { eventId: EV1, source: 'com.espacios', eventType: 'EventoComunitarioPublicado' }, data: {} };
 
       await f.process([{ type: 'A', payload: {} }], context);
 
       expect(dedupRepo.tryMarkProcessed).toHaveBeenCalledWith(client, {
-        eventId: 'ev-1',
+        eventId: EV1,
         source: 'com.espacios',
         eventType: 'EventoComunitarioPublicado',
         causationId: null,
@@ -109,7 +115,7 @@ describe('OutcomeFactory', () => {
       const dedupRepo = buildDedupRepo(false);
       const handler = jest.fn();
       const f = new OutcomeFactory(pool, { dedupRepo }).register('A', handler);
-      const context = { metadata: { eventId: 'ev-dup', source: 'src', eventType: 'T' }, data: {} };
+      const context = { metadata: { eventId: EV_DUP, source: 'src', eventType: 'T' }, data: {} };
 
       await f.process([{ type: 'A', payload: {} }], context);
 
@@ -131,11 +137,11 @@ describe('OutcomeFactory', () => {
       const { pool, client } = buildPool();
       const dedupRepo = buildDedupRepo(true);
       const f = new OutcomeFactory(pool, { dedupRepo });
-      const context = { metadata: { eventId: 'ev-noops', source: 'src', eventType: 'T' }, data: {} };
+      const context = { metadata: { eventId: EV_NOOPS, source: 'src', eventType: 'T' }, data: {} };
 
       await f.process([], context);
 
-      expect(dedupRepo.tryMarkProcessed).toHaveBeenCalledWith(client, expect.objectContaining({ eventId: 'ev-noops' }));
+      expect(dedupRepo.tryMarkProcessed).toHaveBeenCalledWith(client, expect.objectContaining({ eventId: EV_NOOPS }));
       expect(queries(client)).toEqual(['BEGIN', 'COMMIT']);
     });
 
@@ -143,46 +149,137 @@ describe('OutcomeFactory', () => {
       const { pool, client } = buildPool();
       const dedupRepo = buildDedupRepo(true);
       const f = new OutcomeFactory(pool, { dedupRepo });
-      const context = { metadata: { eventId: 'ev', source: 's', eventType: 't', causationId: 'cid-1' }, data: {} };
+      const context = { metadata: { eventId: EV1, source: 's', eventType: 't', causationId: CAUSATION }, data: {} };
 
       await f.process([], context);
 
-      expect(dedupRepo.tryMarkProcessed).toHaveBeenCalledWith(client, expect.objectContaining({ causationId: 'cid-1' }));
+      expect(dedupRepo.tryMarkProcessed).toHaveBeenCalledWith(client, expect.objectContaining({ causationId: CAUSATION }));
+    });
+
+    it('un causationId que no es UUID se guarda como null en vez de romper el INSERT', async () => {
+      const { pool, client } = buildPool();
+      const dedupRepo = buildDedupRepo(true);
+      const f = new OutcomeFactory(pool, { dedupRepo });
+      const context = { metadata: { eventId: EV1, source: 's', eventType: 't', causationId: 'evento-ev-1500' }, data: {} };
+
+      await f.process([], context);
+
+      expect(dedupRepo.tryMarkProcessed).toHaveBeenCalledWith(client, expect.objectContaining({ causationId: null }));
+    });
+
+    it.each([
+      ['texto con "timeout"', 'timeout-123'],
+      ['número', 42],
+      ['uuid sin guiones', 'a1000000000040008000000000000001'],
+    ])('un eventId que no es UUID (%s) es permanente y no abre transacción', async (_, eventId) => {
+      const { pool } = buildPool();
+      const dedupRepo = buildDedupRepo(true);
+      const handler = jest.fn();
+      const f = new OutcomeFactory(pool, { dedupRepo }).register('A', handler);
+
+      const error = await f.process([{ type: 'A', payload: {} }], { metadata: { eventId }, data: {} })
+        .catch((e) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toMatch(/no es un UUID/);
+      expect(isTransientError(error)).toBe(false);
+      expect(pool.connect).not.toHaveBeenCalled();
+      expect(dedupRepo.tryMarkProcessed).not.toHaveBeenCalled();
+      expect(handler).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('process — errores de conexión', () => {
+    it('si no hay conexión (pool.connect falla), el error queda transitorio', async () => {
+      const pool = { connect: jest.fn().mockRejectedValue(new Error('timeout exceeded when trying to connect')) };
+      const f = new OutcomeFactory(pool).register('A', jest.fn());
+
+      const error = await f.process([{ type: 'A', payload: {} }]).catch((e) => e);
+
+      expect(error.message).toBe('timeout exceeded when trying to connect');
+      expect(isTransientError(error)).toBe(true);
+    });
+
+    it('si el ROLLBACK también falla, la conexión se cortó: transitorio y el client se descarta del pool', async () => {
+      const { pool, client } = buildPool();
+      const rollbackError = new Error('Client has encountered a connection error and is not queryable');
+      client.query.mockImplementation(async (sql) => {
+        if (sql === 'ROLLBACK') throw rollbackError;
+        return { rowCount: 0, rows: [] };
+      });
+      const f = new OutcomeFactory(pool)
+        .register('A', jest.fn().mockRejectedValue(new Error('Connection terminated unexpectedly')));
+
+      const error = await f.process([{ type: 'A', payload: {} }]).catch((e) => e);
+
+      expect(error.message).toBe('Connection terminated unexpectedly');
+      expect(isTransientError(error)).toBe(true);
+      expect(client.release).toHaveBeenCalledWith(rollbackError);
+    });
+
+    it('un error del handler con la conexión sana se clasifica por su código (22P02 permanente)', async () => {
+      const { pool, client } = buildPool();
+      const f = new OutcomeFactory(pool)
+        .register('A', jest.fn().mockRejectedValue(Object.assign(
+          new Error('invalid input syntax for type uuid: "timeout"'),
+          { code: '22P02' }
+        )));
+
+      const error = await f.process([{ type: 'A', payload: {} }]).catch((e) => e);
+
+      expect(isTransientError(error)).toBe(false);
+      expect(client.release).toHaveBeenCalledWith(undefined);
     });
   });
 
   describe('recordDiscard', () => {
-    it('registra el descarte con el motivo, fuera de la transacción', async () => {
-      const { pool } = buildPool();
+    it('registra el descarte con el motivo, fuera de la transacción (sin BEGIN)', async () => {
+      const { pool, client } = buildPool();
       const dedupRepo = { markDiscarded: jest.fn().mockResolvedValue(true) };
       const f = new OutcomeFactory(pool, { dedupRepo });
 
       await expect(f.recordDiscard(
-        { metadata: { eventId: 'e1', source: 'grupo6', eventType: 'com.citypass.espacios.EventoCancelado' } },
+        { metadata: { eventId: EV1, source: 'grupo6', eventType: 'com.citypass.espacios.EventoCancelado' } },
         'payload invalido'
       )).resolves.toBe(true);
 
-      expect(dedupRepo.markDiscarded).toHaveBeenCalledWith(null, {
-        eventId: 'e1',
+      expect(dedupRepo.markDiscarded).toHaveBeenCalledWith(client, {
+        eventId: EV1,
         source: 'grupo6',
         eventType: 'com.citypass.espacios.EventoCancelado',
         causationId: null,
         reason: 'payload invalido',
       });
+      expect(queries(client)).toEqual([]);
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('sin dedupRepo, sin eventId o con un eventId que no es UUID no registra nada', async () => {
+      const { pool } = buildPool();
+      await expect(new OutcomeFactory(pool).recordDiscard({ metadata: { eventId: EV1 } }, 'x')).resolves.toBe(false);
+      const dedupRepo = { markDiscarded: jest.fn() };
+      await expect(new OutcomeFactory(pool, { dedupRepo }).recordDiscard({ metadata: {} }, 'x')).resolves.toBe(false);
+      await expect(new OutcomeFactory(pool, { dedupRepo }).recordDiscard({ metadata: { eventId: 'timeout-1' } }, 'x'))
+        .resolves.toBe(false);
+      expect(dedupRepo.markDiscarded).not.toHaveBeenCalled();
       expect(pool.connect).not.toHaveBeenCalled();
     });
 
-    it('sin dedupRepo o sin eventId no registra nada', async () => {
-      const { pool } = buildPool();
-      await expect(new OutcomeFactory(pool).recordDiscard({ metadata: { eventId: 'e1' } }, 'x')).resolves.toBe(false);
+    it('si no hay conexión para registrar el descarte, el error queda transitorio (se reentrega)', async () => {
+      const pool = { connect: jest.fn().mockRejectedValue(new Error('timeout exceeded when trying to connect')) };
       const dedupRepo = { markDiscarded: jest.fn() };
-      await expect(new OutcomeFactory(pool, { dedupRepo }).recordDiscard({ metadata: {} }, 'x')).resolves.toBe(false);
+
+      const error = await new OutcomeFactory(pool, { dedupRepo })
+        .recordDiscard({ metadata: { eventId: EV1 } }, 'x')
+        .catch((e) => e);
+
+      expect(isTransientError(error)).toBe(true);
       expect(dedupRepo.markDiscarded).not.toHaveBeenCalled();
     });
 
     it('recorta motivos largos y completa los campos faltantes', async () => {
       const dedupRepo = { markDiscarded: jest.fn().mockResolvedValue(true) };
-      await new OutcomeFactory(buildPool().pool, { dedupRepo }).recordDiscard({ metadata: { eventId: 'e1' } }, 'x'.repeat(900));
+      await new OutcomeFactory(buildPool().pool, { dedupRepo }).recordDiscard({ metadata: { eventId: EV1 } }, 'x'.repeat(900));
       const input = dedupRepo.markDiscarded.mock.calls[0][1];
       expect(input.reason).toHaveLength(500);
       expect(input.source).toBe('unknown');
