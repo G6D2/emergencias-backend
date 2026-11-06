@@ -1,6 +1,7 @@
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
 const { assertTransition, isTerminal } = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
+const { resolveBarrio } = require('../domain/barrio');
 const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
@@ -63,6 +64,8 @@ function mapEmergency(row, locationCrypto) {
     requiresManualValidation: Boolean(row.requires_manual_validation),
     causaTipo: row.causa_tipo ?? null,
     causaId: row.causa_id ?? null,
+    // Catálogo oficial CABA en claro; no se borra con la retención de ubicación.
+    barrio: row.barrio ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
@@ -143,9 +146,9 @@ function mapAccessAudit(row) {
 const INSERT_SQL = `INSERT INTO emergencies (
      id, correlation_id, user_id, latitude, longitude, location_encrypted,
      description, severity, emergency_type, status,
-     source, requires_manual_validation, causa_tipo, causa_id
+     source, requires_manual_validation, causa_tipo, causa_id, barrio
    )
-   VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'), $9, $10, $11, $12)
+   VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'), $9, $10, $11, $12, $13)
    RETURNING *`;
 
 // Repository de persistencia de emergencies.
@@ -163,6 +166,7 @@ class EmergencyRepository {
   async create({
     id, correlationId, userId, latitude, longitude, address, description, severity, emergencyType, status,
     source = 'INTERNAL', requiresManualValidation = false, causaTipo = null, causaId = null,
+    barrioText = null, barrio: barrioOverride = undefined,
     outboxEvent = null, client: externalClient = null,
   }) {
     // Una emergencia externa puede llegar sin ubicación (queda para validación
@@ -172,6 +176,11 @@ class EmergencyRepository {
     const locationEncrypted = hasLocation
       ? this.locationCrypto.encryptLocation({ latitude, longitude, address })
       : null;
+    // barrioOverride permite tests/backfill explícito; si no, se deriva:
+    // coords → PIP; sin coords → texto solo si está en el catálogo CABA.
+    const barrio = barrioOverride !== undefined
+      ? barrioOverride
+      : resolveBarrio({ latitude, longitude, barrioText });
     const insertValues = [
       id,
       correlationId || id,
@@ -187,6 +196,7 @@ class EmergencyRepository {
       Boolean(requiresManualValidation),
       causaTipo,
       causaId,
+      barrio,
     ];
 
     if (externalClient) {
@@ -306,6 +316,8 @@ class EmergencyRepository {
    * Solo aplica a emergencias con closed_at (lo setea toda transición a un
    * estado terminal: CLOSED, CANCELLED, DISCARDED); las abiertas se conservan.
    * Las filas siguen existiendo; lat/lng quedan null (minimización).
+   * Si barrio aún es null, lo deriva del ciphertext/coords legacy ANTES de
+   * borrar la ubicación (evita perder el dato agregado en el deploy).
    */
   async anonymizeExpiredLocations(retentionHours) {
     const hours = Number(retentionHours);
@@ -313,13 +325,9 @@ class EmergencyRepository {
       throw new Error('retentionHours must be a positive number');
     }
 
-    const result = await this.pool.query(
-      `UPDATE emergencies
-       SET location_encrypted = NULL,
-           latitude = NULL,
-           longitude = NULL,
-           location_anonymized_at = now(),
-           updated_at = now()
+    const candidates = await this.pool.query(
+      `SELECT id, latitude, longitude, location_encrypted, barrio
+       FROM emergencies
        WHERE location_anonymized_at IS NULL
          AND closed_at IS NOT NULL
          AND (
@@ -327,15 +335,92 @@ class EmergencyRepository {
            OR latitude IS NOT NULL
            OR longitude IS NOT NULL
          )
-         AND closed_at < now() - ($1::double precision * interval '1 hour')
-       RETURNING id`,
+         AND closed_at < now() - ($1::double precision * interval '1 hour')`,
       [hours]
     );
 
+    if (candidates.rows.length === 0) {
+      return { anonymizedCount: 0, ids: [] };
+    }
+
+    const ids = [];
+    for (const row of candidates.rows) {
+      let barrio = row.barrio || null;
+      if (!barrio) {
+        let latitude = row.latitude != null ? Number(row.latitude) : null;
+        let longitude = row.longitude != null ? Number(row.longitude) : null;
+        if (row.location_encrypted) {
+          try {
+            const location = this.locationCrypto.decryptLocation(row.location_encrypted);
+            latitude = location.latitude;
+            longitude = location.longitude;
+          } catch (error) {
+            secureLog('warn', 'anonymizeExpiredLocations: ciphertext indescifrable; se anonimiza sin barrio', {
+              emergencyId: row.id,
+              message: error.message,
+            });
+          }
+        }
+        barrio = resolveBarrio({ latitude, longitude });
+      }
+
+      const result = await this.pool.query(
+        `UPDATE emergencies
+         SET location_encrypted = NULL,
+             latitude = NULL,
+             longitude = NULL,
+             location_anonymized_at = now(),
+             barrio = COALESCE(barrio, $2),
+             updated_at = now()
+         WHERE id = $1
+           AND location_anonymized_at IS NULL
+         RETURNING id`,
+        [row.id, barrio]
+      );
+      if (result.rowCount > 0) ids.push(row.id);
+    }
+
+    if (ids.length > 0) {
+      // El outbox conserva payloads PUBLISHED/PENDING más allá de las 72 h;
+      // hay que scrubear coords cifradas del bus para que no queden descifrables
+      // con la clave compartida tras anonimizar at-rest.
+      await this.scrubOutboxBusCoordinates(ids);
+    }
+
     return {
-      anonymizedCount: result.rowCount,
-      ids: result.rows.map((row) => row.id),
+      anonymizedCount: ids.length,
+      ids,
     };
+  }
+
+  /**
+   * Pone en null data.ubicacion.latitud/longitud en outbox_events ligados
+   * a esas emergencias (cualquier status). Conserva barrio.
+   */
+  async scrubOutboxBusCoordinates(emergencyIds) {
+    if (!Array.isArray(emergencyIds) || emergencyIds.length === 0) return { scrubbedCount: 0 };
+
+    const result = await this.pool.query(
+      `UPDATE outbox_events
+       SET payload = jsonb_set(
+             jsonb_set(payload, '{data,ubicacion,latitud}', 'null'::jsonb, true),
+             '{data,ubicacion,longitud}', 'null'::jsonb, true
+           )
+       WHERE payload->'data'->>'emergenciaId' = ANY($1::text[])
+         AND (
+           jsonb_typeof(payload#>'{data,ubicacion,latitud}') = 'string'
+           OR jsonb_typeof(payload#>'{data,ubicacion,longitud}') = 'string'
+         )`,
+      [emergencyIds]
+    );
+
+    if (result.rowCount > 0) {
+      secureLog('info', 'Scrubbed bus coordinates from outbox payloads', {
+        scrubbedCount: result.rowCount,
+        emergencyIds,
+      });
+    }
+    return { scrubbedCount: result.rowCount };
   }
 
   // Anonimiza las filas cuyo ciphertext no se puede descifrar con el keyring
@@ -376,10 +461,75 @@ class EmergencyRepository {
       [undecryptable]
     );
 
+    const ids = result.rows.map((row) => row.id);
+    if (ids.length > 0) {
+      await this.scrubOutboxBusCoordinates(ids);
+    }
+
     return {
       anonymizedCount: result.rowCount,
-      ids: result.rows.map((row) => row.id),
+      ids,
     };
+  }
+
+  /**
+   * Completa barrio en filas que todavía tienen ubicación descifrable y
+   * barrio vacío. Las ya anonimizadas quedan sin barrio (no hay forma
+   * honesta de recalcular). No toca location_encrypted.
+   */
+  async backfillBarrios() {
+    const candidates = await this.pool.query(
+      `SELECT id, latitude, longitude, location_encrypted
+       FROM emergencies
+       WHERE barrio IS NULL
+         AND location_anonymized_at IS NULL
+         AND (
+           location_encrypted IS NOT NULL
+           OR (latitude IS NOT NULL AND longitude IS NOT NULL)
+         )`
+    );
+
+    const updates = [];
+    for (const row of candidates.rows) {
+      let latitude = row.latitude != null ? Number(row.latitude) : null;
+      let longitude = row.longitude != null ? Number(row.longitude) : null;
+
+      if (row.location_encrypted) {
+        try {
+          const location = this.locationCrypto.decryptLocation(row.location_encrypted);
+          latitude = location.latitude;
+          longitude = location.longitude;
+        } catch (error) {
+          secureLog('warn', 'backfillBarrios: ciphertext indescifrable, se omite', {
+            emergencyId: row.id,
+            message: error.message,
+          });
+          continue;
+        }
+      }
+
+      const barrio = resolveBarrio({ latitude, longitude });
+      if (!barrio) continue;
+      updates.push({ id: row.id, barrio });
+    }
+
+    if (updates.length === 0) {
+      return { updatedCount: 0, ids: [] };
+    }
+
+    const ids = [];
+    for (const item of updates) {
+      const result = await this.pool.query(
+        `UPDATE emergencies
+         SET barrio = $2, updated_at = now()
+         WHERE id = $1 AND barrio IS NULL
+         RETURNING id`,
+        [item.id, item.barrio]
+      );
+      if (result.rowCount > 0) ids.push(item.id);
+    }
+
+    return { updatedCount: ids.length, ids };
   }
 
   async findPage({ userId, statuses, severity, from, to, assignedOfficerId, emergencyType, page, limit, sortBy, order }) {

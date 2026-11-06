@@ -21,7 +21,7 @@ de lo que aparece como implementado es especulación.
 4. [Arquitectura](03-arquitectura.md) — contenedores (estilo C4) y componentes internos del backend, incluido el motor de incidentes con `IncidentDetectionStrategy` (`DbscanGrouper` primaria, `RuleBasedGrouper` fallback)
 5. [Máquina de estados](04-maquina-de-estados.md) — transiciones de una emergencia, con y sin endpoint
 6. [Secuencias](05-secuencias.md) — SOS del ciudadano, flujo del dispatcher, cancelación + outbox→Kafka, job de detección de incidentes (DBSCAN con fallback a reglas)
-7. [Eventos de dominio](06-eventos.md) — qué se publica hoy (incluido `EmergenciaPriorizada`) y su brecha contra el contrato de Analítica
+7. [Eventos de dominio](06-eventos.md) — qué se publica y consume, envelope por modo de publicación, campos pendientes y semántica de orden y entrega (el contrato está en `asyncapi.yaml`)
 8. [CI/CD](07-ci-cd.md) — pipelines reales de backend y frontend, con sus gates, y el workflow manual de failover
 9. [Despliegue](08-despliegue.md) — Render (primario y backup), Neon, GitHub Actions, SonarCloud y variables de entorno
 
