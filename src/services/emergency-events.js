@@ -71,6 +71,8 @@ function buildEmergencyCreatedEvent(emergency, eventId) {
 function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId }) {
   const correlationId = emergency.correlationId || emergency.id;
   const estadoNuevo = toEstado(history.newStatus);
+  const latitud = emergency.latitude ?? null;
+  const longitud = emergency.longitude ?? null;
   return {
     type: 'EmergenciaActualizada',
     eventId,
@@ -89,6 +91,9 @@ function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId
       areaResponsable: null,
       resolucion: reason ?? null,
       prioridad: toPrioridad(emergency.severity),
+      causasRelacionadas: emergency.causasRelacionadas ?? [],
+      latitud,}
+      longitud,
       correlationId,
     },
   };

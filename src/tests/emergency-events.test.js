@@ -93,6 +93,8 @@ describe('emergency-events', () => {
         correlationId: 'c-9120',
         severity: 'high',
         assignedOfficerId: 'OFF-123',
+        latitude: -34.6037,
+        longitude: -58.3816,
         updatedAt: '2026-11-02T23:10:00.000Z',
       },
       history: { previousStatus: 'VALIDATED', newStatus: 'DISPATCHED' },
@@ -141,6 +143,32 @@ describe('emergency-events', () => {
         history: { previousStatus: 'PENDING', newStatus: 'VALIDATED' },
       });
       expect(noResuelto.data.resueltoAt).toBeNull();
+    });
+
+    it('incluye causas y ubicación con valores por defecto compatibles con el contrato', () => {
+      const event = buildEmergencyUpdatedEvent(baseArgs);
+      expect(event.data.causasRelacionadas).toEqual([]);
+      expect(event.data.latitud).toBe(-34.6037);
+      expect(event.data.longitud).toBe(-58.3816);
+
+      const resolved = buildEmergencyUpdatedEvent({
+        ...baseArgs,
+        emergency: { ...baseArgs.emergency, causasRelacionadas: ['RESIDUOS'] },
+        history: { previousStatus: 'ON_SCENE', newStatus: 'RESOLVED' },
+      });
+      expect(resolved.data.causasRelacionadas).toEqual(['RESIDUOS']);
+      expect(resolved.data.latitud).toBe(-34.6037);
+      expect(resolved.data.longitud).toBe(-58.3816);
+    });
+
+    it('publica ubicaciones ausentes como null, no como campos omitidos', () => {
+      const event = buildEmergencyUpdatedEvent({
+        ...baseArgs,
+        emergency: { id: baseArgs.emergency.id },
+      });
+      expect(event.data.causasRelacionadas).toEqual([]);
+      expect(event.data.latitud).toBeNull();
+      expect(event.data.longitud).toBeNull();
     });
 
     it('no publica los nombres viejos', () => {

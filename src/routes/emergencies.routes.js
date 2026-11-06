@@ -409,6 +409,19 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     security: [{ bearerAuth: [] }]
    *     parameters:
    *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+   *     requestBody:
+   *       required: false
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             properties:
+   *               causasRelacionadas:
+   *                 type: array
+   *                 items:
+   *                   type: string
+   *                   enum: [VIA, ESPACIO_PUBLICO, RESIDUOS]
+   *                 default: []
    *     responses:
    *       200: { description: Emergencia en RESOLVED }
    *       400: { description: id inválido }
@@ -418,7 +431,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *       409: { description: La emergencia no está ON_SCENE }
    */
   router.patch('/:id/resolve', authenticate, requireOfficer, asyncHandler(async (req, res) => {
-    const result = await controller.markResolved(req.params.id, req.user);
+    const result = await controller.markResolved(req.params.id, req.user, req.body || {});
     res.json(result);
   }));
 

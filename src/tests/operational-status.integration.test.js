@@ -57,7 +57,11 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     // Las suites de integración comparten base: lo que crea esta suite no debe
     // alterar el agrupamiento de incidentes de las otras.
     await pool.query('DELETE FROM emergency_status_history WHERE emergency_id = ANY($1::uuid[])', [createdIds]);
-    await pool.query("DELETE FROM outbox_events WHERE payload->'data'->>'id' = ANY($1::text[])", [createdIds]);
+    await pool.query(
+      `DELETE FROM outbox_events
+       WHERE COALESCE(payload->'data'->>'emergenciaId', payload->'data'->>'id') = ANY($1::text[])`,
+      [createdIds]
+    );
     await pool.query('DELETE FROM emergencies WHERE id = ANY($1::uuid[])', [createdIds]);
     await pool.query("UPDATE officers SET status = 'disponible' WHERE id IN ('of-001', 'of-002')");
     await closePool();
@@ -101,6 +105,45 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     expect(outbox.rows.map((r) => r.payload.data.estadoNuevo)).toEqual(['EN_CAMINO', 'EN_LUGAR']);
     expect(outbox.rows.every((r) => r.topic === 'emergencias.estado-actualizado')).toBe(true);
     expect(outbox.rows[0].payload.data).toMatchObject({ estadoAnterior: 'DESPACHADA', usuarioId: 'of-001' });
+  });
+
+  it('publica causas y coordenadas al resolver y conserva las causas al cerrar', async () => {
+    const id = await createDispatched();
+    const officerApp = appAs(OFFICER);
+
+    await request(officerApp).patch(`/api/emergencies/${id}/en-route`).expect(200);
+    await request(officerApp).patch(`/api/emergencies/${id}/on-scene`).expect(200);
+    await request(officerApp)
+      .patch(`/api/emergencies/${id}/resolve`)
+      .send({ causasRelacionadas: ['RESIDUOS'] })
+      .expect(200);
+
+    const dispatcherApp = appAs({ sub: 'dispatcher-1', groups: ['dispatcher'] });
+    await request(dispatcherApp).patch(`/api/emergencies/${id}/close`).expect(200);
+
+    const events = await pool.query(
+      `SELECT payload->'data' AS data
+       FROM outbox_events
+       WHERE payload->>'type' = 'EmergenciaActualizada'
+         AND payload->'data'->>'emergenciaId' = $1
+         AND payload->'data'->>'estadoNuevo' IN ('RESUELTA', 'CERRADA')
+       ORDER BY created_at`,
+      [id]
+    );
+
+    expect(events.rows).toHaveLength(2);
+    expect(events.rows[0].data).toMatchObject({
+      estadoNuevo: 'RESUELTA',
+      causasRelacionadas: ['RESIDUOS'],
+      latitud: -34.6037,
+      longitud: -58.3816,
+    });
+    expect(events.rows[1].data).toMatchObject({
+      estadoNuevo: 'CERRADA',
+      causasRelacionadas: ['RESIDUOS'],
+      latitud: -34.6037,
+      longitud: -58.3816,
+    });
   });
 
   it('otro oficial recibe 404 y la emergencia queda intacta', async () => {

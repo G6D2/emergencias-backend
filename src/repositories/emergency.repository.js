@@ -63,6 +63,7 @@ function mapEmergency(row, locationCrypto) {
     requiresManualValidation: Boolean(row.requires_manual_validation),
     causaTipo: row.causa_tipo ?? null,
     causaId: row.causa_id ?? null,
+    causasRelacionadas: row.causas_relacionadas ?? [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
@@ -507,10 +508,10 @@ class EmergencyRepository {
    *   en la transacción del caller (la del OutcomeFactory) sin abrir una propia.
    */
   async updateStatus(id, {
-    newStatus, actor = null, reason = null, outboxEvent = null, requireAssignedOfficerId = null,
+    newStatus, actor = null, reason = null, causasRelacionadas = [], outboxEvent = null, requireAssignedOfficerId = null,
     client: externalClient = null,
   }) {
-    const options = { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId };
+    const options = { newStatus, actor, reason, causasRelacionadas, outboxEvent, requireAssignedOfficerId };
     if (externalClient) {
       return this.applyStatusUpdate(externalClient, id, options);
     }
@@ -528,7 +529,9 @@ class EmergencyRepository {
     }
   }
 
-  async applyStatusUpdate(client, id, { newStatus, actor, reason, outboxEvent, requireAssignedOfficerId = null }) {
+  async applyStatusUpdate(client, id, {
+    newStatus, actor, reason, causasRelacionadas = [], outboxEvent, requireAssignedOfficerId = null,
+  }) {
     const current = await client.query(
       'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
       [id]
@@ -547,10 +550,14 @@ class EmergencyRepository {
       `UPDATE emergencies
        SET status = $1,
            updated_at = now(),
-           closed_at = CASE WHEN $1 = 'CLOSED' THEN now() ELSE closed_at END
+           closed_at = CASE WHEN $1 = 'CLOSED' THEN now() ELSE closed_at END,
+           causas_relacionadas = CASE
+             WHEN $1 = 'RESOLVED' THEN $3::TEXT[]
+             ELSE causas_relacionadas
+           END
        WHERE id = $2
        RETURNING *`,
-      [newStatus, id]
+      [newStatus, id, causasRelacionadas]
     );
 
     const history = await client.query(

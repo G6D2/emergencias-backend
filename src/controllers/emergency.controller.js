@@ -14,6 +14,8 @@ const { assertEmergencyType } = require('../domain/emergency-type');
 const { isValidSeverity } = require('../domain/severity');
 const { assertUuid } = require('../utils/uuid');
 
+const RELATED_CAUSES = new Set(['VIA', 'ESPACIO_PUBLICO', 'RESIDUOS']);
+
 class EmergencyController {
   constructor(kafkaService, emergencyRepository) {
     this.kafkaService = kafkaService;
@@ -340,7 +342,7 @@ class EmergencyController {
    *   (requireAssignedOfficerId), por si el dispatcher devolvió y reasignó
    *   entre la lectura y el UPDATE.
    */
-  async advanceOperationalStatus(id, newStatus, user) {
+  async advanceOperationalStatus(id, newStatus, user, { causasRelacionadas = [] } = {}) {
     assertUuid(id);
 
     const actor = user.sub;
@@ -351,9 +353,15 @@ class EmergencyController {
 
     assertTransition(emergency.status, newStatus);
 
+    if (!Array.isArray(causasRelacionadas)
+      || causasRelacionadas.some((cause) => !RELATED_CAUSES.has(cause))) {
+      throw new ValidationError('causasRelacionadas must be an array containing only VIA, ESPACIO_PUBLICO, or RESIDUOS');
+    }
+
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus,
       actor,
+      ...(newStatus === 'RESOLVED' ? { causasRelacionadas } : {}),
       requireAssignedOfficerId: actor,
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
@@ -379,8 +387,8 @@ class EmergencyController {
     return this.advanceOperationalStatus(id, 'ON_SCENE', user);
   }
 
-  async markResolved(id, user) {
-    return this.advanceOperationalStatus(id, 'RESOLVED', user);
+  async markResolved(id, user, options = {}) {
+    return this.advanceOperationalStatus(id, 'RESOLVED', user, options);
   }
 }
 
