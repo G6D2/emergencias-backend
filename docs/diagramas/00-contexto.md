@@ -58,8 +58,8 @@ flowchart TB
   Avro con el schema registry del gateway.
 - **Login Federado (Grupo 2)**, solo para el token client-credentials que pide el bus
   (`EDA_OAUTH_*`).
-- **Publicación al bus**: apagada. El outbox guarda los eventos (`OUTBOX_PUBLISHER_ENABLED=false`),
-  así que Analítica, Reclamos y Movilidad no reciben nada todavía.
+- **Publicación al bus**: prendida desde el 05/11 por el gateway (`EDA_PUBLISHER_MODE=gateway`):
+  `EmergenciaCreada` y `EmergenciaActualizada` llegan a Analítica, Reclamos, Movilidad, Residuos y Espacios.
 - **Login de usuarios**: local (`AUTH_MODE=local`, JWT propio con el mismo contrato de claims
   que el IdP real). Validar contra el IdP del Grupo 2 (`AUTH_MODE=idp`) es solo configuración.
 - **Oficial**: el grupo `officer` existe y los endpoints `en-route`, `on-scene` y `resolve`

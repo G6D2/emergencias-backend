@@ -25,6 +25,7 @@ erDiagram
         text severity "CHECK low|medium|high|critical (V7)"
         text status "default PENDING desde V5, sin CHECK (lo valida la app)"
         text emergency_type "CHECK catalogo cerrado, con PREVENTIVA (V10 + V23)"
+        text barrio "catalogo oficial CABA 48 barrios, en claro (V25); no se borra con retencion"
         text assigned_officer_id "id logico de officers, sin FK (V4)"
         uuid incident_id FK "NULL, ON DELETE SET NULL (V12)"
         timestamptz closed_at "en CLOSED, CANCELLED y DISCARDED (V13 + V26)"
@@ -139,13 +140,14 @@ erDiagram
 | Retención | Job en background (`src/security/location-retention.js`) anonimiza el ciphertext **72 horas después de `closed_at`** (`LOCATION_RETENTION_HOURS`, default 72; configurable). Aplica a las que tienen `closed_at`: cerradas, canceladas y descartadas (desde V26). Pone `location_encrypted`, `latitude`, `longitude` en `NULL` y marca `location_anonymized_at`. La emergencia sigue existiendo, solo se pierde la ubicación. |
 | Emergencias externas (V23) | `source = 'INTERNAL'` es el alta ciudadana; `'EXTERNAL'` la crea un listener de eventos de otro módulo (hoy, la cobertura preventiva de Espacios). `user_id` pasó a nullable, pero el `CHECK emergencies_user_id_internal_check` lo sigue exigiendo en las `INTERNAL`. `requires_manual_validation` marca las externas sin ubicación. |
 | Causa (V23) | `causa_tipo` + `causa_id` dicen qué originó la emergencia (convención de Analítica). Van juntas: `CHECK ((causa_tipo IS NULL) = (causa_id IS NULL))`. Hoy solo se usan con `EVENTO_PUBLICO` + `eventoId`. Índice único parcial `uq_emergencies_preventiva_causa (causa_tipo, causa_id) WHERE emergency_type = 'PREVENTIVA'`: una sola cobertura por evento. |
+| Barrio | Columna `barrio` (V25) en claro, nombre canónico de los 48 barrios de CABA. Se deriva en `create()` vía punto-en-polígono (`src/domain/barrio.js` + GeoJSON oficial). Sin coords, solo se acepta texto que matchee el catálogo. Backfill manual: `npm run security:backfill-barrios`. |
 | `status` (emergencies) | Sin `CHECK` en la base: la única fuente de verdad de las transiciones válidas es `src/domain/emergency-status.js` (ver `04-maquina-de-estados.md`). El `DEFAULT` original de V1 era `'CREATED'` (valor histórico fuera de vocabulario); V5 lo cambió a `'PENDING'`. |
 | `severity` (emergencies) | `CHECK (severity IS NULL OR severity IN ('low','medium','high','critical'))` (V7). Se deriva del `emergency_type` (`src/domain/severity.js`), no la elige el cliente. `PREVENTIVA` → `low`. |
 | `emergency_type` | En `emergencies`: `MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO, PREVENTIVA` (V10, ampliado en V23). `PREVENTIVA` la crea solo el sistema: `POST /api/panic-button` la rechaza con 400. En `incidents` el `CHECK` sigue siendo el de V12, **sin** `PREVENTIVA`. |
 | `assigned_officer_id` → `officers.id` | **No hay FK real en la base** (columna `TEXT` agregada en V4, `officers` recién nace en V11): la relación es solo aplicativa, resuelta con un `LEFT JOIN` en `emergency.repository.js`. Por eso el diagrama la marca con línea punteada. El oficial se autentica con su id como `sub` (`of-001`), y los endpoints `en-route`/`on-scene`/`resolve` comparan ese `sub` contra esta columna. Al devolver, cancelar o cerrar, el oficial vuelve a `disponible` pero la columna conserva el id. |
 | `incident_id` → `incidents.id` | Sí es FK real (`ON DELETE SET NULL`, V12). El job `incident-detection-job.js` agrupa emergencias del mismo tipo y cercanas entre sí cada 60s y crea/actualiza filas de `incidents` vía `IncidentRepository.create`/`applyScoringDecision`. La prioridad efectiva de cada emergencia es `max(severity, incident.priority)` (`effectivePriority`). |
 | `incidents.factors` (V14) | JSON con el snapshot de features que usó el Risk Engine para ese score: `reportCount`, `uniqueCitizenCount`, `minDistanceMeters`, `maxDistanceMeters`, `recencyMinutes`, `maxSeverity` (`src/domain/incident-detector.js`). Se sobrescribe en cada corrida del job que reevalúa el incidente, no es un historial. |
-| `outbox_events` | Desacoplada a propósito: no tiene FK a `emergencies`. Ciclo de vida `PENDING → PROCESSING → PUBLISHED/FAILED`, más `SKIPPED` (V21) para los `PENDING` anteriores a `OUTBOX_PUBLISH_SINCE` y para los tipos que el publisher del gateway no saca al bus (`EmergenciaPriorizada`). En producción el publisher está apagado y los eventos se quedan en `PENDING` (ver `06-eventos.md`). |
+| `outbox_events` | Desacoplada a propósito: no tiene FK a `emergencies`. Ciclo de vida `PENDING → PROCESSING → PUBLISHED/FAILED`, más `SKIPPED` (V21) para los `PENDING` anteriores a `OUTBOX_PUBLISH_SINCE` y para los tipos que el publisher del gateway no saca al bus (`EmergenciaPriorizada`). En producción el publisher sale por el gateway desde el 05/11 (ver `06-eventos.md`). |
 | `eventos_procesados` (V22) | Dedup de los eventos que consume el módulo: el `OutcomeFactory` inserta el `eventId` con `ON CONFLICT DO NOTHING` en la misma transacción que los efectos. Un evento con error permanente queda `DISCARDED` con su `discard_reason`, así no se reentrega para siempre. |
 | Perfil ciudadano (V15) | `citizen_profiles` y `citizen_saved_locations`. Teléfono / contacto / condición médica y direcciones + coordenadas de ubicaciones frecuentes se cifran con el mismo AES-256-GCM. Endpoints bajo `/api/citizen/*` (solo grupo `citizen`, sobre el `sub` del JWT). Retención: `CITIZEN_PII_RETENTION_DAYS` (90). |
 | Auth local (V16) | `auth_users` respalda `POST /auth/register` y `POST /auth/login` (`AUTH_MODE=local`). Seed: `juanpanico@gmail.com` y `luciatranquila@gmail.com`. No hay FK desde las otras tablas: todas guardan el `sub` como texto. |
@@ -155,9 +157,10 @@ erDiagram
 - `db/migrations/V1__create_emergencias.sql` … `V16__create_auth_users.sql`,
   `V21__outbox_add_skipped_status.sql`, `V22__create_eventos_procesados.sql`,
   `V23__emergencias_externas_y_causa.sql`, `V24__outbox_publisher_tracking.sql`,
-  `V26__closed_at_terminales_e_indices.sql`
+  `V25__add_emergency_barrio.sql`, `V26__closed_at_terminales_e_indices.sql`
 - `src/security/location-crypto.js`, `src/security/location-retention.js`,
   `src/security/citizen-profile-retention.js`
+- `src/domain/barrio.js`, `src/domain/data/barrios-caba.geojson`
 - `src/repositories/emergency.repository.js` (mapeo de columnas, `LEFT JOIN officers`, `LEFT JOIN incidents`, `findByCausa`)
 - `src/repositories/incident.repository.js` (`create`, `addMember`, `applyScoringDecision`)
 - `src/repositories/eventos-procesados.repository.js`, `src/listeners/outcome-factory.js`

@@ -9,6 +9,7 @@ const { createOutboxRoutes } = require('./routes/outbox.routes');
 const { createOfficerRoutes } = require('./routes/officer.routes');
 const { createIncidentsRoutes } = require('./routes/incidents.routes');
 const { createCitizenProfileRoutes } = require('./routes/citizen-profile.routes');
+const { createAsyncApiRoutes } = require('./routes/asyncapi.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
 const { secureLog } = require('./security/secure-log');
@@ -48,6 +49,8 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   app.get('/api-docs.json', (req, res) => {
     res.json(swaggerSpec);
   });
+  // Contrato de eventos (asyncapi.yaml): /asyncapi y /asyncapi.yaml.
+  app.use(createAsyncApiRoutes());
 
   if (options.devAuthRouter) {
     app.use('/auth', options.devAuthRouter);

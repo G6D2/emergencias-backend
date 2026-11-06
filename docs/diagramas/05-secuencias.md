@@ -117,7 +117,7 @@ sequenceDiagram
     Back->>DB: INSERT history, INSERT outbox_events (status=PENDING, payload=EmergenciaActualizada CANCELADA), COMMIT
     Back-->>Front: 200 { data } (vía BFF)
 
-    alt OUTBOX_PUBLISHER_ENABLED=false (producción hoy)
+    alt OUTBOX_PUBLISHER_ENABLED distinto de true
         Note over Pub,Kafka: el publisher no arranca: el evento queda PENDING en outbox_events (se ve en GET /api/outbox-events)
     else publisher prendido
     Pub->>DB: al arrancar, skipPendingBefore(): PENDING anteriores a OUTBOX_PUBLISH_SINCE pasan a SKIPPED
@@ -248,7 +248,7 @@ con historial y `EmergenciaActualizada`.
 | BFF | Next.js del repo `Frontend`, corre server-side en Render; guarda el JWT en cookie `httpOnly` (`citypass_session`) y nunca lo expone al browser |
 | `fetchBackend` | Reintenta 502/503/504 hasta 6 veces (~24s) porque Render (free) duerme el backend tras 15 min sin tráfico |
 | Outbox transaccional | El `INSERT` en `emergencies`/`emergency_status_history` y el `INSERT` en `outbox_events` van en la **misma transacción**: si Kafka está caído, la emergencia igual queda persistida |
-| `OUTBOX_PUBLISHER_ENABLED=false` | Así corre producción (`render.yaml`): Kafka está prendido para consumir (flujo e), pero el publisher del flujo (c) no arranca y los eventos se acumulan `PENDING` |
+| `OUTBOX_PUBLISHER_ENABLED=false` | El publisher del flujo (c) no arranca y los eventos se acumulan `PENDING`. Producción corre desde el 05/11 con `true` y `EDA_PUBLISHER_MODE=gateway` |
 | Oficial (b) | El grupo `officer` y sus tres endpoints existen en el backend; el `Frontend` no tiene vista de oficial, así que en la demo se usan por Swagger o Postman con el token de `of-001`/`of-002` |
 | `address` en el SOS | La dirección legible que resuelve el front (`resolveEmergencyAddress`, geocode inverso con timeout 2.5s) viaja al backend en el mismo body que `latitude`/`longitude`, como campo `address` (≤200 caracteres); `normalizeAddress` la sanea y `locationCrypto.encryptLocation` la guarda **dentro del mismo blob cifrado** que la ubicación (ver `02-modelo-entidad-relacion.md`) |
 | Advisory lock del job (d) | `pg_try_advisory_lock` no bloquea: si otra instancia del backend (p. ej. el stack de backup activado) ya tiene el lock, esa corrida se saltea en vez de esperar — hay otra corrida 60s después |

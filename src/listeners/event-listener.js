@@ -12,6 +12,28 @@ function groupIdFor(listenerName) {
   return `${prefix}.${listenerName}`;
 }
 
+// Dónde arranca un grupo sin offset commiteado (grupo nuevo, o uno que todavía
+// no procesó ningún mensaje). Con false, kafkajs arranca en el final del topic
+// y se pierde lo publicado mientras el proceso no corría: en Render free el
+// servicio se duerme a los 15 min sin tráfico. Por eso el default es leer desde
+// el principio; con offset commiteado kafkajs retoma desde ahí y esto no aplica.
+function resolveFromBeginning(raw) {
+  if (typeof raw === 'boolean') return raw;
+  return raw !== 'false';
+}
+
+// Piso temporal del consumo (EDA_CONSUMER_SINCE, ISO 8601 UTC): al leer desde
+// el principio, los mensajes con timestamp de Kafka anterior se saltean sin
+// decodificarlos ni procesarlos (eventos de prueba viejos). Vacío = sin piso.
+function resolveConsumeSince(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const parsed = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`EDA_CONSUMER_SINCE invalido: "${raw}" no es ISO 8601`);
+  }
+  return parsed;
+}
+
 // Listener abstracto de eventos externos (Kafka).
 //
 // Encapsula lo comun a cualquier suscripcion: crear el consumer, suscribirse
@@ -45,7 +67,12 @@ class EventListener {
     if (!this.groupId.startsWith(`${NAMESPACE}.`)) {
       throw new Error(`${this.constructor.name}: el group.id "${this.groupId}" tiene que empezar con ${NAMESPACE}.`);
     }
-    this.fromBeginning = options.fromBeginning === true;
+    this.fromBeginning = resolveFromBeginning(
+      options.fromBeginning !== undefined ? options.fromBeginning : process.env.EDA_CONSUMER_FROM_BEGINNING
+    );
+    this.consumeSince = resolveConsumeSince(
+      options.consumeSince !== undefined ? options.consumeSince : process.env.EDA_CONSUMER_SINCE
+    );
     this.rulesDir = options.rulesDir;
     this.factory = options.factory || null;
     this.decoder = options.decoder || createEventDecoder();
@@ -113,7 +140,12 @@ class EventListener {
         eachMessage: async ({ message }) => this.onMessage(message),
       });
       this.running = true;
-      secureLog('info', `${this.constructor.name} escuchando`, { topic: this.topic, groupId: this.groupId });
+      secureLog('info', `${this.constructor.name} escuchando`, {
+        topic: this.topic,
+        groupId: this.groupId,
+        fromBeginning: this.fromBeginning,
+        since: this.consumeSince ? this.consumeSince.toISOString() : null,
+      });
       return true;
     } catch (error) {
       secureLog('error', `${this.constructor.name} no pudo arrancar`, { message: error.message });
@@ -151,7 +183,25 @@ class EventListener {
     };
   }
 
+  // true si el mensaje es anterior a EDA_CONSUMER_SINCE. Sin timestamp
+  // legible no se saltea: ante la duda, se procesa (la dedup cubre repetidos).
+  isBeforeSince(message) {
+    if (!this.consumeSince || !message || message.timestamp === undefined) return false;
+    const ts = Number(message.timestamp);
+    return Number.isFinite(ts) && ts < this.consumeSince.getTime();
+  }
+
   async onMessage(message) {
+    if (this.isBeforeSince(message)) {
+      // Se devuelve sin error: kafkajs da el offset por resuelto y lo commitea.
+      secureLog('info', `${this.constructor.name} salteo un mensaje anterior a EDA_CONSUMER_SINCE`, {
+        topic: this.topic,
+        offset: message.offset,
+        timestamp: new Date(Number(message.timestamp)).toISOString(),
+      });
+      return null;
+    }
+
     let event;
     try {
       event = await this.decoder.decode(message.value);
@@ -210,4 +260,4 @@ class EventListener {
   }
 }
 
-module.exports = { EventListener, NAMESPACE };
+module.exports = { EventListener, NAMESPACE, resolveFromBeginning, resolveConsumeSince };

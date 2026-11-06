@@ -13,7 +13,7 @@ Backend para el módulo de Emergencias y Seguridad de CityPass+. Gestiona el bot
 ### Flujo
 1. El ciudadano activa el botón de pánico en la app web (`POST /api/panic-button`).
 2. El backend guarda la emergencia en PostgreSQL (`PENDING`) y, en la misma transacción, deja el evento `EmergenciaCreada` en `outbox_events`.
-3. El outbox publisher lo manda a Kafka (`emergencias.boton-panico`) cuando está prendido. En producción hoy está apagado (`OUTBOX_PUBLISHER_ENABLED=false`) y el evento queda `PENDING` (ver [Eventos](#eventos-bus-eda)).
+3. El outbox publisher lo manda al bus. En producción publica por el gateway del Grupo 1 desde el 05/11 (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`) al FQN `com.citypass.emergencias.EmergenciaCreada` (ver [Eventos](#eventos-bus-eda)).
 4. El dispatcher la ve en su listado (`GET /api/emergencies`; el front hace polling, no hay push) y sigue el flujo de la [máquina de estados](#máquina-de-estados).
 
 ---
@@ -302,8 +302,13 @@ sin perder los datos ya guardados.
 Las filas escritas antes de esta versión no tienen cabecera y se desencriptan
 probando las claves del keyring, así que la migración no requiere backfill.
 
+### Coords cifradas en el bus (`ubicacion.latitud` / `ubicacion.longitud`)
+En `EmergenciaCreada`, las coordenadas exactas van **solo** en `data.ubicacion.*`, cifradas con **`BUS_LOCATION_ENCRYPTION_KEY`** (distinta a la de DB).
+
+Guía **autocontenida** para mandar a otros equipos (sin depender del repo): **[docs/bus-ubicacion-para-consumidores.md](docs/bus-ubicacion-para-consumidores.md)**.
+
 ### Retención / minimización
-Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`.
+Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`. El **barrio** se conserva (y se deriva antes de borrar si faltaba). Al anonimizar también se ponen en `null` `ubicacion.latitud`/`longitud` en los payloads del outbox de esas emergencias.
 
 Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
@@ -323,6 +328,8 @@ Solo `GET /api/panic-button/:id` deja registro: después de autorizar la lectura
 | `LOCATION_ENCRYPTION_KEY` | AES-256 key (base64, 32 bytes) — **obligatoria** (salvo que se use `LOCATION_ENCRYPTION_KEYS`) |
 | `LOCATION_ENCRYPTION_KEYS` | Keyring para rotar: `id:base64key,id2:base64key2` (opcional) |
 | `LOCATION_ENCRYPTION_KEY_ID` | Id de la clave con la que se cifra (default: `1`, o la primera del keyring) |
+| `BUS_LOCATION_ENCRYPTION_KEY` | AES-256 para `ubicacion.latitud/longitud` en el bus (base64, 32 bytes). **Distinta** a la de DB. Opcional: sin ella esas coords salen null. Compartirla con consumidores por canal seguro |
+| `BUS_LOCATION_ENCRYPTION_KEYS` / `BUS_LOCATION_ENCRYPTION_KEY_ID` | Keyring de bus (mismo formato que at-rest) |
 | `LOCATION_RETENTION_HOURS` | Horas tras el cierre (`closed_at`) antes de anonimizar (default 72) |
 | `LOCATION_RETENTION_ENABLED` | `false` para desactivar el job |
 | `FORCE_HTTPS` | Forzar HTTPS aunque no sea production |
@@ -678,7 +685,7 @@ Detalle del schema y migrations: [db/README.md](db/README.md). Plantilla de env:
 
 Cada operación que crea una emergencia o le cambia el estado deja su evento en `outbox_events` en la **misma transacción** (outbox transaccional). El `OutboxPublisher` reclama los pendientes cada 5 s y los manda a Kafka; si un envío falla, reintenta con backoff exponencial y, después de `OUTBOX_MAX_ATTEMPTS`, lo marca `FAILED`. Los `PUBLISHED` se purgan a las `OUTBOX_PUBLISHED_RETENTION_HOURS`. Al arrancar, el publisher pasa a `SKIPPED` los `PENDING` anteriores a `OUTBOX_PUBLISH_SINCE`.
 
-**En producción el publisher está apagado** (`OUTBOX_PUBLISHER_ENABLED=false`): Kafka está prendido solo para consumir y los eventos propios quedan `PENDING` en `outbox_events`. Se ven con `GET /api/outbox-events`. Con `KAFKA_ENABLED=false` pasa lo mismo: no se publica nada, pero tampoco se pierde.
+**En producción el publisher está prendido desde el 05/11** con `EDA_PUBLISHER_MODE=gateway` y `OUTBOX_PUBLISHER_ENABLED=true`: `EmergenciaCreada` y `EmergenciaActualizada` salen por HTTP al gateway, a los FQN `com.citypass.emergencias.*`, y `EmergenciaPriorizada` queda `SKIPPED`. Sin `OUTBOX_PUBLISHER_ENABLED=true` no se publica nada, pero tampoco se pierde: los eventos quedan `PENDING` en `outbox_events` (`GET /api/outbox-events`).
 
 Tópicos actuales (los propios del módulo, no los FQN del gateway):
 
@@ -692,6 +699,19 @@ Sobre de todos los eventos: `{ type, eventId, correlationId, data }`. `eventId` 
 
 ### Contrato de `EmergenciaCreada` y `EmergenciaActualizada`
 
+> **Spec AsyncAPI:** [`asyncapi.yaml`](asyncapi.yaml) (AsyncAPI 3.1) describe los eventos que
+> publicamos (`EmergenciaCreada`, `EmergenciaActualizada`, y el interno `EmergenciaPriorizada`)
+> y los que consumimos de Espacios (`EventoComunitarioPublicado`, `EventoCancelado`).
+> `src/tests/asyncapi.test.js` corre en `npm test` y falla si los builders de
+> `src/services/emergency-events.js` dejan de cumplir el spec: **si cambiás el contrato,
+> cambiá el YAML en el mismo PR.**
+>
+> - **Página web:** `GET /asyncapi` (al lado de Swagger en `/api-docs`), con el viewer oficial de AsyncAPI;
+>   el YAML crudo está en `GET /asyncapi.yaml`. En Render: https://emergencias-backend-34go.onrender.com/asyncapi
+> - `npm run asyncapi:validate` — valida el spec con el parser oficial.
+> - `npm run asyncapi:docs` — genera la documentación HTML en `docs/asyncapi/` (no se versiona).
+> - También se puede pegar el YAML en [AsyncAPI Studio](https://studio.asyncapi.com).
+
 Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https://github.com/G6D2/demo-repository/issues/48#issuecomment-6589800911). Reemplaza los criterios originales de ese issue y las convenciones viejas (`emergencyType`, `severity` en inglés, `userId`, etc.). **La base de datos no cambia**: los renombres se hacen al armar el evento, en `src/services/emergency-events.js`. En el contrato los nombres son FQN (`com.citypass.emergencias.EmergenciaCreada`); el `type` que sale hoy es el nombre corto.
 
 #### `EmergenciaCreada`
@@ -699,13 +719,13 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | Campo | Tipo | Fuente / valor hoy |
 |---|---|---|
 | `emergenciaId` | string | `emergencies.id` |
-| `categoria` | string | `emergency_type`: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA` |
+| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; pendiente sumar `TRANSITO`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
-| `barrio` | string \| null | hoy siempre `null` (#76). Lo leen Reclamos y Analítica |
-| `ubicacion.barrio` | string \| null | el mismo valor, anidado para Espacios |
-| `afectaCirculacion` | boolean \| null | hoy siempre `null` (con `false`, Reclamos descartaría el evento) |
-| `latitud`, `longitud` | double \| null | hoy siempre `null` |
+| `barrio` | string \| null | catálogo oficial CABA (48 barrios), en claro; lo leen Reclamos/Analítica |
+| `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
+| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null. **No** hay lat/lng en la raíz de `data` |
+| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA` (y `TRANSITO` cuando entre al catálogo); `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null | `causa_id` / `causa_tipo`. En un alta ciudadana, `null`; la cobertura preventiva manda el `eventoId` de Espacios y `EVENTO_PUBLICO` |
 | `prioridadOriginal` | enum \| null | hoy siempre `null` |
 | `ciudadanoId` | string \| null | `user_id`; `null` en las emergencias externas |
@@ -942,7 +962,7 @@ Implementado en `main`:
 
 Lo que hoy no está:
 
-- Publicación al bus: el outbox no publica en producción (`OUTBOX_PUBLISHER_ENABLED=false`) y los tópicos son los propios, no los FQN del gateway.
+- Publicación al bus: en producción sale por el gateway (`EDA_PUBLISHER_MODE=gateway`) desde el 05/11. El modo `kafka` sigue publicando en los tópicos propios (`emergencias.*`), no en los FQN del gateway.
 - Login federado: `AUTH_MODE=idp` está programado, pero producción usa `AUTH_MODE=local`.
 - Tiempo real: el front hace polling, no hay WebSocket ni SSE.
 - `barrio`, `afectaCirculacion`, `latitud`/`longitud` y `prioridadOriginal` salen siempre en `null` en `EmergenciaCreada`.

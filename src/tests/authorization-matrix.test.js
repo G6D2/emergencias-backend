@@ -51,6 +51,9 @@ const ENDPOINTS = [
 const PUBLIC_ROUTES = new Set([
   'GET /health',
   'GET /api-docs.json',
+  // Contrato de eventos (asyncapi.yaml, #84): documentación pública, como Swagger.
+  'GET /asyncapi',
+  'GET /asyncapi.yaml',
   'POST /auth/dev/login',
 ]);
 

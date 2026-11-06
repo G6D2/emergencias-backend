@@ -25,8 +25,6 @@
         "barrio",
         "ubicacion",
         "afectaCirculacion",
-        "latitud",
-        "longitud",
         "causaId",
         "causaTipo",
         "prioridadOriginal",
@@ -57,32 +55,29 @@
           "enum": ["PENDIENTE"]
         },
         "barrio": {
-          "description": "null hasta #76. Sin barrio, Reclamos descarta el evento.",
+          "description": "Barrio del catálogo oficial de CABA (48), calculado por punto en polígono al crear (#82). null si no resuelve. Sin barrio, Reclamos descarta el evento.",
           "type": ["string", "null"]
         },
         "ubicacion": {
-          "description": "El mismo barrio, anidado para Espacios (lo lee en data.ubicacion.barrio).",
+          "description": "El mismo barrio anidado (Espacios lo lee en data.ubicacion.barrio) y las coordenadas cifradas con la clave de bus (#82). No hay coordenadas en la raíz de data.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["barrio"],
+          "required": ["barrio", "latitud", "longitud"],
           "properties": {
-            "barrio": { "type": ["string", "null"] }
+            "barrio": { "type": ["string", "null"] },
+            "latitud": {
+              "description": "Ciphertext AES-256-GCM con la clave de bus (ver docs/bus-ubicacion-para-consumidores.md). null sin clave de bus.",
+              "type": ["string", "null"]
+            },
+            "longitud": {
+              "description": "Igual que latitud.",
+              "type": ["string", "null"]
+            }
           }
         },
         "afectaCirculacion": {
-          "description": "El contrato lo define boolean; hasta #76/#85 se publica null (con false, Reclamos descarta el evento).",
+          "description": "Derivado de categoria (#83): true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y PREVENTIVA; false para MEDICA, PANICO y OTRO.",
           "type": ["boolean", "null"]
-        },
-        "latitud": {
-          "description": "Opcional con default null hasta que se cierre la regla de cuándo mandarlas.",
-          "type": ["number", "null"],
-          "minimum": -90,
-          "maximum": 90
-        },
-        "longitud": {
-          "type": ["number", "null"],
-          "minimum": -180,
-          "maximum": 180
         },
         "causaId": {
           "description": "Id de lo que originó la emergencia (ej. el eventoId de Espacios).",

@@ -9,12 +9,15 @@
     "migrate": "node scripts/migrate.js migrate",
     "migrate:info": "node scripts/migrate.js info",
     "security:anonymize-locations": "node scripts/anonymize-locations.js",
+    "security:backfill-barrios": "node scripts/backfill-barrios.js",
     "seed": "node scripts/seed.js",
     "test": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js --runInBand",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "security:anonymize-undecryptable": "node scripts/anonymize-locations.js --undecryptable"
+    "security:anonymize-undecryptable": "node scripts/anonymize-locations.js --undecryptable",
+    "asyncapi:validate": "node scripts/validate-asyncapi.js",
+    "asyncapi:docs": "npx -y @asyncapi/cli@6.2.3 generate fromTemplate asyncapi.yaml @asyncapi/html-template@3 -o docs/asyncapi --force-write"
   },
   "keywords": [
     "emergencies",
@@ -28,7 +31,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@kafkajs/confluent-schema-registry": "^3.9.0",
+    "@kafkajs/confluent-schema-registry": "^4.1.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "density-clustering": "^1.3.0",
@@ -43,6 +46,7 @@
     "uuid": "^11.1.1"
   },
   "devDependencies": {
+    "@asyncapi/parser": "^3.6.6",
     "@types/bcryptjs": "^2.4.6",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
@@ -80,6 +84,14 @@
         "branches": 80,
         "statements": 80
       }
+    }
+  },
+  "overrides": {
+    "nodemon": {
+      "minimatch": "^11.0.5"
+    },
+    "swagger-jsdoc": {
+      "glob": "^14.0.3"
     }
   }
 }

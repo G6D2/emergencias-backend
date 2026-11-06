@@ -78,6 +78,13 @@ services:
       #   sync: false
       # - key: LOCATION_ENCRYPTION_KEY_ID
       #   sync: false
+      # Clave de bus (distinta a LOCATION_ENCRYPTION_KEY). Sin ella, ubicacion.latitud/longitud = null.
+      - key: BUS_LOCATION_ENCRYPTION_KEY
+        sync: false
+      # - key: BUS_LOCATION_ENCRYPTION_KEYS
+      #   sync: false
+      # - key: BUS_LOCATION_ENCRYPTION_KEY_ID
+      #   sync: false
       - key: LOCATION_RETENTION_HOURS
         value: "72"
       - key: LOCATION_RETENTION_ENABLED

@@ -50,7 +50,7 @@ flowchart TB
     kafka -->|"consume EventoComunitarioPublicado / EventoCancelado"| api
     api -->|"decodifica Avro (Bearer)"| registry
     api -->|"client-credentials"| login
-    api -.->|"outbox -> producer.send (OUTBOX_PUBLISHER_ENABLED=false)"| kafka
+    api -->|"outbox -> GatewayPublisher (EDA_PUBLISHER_MODE=gateway)"| kafka
     api -.->|"verify RS256 via JWKS (previsto)"| idp
     bff -->|"GET reverse-geocode"| bdc
     bff -.->|"respaldo si BigDataCloud falla"| nom
@@ -147,7 +147,7 @@ flowchart TB
 |---|---|
 | Línea sólida | Conexión activa hoy en el ambiente productivo |
 | Línea punteada | Deshabilitado, previsto o de respaldo (no es el camino feliz actual) |
-| `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) **solo para consumir**: los listeners de cobertura preventiva leen los eventos de Espacios. El outbox no publica (`OUTBOX_PUBLISHER_ENABLED=false`) y los eventos propios quedan `PENDING` (ver `06-eventos.md`) |
+| `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) para consumir: los listeners de cobertura preventiva leen los eventos de Espacios. Los eventos propios salen por HTTP al gateway (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`), no por el producer de Kafka (ver `06-eventos.md`) |
 | `Login Federado` | En uso solo para el token client-credentials del bus (`EDA_OAUTH_*`, `src/services/eda-auth-client.js`) |
 | `IdP Grupo 2` | Previsto para usuarios: hoy corre `AUTH_MODE=local` (JWT propio con el mismo contrato de claims que usaría el IdP real, ver `src/auth/setup.js`) |
 | Render free | El backend duerme sin tráfico; mientras duerme no consume. Al despertar, el consumer group sigue desde su último offset confirmado |

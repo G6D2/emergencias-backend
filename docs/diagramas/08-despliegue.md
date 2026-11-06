@@ -56,11 +56,14 @@ flowchart TB
 | `DB_POOL_MAX` | Tope de conexiones del pool `pg` |
 | `KAFKA_ENABLED`, `KAFKA_BROKER`, `KAFKA_SSL`, `KAFKA_CLIENT_ID` | Conexión al bus del Grupo 1 (en producción: prendido, SSL, `test.citypass.mrfranco.net.ar:9092`) |
 | `KAFKA_CONSUMER_ENABLED`, `KAFKA_CONSUMER_GROUP_PREFIX`, `EDA_TOPIC_EVENTO_PUBLICADO`, `EDA_TOPIC_EVENTO_CANCELADO`, `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` | Listeners de cobertura preventiva (en producción: prendidos) |
+| `EDA_CONSUMER_FROM_BEGINNING`, `EDA_CONSUMER_SINCE` | Grupo sin offset: lee desde el principio salteando lo anterior al piso (en producción: `EDA_CONSUMER_SINCE=2026-11-05T15:00:00Z`; tiene que quedar cargada) |
+| `EDA_PUBLISHER_MODE`, `EDA_API_URL` | Publicación por el gateway (en producción: `gateway`, `https://test.citypass.mrfranco.net.ar`) |
 | `EDA_SCHEMA_REGISTRY_URL` (+ `_USERNAME`/`_PASSWORD` opcionales) | Registry del gateway para decodificar Avro |
 | `EDA_OAUTH_TOKEN_URL`, `EDA_OAUTH_CLIENT_ID`, `EDA_OAUTH_CLIENT_SECRET` | Token client-credentials del Login Federado para el broker (SASL/OAUTHBEARER) y el registry. Solo el secreto se setea en producción |
-| `OUTBOX_PUBLISHER_ENABLED`, `OUTBOX_PUBLISH_SINCE`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_MAX_BACKOFF_MS`, `OUTBOX_PUBLISHED_RETENTION_HOURS` | Publisher del outbox (en producción: apagado) |
+| `OUTBOX_PUBLISHER_ENABLED`, `OUTBOX_PUBLISH_SINCE`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_MAX_BACKOFF_MS`, `OUTBOX_PUBLISHED_RETENTION_HOURS` | Publisher del outbox (en producción: prendido desde el 05/11, con `EDA_PUBLISHER_MODE=gateway`) |
 | `TOPIC_PANIC_BUTTON`, `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO`, `TOPIC_EMERGENCIA_PRIORIZADA` | Tópicos de `EmergenciaCreada`, `EmergenciaActualizada` y `EmergenciaPriorizada` |
 | `LOCATION_ENCRYPTION_KEY` / `LOCATION_ENCRYPTION_KEYS` / `LOCATION_ENCRYPTION_KEY_ID` | Cifrado AES-256-GCM de ubicación (obligatoria, el server no arranca sin ella) |
+| `BUS_LOCATION_ENCRYPTION_KEY` / `BUS_*_KEYS` / `BUS_*_KEY_ID` | Cifrado de `ubicacion.latitud/longitud` en el bus (opcional; distinta a la de DB) |
 | `LOCATION_RETENTION_HOURS`, `LOCATION_RETENTION_ENABLED` | Job de anonimización |
 | `CORS_ALLOWED_ORIGINS` | Origins permitidos (sin ella, producción cae a un default con warning) |
 | `RATE_LIMIT_ENABLED` | Apaga el rate limit (login, panic-button) |
