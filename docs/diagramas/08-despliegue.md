@@ -18,7 +18,7 @@ flowchart TB
 
     neonNode[("Neon Postgres<br/>(único proyecto, pooled)")]
     busNode["Bus del Grupo 1<br/>Kafka SASL_SSL + schema registry"]
-    loginNode["Login Federado Grupo 2<br/>(token de servicio)"]
+    loginNode["Login Federado Grupo 2<br/>(token de servicio; JWKS para AUTH_MODE=hybrid)"]
 
     subgraph githubOrg["GitHub — G6D2"]
         direction TB
@@ -33,6 +33,7 @@ flowchart TB
     beNode -->|"DATABASE_URL"| neonNode
     busNode -->|"KAFKA_BROKER, EDA_SCHEMA_REGISTRY_URL (solo consumo)"| beNode
     beNode -->|"EDA_OAUTH_CLIENT_SECRET"| loginNode
+    beNode -.->|"IDP_JWKS_URI (solo AUTH_MODE=hybrid o idp)"| loginNode
     backupNode -.->|"contra la misma Neon (config del servicio backup fuera de este repo)"| neonNode
     repoBack --> actionsNode
     repoFront --> actionsNode
@@ -50,7 +51,7 @@ flowchart TB
 
 | Variable | Para qué |
 |---|---|
-| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH`. Producción hoy **no** corre con `production` (no manda HSTS) |
+| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH` (con `hybrid` no). Producción hoy **no** corre con `production` (no manda HSTS) |
 | `DATABASE_URL` | Connection string pooled de Neon, `sslmode=require` |
 | `DATABASE_SSL`, `DATABASE_SSL_VERIFY`, `DATABASE_SSL_CA` | SSL del pool (por default cifra sin verificar el certificado) |
 | `DB_POOL_MAX` | Tope de conexiones del pool `pg` |
@@ -68,10 +69,13 @@ flowchart TB
 | `CORS_ALLOWED_ORIGINS` | Origins permitidos (sin ella, producción cae a un default con warning) |
 | `RATE_LIMIT_ENABLED` | Apaga el rate limit (login, panic-button) |
 | `KEEP_WARM_ENABLED`, `KEEP_WARM_URLS`, `KEEP_WARM_WINDOWS`, `KEEP_WARM_TZ`, `KEEP_WARM_INTERVAL_MS` | Job in-process que evita el sleep de Render (free) |
-| `AUTH_MODE`, `ALLOW_LOCAL_AUTH` | `local` (JWT propio) hoy; `idp` cuando conecte el Grupo 2 |
+| `AUTH_MODE`, `ALLOW_LOCAL_AUTH` | `local` (JWT propio) hoy. `hybrid` = Login Federado del Grupo 2 para el personal + cuentas locales para los ciudadanos, elegido por el `iss` del token (no mira `NODE_ENV` ni `ALLOW_LOCAL_AUTH`). `idp` = solo Login Federado |
 | `DEV_LOGIN_STRICT` | `true` en producción: `/auth/dev/login` solo emite tokens para los subs demo |
-| `IDP_ISSUER`, `IDP_AUDIENCE`, `IDP_MODULE`, `IDP_CLOCK_TOLERANCE_SECONDS`, `IDP_JWKS_URI` | Claims/validación esperados del IdP real (previsto) |
-| `LOCAL_TOKEN_TTL_SECONDS`, `LOCAL_JWT_PRIVATE_KEY_PEM` | Solo `AUTH_MODE=local` |
+| `IDP_ISSUER`, `IDP_AUDIENCE`, `IDP_MODULE`, `IDP_CLOCK_TOLERANCE_SECONDS` | Cargadas en producción. En `local`, iss/aud de los tokens propios; en `hybrid` e `idp`, los del Login Federado (`https://idp.citypass.local` y `citypass-emergencias-api` según el contrato del Grupo 2) |
+| `IDP_JWKS_URI` | JWKS del Login Federado (`https://api.citypass-login.pp.ua/.well-known/jwks.json`). Obligatoria en `hybrid` e `idp`; falta cargarla en producción |
+| `IDP_REQUIRE_TOKEN_USE`, `IDP_REQUIRE_TOKEN_VER`, `IDP_SUBJECT_CLAIM`, `IDP_GROUPS_CLAIM`, `IDP_GROUP_MAP`, `IDP_SUB_ALIASES` | Solo `hybrid`: claims del token federado, grupos federados → internos y sub federado → id de oficial (README > Login Federado + cuentas locales) |
+| `LOCAL_JWT_ISSUER`, `LOCAL_JWT_AUDIENCE` | Solo `hybrid`: iss/aud de los tokens locales (el iss tiene que ser distinto de `IDP_ISSUER`) |
+| `LOCAL_TOKEN_TTL_SECONDS`, `LOCAL_JWT_PRIVATE_KEY_PEM` | `AUTH_MODE=local` e `hybrid` |
 | `FORCE_HTTPS` | Forzar HTTPS fuera de `production` |
 | `CITIZEN_PII_RETENTION_*`, `INCIDENT_*`, `LOCATION_RETENTION_INTERVAL_MS` | Jobs de retención del perfil y de detección de incidentes (defaults del código en producción) |
 
