@@ -83,6 +83,96 @@ describe('EmergencyRepository.create', () => {
     expect(encryptLocation).toHaveBeenCalledWith({ latitude: -34, longitude: -58, address: 'Av. Corrientes 1234' });
   });
 
+  it('deriva barrio por PIP al crear y lo manda en el INSERT', async () => {
+    let insertParams;
+    const pool = createPool({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO emergencies')) insertParams = params;
+        return { rows: [{ id: 'e-barrio', correlation_id: 'e-barrio', barrio: 'PALERMO' }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const created = await repo.create({
+      id: 'e-barrio',
+      userId: 'u-1',
+      latitude: -34.5735,
+      longitude: -58.4233,
+      emergencyType: 'PANICO',
+    });
+
+    expect(insertParams[12]).toBe('PALERMO');
+    expect(created.barrio).toBe('PALERMO');
+  });
+
+  it('sin coords usa barrioText solo si está en el catálogo', async () => {
+    let insertParams;
+    const pool = createPool({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO emergencies')) insertParams = params;
+        return { rows: [{ id: 'e-txt', correlation_id: 'e-txt', barrio: 'ALMAGRO' }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.create({
+      id: 'e-txt',
+      userId: null,
+      latitude: null,
+      longitude: null,
+      emergencyType: 'PREVENTIVA',
+      source: 'EXTERNAL',
+      barrioText: 'Almagro',
+    });
+
+    expect(insertParams[12]).toBe('ALMAGRO');
+  });
+
+  it('sin coords y barrioText fuera de catálogo (Centro) → barrio null', async () => {
+    let insertParams;
+    const pool = createPool({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO emergencies')) insertParams = params;
+        return { rows: [{ id: 'e-centro', correlation_id: 'e-centro', barrio: null }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.create({
+      id: 'e-centro',
+      userId: null,
+      latitude: null,
+      longitude: null,
+      emergencyType: 'PREVENTIVA',
+      source: 'EXTERNAL',
+      barrioText: 'Centro',
+    });
+
+    expect(insertParams[12]).toBeNull();
+  });
+
+  it('coords de San Telmo ganan sobre barrioText discrepante', async () => {
+    let insertParams;
+    const pool = createPool({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO emergencies')) insertParams = params;
+        return { rows: [{ id: 'e-st', correlation_id: 'e-st', barrio: 'SAN TELMO' }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.create({
+      id: 'e-st',
+      userId: 'u-1',
+      latitude: -34.6211,
+      longitude: -58.3736,
+      emergencyType: 'PANICO',
+      barrioText: 'Almagro',
+    });
+
+    expect(insertParams[12]).toBe('SAN TELMO');
+  });
+
   it('inserta con outbox en una transacción y hace COMMIT', async () => {
     const client = createClient((sql) => {
       if (sql.includes('INSERT INTO emergencies')) {
@@ -135,9 +225,9 @@ describe('EmergencyRepository.create', () => {
     expect(pool.connect).not.toHaveBeenCalled();
     expect(client.calls.map((c) => c.sql)).not.toContain('BEGIN');
     const insert = client.calls.find((c) => c.sql.includes('INSERT INTO emergencies'));
-    // Sin ubicación no se cifra nada.
+    // Sin ubicación no se cifra nada; barrio queda null (sin coords ni texto de catálogo).
     expect(insert.params[3]).toBeNull();
-    expect(insert.params.slice(8)).toEqual(['EXTERNAL', true, 'EVENTO_PUBLICO', 'ev-1']);
+    expect(insert.params.slice(8)).toEqual(['EXTERNAL', true, 'EVENTO_PUBLICO', 'ev-1', null]);
     expect(created).toMatchObject({ source: 'EXTERNAL', causaTipo: 'EVENTO_PUBLICO', causaId: 'ev-1' });
     expect(client.release).not.toHaveBeenCalled();
   });
@@ -297,6 +387,48 @@ describe('EmergencyRepository lecturas', () => {
   });
 });
 
+describe('EmergencyRepository.backfillBarrios', () => {
+  it('actualiza barrio desde ciphertext descifrable y omite indescifrables', async () => {
+    const decryptLocation = jest.fn((blob) => {
+      if (blob === 'bad') throw new Error('cannot decrypt');
+      return { latitude: -34.5735, longitude: -58.4233 };
+    });
+    const queries = [];
+    const pool = createPool({
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        if (sql.includes('SELECT id, latitude, longitude, location_encrypted')) {
+          return {
+            rows: [
+              { id: 'e-ok', latitude: null, longitude: null, location_encrypted: 'ok' },
+              { id: 'e-bad', latitude: null, longitude: null, location_encrypted: 'bad' },
+            ],
+          };
+        }
+        if (sql.includes('SET barrio =')) {
+          return { rowCount: 1, rows: [{ id: params[0] }] };
+        }
+        throw new Error(`unexpected sql: ${sql}`);
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: { ...fakeCrypto, decryptLocation } });
+
+    const result = await repo.backfillBarrios();
+
+    expect(result).toEqual({ updatedCount: 1, ids: ['e-ok'] });
+    const update = queries.find((q) => q.sql.includes('SET barrio ='));
+    expect(update.params).toEqual(['e-ok', 'PALERMO']);
+  });
+
+  it('sin candidatos devolvé cero', async () => {
+    const pool = createPool({
+      query: async () => ({ rows: [] }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    await expect(repo.backfillBarrios()).resolves.toEqual({ updatedCount: 0, ids: [] });
+  });
+});
+
 describe('EmergencyRepository.anonymizeExpiredLocations', () => {
   it('rechaza retentionHours no positivo', async () => {
     const pool = createPool();
@@ -305,21 +437,49 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
     await expect(repo.anonymizeExpiredLocations('nope')).rejects.toThrow('retentionHours must be a positive number');
   });
 
-  it('anonimiza y devuelve ids afectados', async () => {
+  it('anonimiza, deriva barrio si faltaba y scrubea coords del outbox', async () => {
     const queries = [];
     const pool = createPool({
       query: async (sql, params) => {
         queries.push({ sql, params });
-        return { rowCount: 2, rows: [{ id: 'e-1' }, { id: 'e-2' }] };
+        if (sql.includes('SELECT id, latitude, longitude, location_encrypted, barrio')) {
+          return {
+            rows: [
+              { id: 'e-1', latitude: null, longitude: null, location_encrypted: 'blob', barrio: 'PALERMO' },
+              { id: 'e-2', latitude: null, longitude: null, location_encrypted: 'blob', barrio: null },
+            ],
+          };
+        }
+        if (sql.includes('UPDATE outbox_events')) {
+          return { rowCount: 2, rows: [] };
+        }
+        return { rowCount: 1, rows: [{ id: params[0] }] };
       },
     });
-    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    const decryptLocation = jest.fn(() => ({ latitude: -34.5735, longitude: -58.4233 }));
+    const repo = new EmergencyRepository(pool, {
+      locationCrypto: { ...fakeCrypto, decryptLocation },
+    });
     const result = await repo.anonymizeExpiredLocations(72);
     expect(result).toEqual({ anonymizedCount: 2, ids: ['e-1', 'e-2'] });
     expect(queries[0].sql).toMatch(/closed_at IS NOT NULL/);
     expect(queries[0].sql).toMatch(/closed_at < now\(\)/);
     expect(queries[0].sql).not.toMatch(/created_at </);
     expect(queries[0].params).toEqual([72]);
+    // e-1 ya tenía barrio; e-2 lo deriva antes de borrar la ubicación.
+    expect(queries[1].params).toEqual(['e-1', 'PALERMO']);
+    expect(queries[2].params).toEqual(['e-2', 'PALERMO']);
+    expect(queries[1].sql).toMatch(/COALESCE\(barrio/);
+    const scrub = queries.find((q) => q.sql.includes('UPDATE outbox_events'));
+    expect(scrub.params[0]).toEqual(['e-1', 'e-2']);
+  });
+
+  it('sin candidatos devolvé cero', async () => {
+    const pool = createPool({
+      query: async () => ({ rows: [] }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    await expect(repo.anonymizeExpiredLocations(72)).resolves.toEqual({ anonymizedCount: 0, ids: [] });
   });
 });
 

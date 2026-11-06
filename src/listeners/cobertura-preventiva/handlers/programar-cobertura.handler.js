@@ -32,7 +32,7 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
   if (!emergencyRepository) throw new Error('createProgramarCoberturaHandler requiere emergencyRepository');
 
   return async function programarCobertura(client, payload) {
-    const { eventoId, titulo, latitud, longitud, direccion, capacidad, correlationId } = payload || {};
+    const { eventoId, titulo, latitud, longitud, direccion, barrio, capacidad, correlationId } = payload || {};
     if (!eventoId) throw new ValidationError('ProgramarCobertura requiere eventoId');
 
     const existing = await emergencyRepository.findByCausa(client, {
@@ -52,6 +52,8 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
       : `Cobertura preventiva — ${nombre}`).slice(0, MAX_DESCRIPTION_LENGTH);
     const emergencyId = randomUUID();
 
+    // Barrio: el repository deriva por PIP si hay coords; si no, usa el texto
+    // solo cuando coincide con el catálogo oficial de CABA.
     await emergencyRepository.create({
       client,
       id: emergencyId,
@@ -60,6 +62,7 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
       latitude: hasLocation ? latitud : null,
       longitude: hasLocation ? longitud : null,
       address: typeof direccion === 'string' ? direccion : null,
+      barrioText: typeof barrio === 'string' ? barrio : null,
       description,
       severity: severityForType(EMERGENCY_TYPE),
       emergencyType: EMERGENCY_TYPE,
