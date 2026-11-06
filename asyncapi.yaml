@@ -242,6 +242,12 @@ components:
               areaResponsable: null
               resolucion: null
               prioridad: CRITICA
+              causasRelacionadas: []
+              barrio: null
+              ubicacion:
+                barrio: null
+                latitud: null
+                longitud: null
               correlationId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
 
     EmergenciaPriorizada:
