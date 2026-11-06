@@ -77,4 +77,8 @@ where table_schema = 'public'
 npm run test:integration
 ```
 
-Si definís `TEST_DATABASE_URL`, usa esa base y no levanta contenedor.
+Si definís `TEST_DATABASE_URL`, usa esa base y no levanta contenedor. Tiene que ser
+local (`localhost`, `127.x.x.x` o `::1`): los tests borran filas, algunas suites con
+`DELETE` sin `WHERE`. Para una base remota descartable (por ejemplo un branch de Neon
+solo para tests) exportá también `ALLOW_REMOTE_TEST_DB=true`; sin esa variable el
+global setup se niega a correr. Nunca la apuntes a la base de producción.

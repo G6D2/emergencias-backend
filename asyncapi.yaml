@@ -1,0 +1,549 @@
+asyncapi: 3.1.0
+info:
+  title: Emergencias Backend — Eventos
+  version: 0.1.0
+  description: |
+    Contrato de eventos del módulo de Emergencias y Seguridad (CityPass+, Grupo 6)
+    en el bus EDA.
+
+    - **Publica** `EmergenciaCreada` y `EmergenciaActualizada` (contrato cerrado en
+      el issue #48 de `G6D2/demo-repository`, 2026-11-02). Los arma
+      `src/services/emergency-events.js` y salen por el outbox transaccional
+      (`OutboxPublisher`).
+    - **Consume** `EventoComunitarioPublicado` y `EventoCancelado` de Espacios
+      Públicos (cobertura preventiva, `src/listeners/cobertura-preventiva`).
+
+    Sobre el bus los eventos viajan con el envelope `{ metadata, data }` que arma
+    el gateway del Grupo 1 (Avro en formato Confluent, schema en
+    `EDA_SCHEMA_REGISTRY_URL`). En modo `EDA_PUBLISHER_MODE=gateway` este backend
+    POSTea solo `data`; el gateway agrega `metadata`.
+
+    Entrega **at-least-once** y **sin orden garantizado** (ver
+    `docs/diagramas/06-eventos.md`): los consumidores deduplican por
+    `metadata.eventId`.
+
+    Este archivo se valida en `npm test` (`src/tests/asyncapi.test.js`): el spec
+    tiene que parsear y la salida de los builders tiene que cumplir los schemas
+    de `data`. Si cambiás un builder, cambiá este archivo.
+  license:
+    name: MIT
+  tags:
+    - name: emergencias
+    - name: cobertura-preventiva
+
+defaultContentType: application/json
+
+servers:
+  gateway:
+    host: test.citypass.mrfranco.net.ar
+    protocol: kafka-secure
+    description: |
+      Broker del gateway EDA (Grupo 1). SASL_SSL con OAUTHBEARER: el token
+      client-credentials sale del Login Federado (`EDA_OAUTH_*`). El host real
+      del broker se configura con `KAFKA_BROKER`.
+    security:
+      - $ref: '#/components/securitySchemes/oauthClientCredentials'
+    bindings:
+      kafka:
+        schemaRegistryUrl: https://test.citypass.mrfranco.net.ar/api/v1
+        schemaRegistryVendor: confluent
+  local:
+    host: localhost:9092
+    protocol: kafka
+    description: Kafka del `docker-compose.yml` (sin SASL, JSON plano).
+
+channels:
+  emergenciaCreada:
+    address: com.citypass.emergencias.EmergenciaCreada
+    title: EmergenciaCreada
+    description: |
+      Alta de una emergencia: botón de pánico (`POST /api/panic-button`) o
+      cobertura preventiva creada por el listener de Espacios.
+      Con `EDA_PUBLISHER_MODE=kafka` sale por el topic `TOPIC_PANIC_BUTTON`
+      (default `emergencias.boton-panico`).
+    messages:
+      emergenciaCreada:
+        $ref: '#/components/messages/EmergenciaCreada'
+
+  emergenciaActualizada:
+    address: com.citypass.emergencias.EmergenciaActualizada
+    title: EmergenciaActualizada
+    description: |
+      Cambio de estado de una emergencia (validate, discard, assign, en-route,
+      on-scene, resolve, cancel, close). El cierre viaja como este mismo evento
+      con `estadoNuevo = CERRADA` (`EmergenciaCerrada` quedó fuera del contrato).
+      Con `EDA_PUBLISHER_MODE=kafka` sale por `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO`
+      (default `emergencias.estado-actualizado`).
+    messages:
+      emergenciaActualizada:
+        $ref: '#/components/messages/EmergenciaActualizada'
+
+  emergenciaPriorizada:
+    address: emergencias.priorizada
+    title: EmergenciaPriorizada (interno)
+    description: |
+      Cambio de prioridad de un incidente (job de detección, cada 60s, solo si
+      cambió la `priority`). **No es parte del contrato del bus**: el
+      `GatewayPublisher` lo marca `SKIPPED`. Solo sale con
+      `EDA_PUBLISHER_MODE=kafka` por `TOPIC_EMERGENCIA_PRIORIZADA`.
+    servers:
+      - $ref: '#/servers/local'
+    messages:
+      emergenciaPriorizada:
+        $ref: '#/components/messages/EmergenciaPriorizada'
+
+  eventoComunitarioPublicado:
+    address: com.citypass.espacios.EventoComunitarioPublicado
+    title: EventoComunitarioPublicado (Espacios Públicos)
+    description: |
+      Topic configurable con `EDA_TOPIC_EVENTO_PUBLICADO`. Espacios lo republica
+      cada vez que cambian los inscriptos.
+    messages:
+      eventoComunitarioPublicado:
+        $ref: '#/components/messages/EventoComunitarioPublicado'
+
+  eventoCancelado:
+    address: com.citypass.espacios.EventoCancelado
+    title: EventoCancelado (Espacios Públicos)
+    description: Topic configurable con `EDA_TOPIC_EVENTO_CANCELADO`.
+    messages:
+      eventoCancelado:
+        $ref: '#/components/messages/EventoCancelado'
+
+operations:
+  publicarEmergenciaCreada:
+    action: send
+    channel:
+      $ref: '#/channels/emergenciaCreada'
+    summary: Publica el alta de una emergencia.
+    messages:
+      - $ref: '#/channels/emergenciaCreada/messages/emergenciaCreada'
+
+  publicarEmergenciaActualizada:
+    action: send
+    channel:
+      $ref: '#/channels/emergenciaActualizada'
+    summary: Publica un cambio de estado de una emergencia.
+    messages:
+      - $ref: '#/channels/emergenciaActualizada/messages/emergenciaActualizada'
+
+  publicarEmergenciaPriorizada:
+    action: send
+    channel:
+      $ref: '#/channels/emergenciaPriorizada'
+    summary: Publica el cambio de prioridad de un incidente (solo Kafka directo).
+    messages:
+      - $ref: '#/channels/emergenciaPriorizada/messages/emergenciaPriorizada'
+
+  recibirEventoComunitarioPublicado:
+    action: receive
+    channel:
+      $ref: '#/channels/eventoComunitarioPublicado'
+    summary: |
+      Programa una cobertura preventiva (emergencia `PREVENTIVA`) si la capacidad
+      supera `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500).
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.EventoComunitarioPublicadoListener
+    messages:
+      - $ref: '#/channels/eventoComunitarioPublicado/messages/eventoComunitarioPublicado'
+
+  recibirEventoCancelado:
+    action: receive
+    channel:
+      $ref: '#/channels/eventoCancelado'
+    summary: Cancela la cobertura preventiva del evento si todavía no fue despachada.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.EventoCanceladoListener
+    messages:
+      - $ref: '#/channels/eventoCancelado/messages/eventoCancelado'
+
+components:
+  securitySchemes:
+    oauthClientCredentials:
+      type: oauth2
+      description: |
+        Token de servicio client-credentials del Login Federado
+        (`claim.namespace = com.citypass.emergencias`). Se usa para SASL
+        OAUTHBEARER en el broker y como Bearer en el schema registry y en
+        `POST /api/v1/event-types/{fqn}/events`.
+      flows:
+        clientCredentials:
+          tokenUrl: https://api.citypass-login.pp.ua/oauth/token
+          availableScopes: {}
+
+  messages:
+    EmergenciaCreada:
+      name: EmergenciaCreada
+      title: Emergencia creada
+      contentType: application/json
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/EmergenciaCreadaData'
+      examples:
+        - name: botonPanico
+          payload:
+            metadata:
+              eventId: 0b8d7a8e-2a64-4b8a-9d55-0d8f2a1c4e11
+              eventType: EmergenciaCreada
+              source: com.citypass.emergencias
+            data:
+              emergenciaId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
+              categoria: PANICO
+              prioridad: CRITICA
+              estado: PENDIENTE
+              barrio: null
+              ubicacion: { barrio: null, latitud: null, longitud: null }
+              afectaCirculacion: false
+              causaId: null
+              causaTipo: null
+              prioridadOriginal: null
+              ciudadanoId: CIT-JuanPanico
+              correlationId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
+              createdAt: '2026-11-02T22:59:08.205Z'
+
+    EmergenciaActualizada:
+      name: EmergenciaActualizada
+      title: Emergencia actualizada
+      contentType: application/json
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/EmergenciaActualizadaData'
+      examples:
+        - name: despachada
+          payload:
+            metadata:
+              eventId: 6f0c1e44-7d0b-4b1e-8a2d-3c9f5e7a1b22
+              eventType: EmergenciaActualizada
+              source: com.citypass.emergencias
+            data:
+              emergenciaId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
+              estadoAnterior: VALIDADA
+              estadoNuevo: DESPACHADA
+              updatedAt: '2026-11-02T23:05:00.000Z'
+              resueltoAt: null
+              usuarioId: DSP-Ana
+              asignadoA: 9a1b2c3d-0000-4000-8000-000000000001
+              areaResponsable: null
+              resolucion: null
+              prioridad: CRITICA
+              correlationId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
+
+    EmergenciaPriorizada:
+      name: EmergenciaPriorizada
+      title: Emergencia priorizada (interno)
+      contentType: application/json
+      description: |
+        Sale tal cual lo arma el builder (envelope propio, sin `metadata` del gateway).
+      payload:
+        type: object
+        required: [type, eventId, correlationId, data]
+        properties:
+          type:
+            type: string
+            const: EmergenciaPriorizada
+          eventId:
+            type: string
+            format: uuid
+          correlationId:
+            type: string
+          data:
+            $ref: '#/components/schemas/EmergenciaPriorizadaData'
+
+    EventoComunitarioPublicado:
+      name: EventoComunitarioPublicado
+      title: Evento comunitario publicado
+      contentType: application/json
+      description: |
+        Producido por Espacios Públicos. Solo se documentan los campos que lee
+        `ProgramarCoberturaPreventivaRule`; el resto se ignora.
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/EventoComunitarioPublicadoData'
+
+    EventoCancelado:
+      name: EventoCancelado
+      title: Evento comunitario cancelado
+      contentType: application/json
+      description: Producido por Espacios Públicos. `motivo` no se publica de vuelta (texto libre).
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/EventoCanceladoData'
+
+  schemas:
+    Metadata:
+      type: object
+      description: |
+        Envelope que agrega el gateway EDA. `eventId` es la clave de
+        deduplicación (`eventos_procesados`).
+      required: [eventId]
+      additionalProperties: true
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        source:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        version:
+          type: string
+        causationId:
+          type: [string, 'null']
+
+    Prioridad:
+      type: string
+      enum: [BAJA, MEDIA, ALTA, CRITICA]
+
+    Estado:
+      type: string
+      description: Traducción de `emergencies.status` (ver `STATUS_TO_ESTADO`).
+      enum: [PENDIENTE, VALIDADA, DESPACHADA, EN_CAMINO, EN_LUGAR, RESUELTA, CERRADA, DESCARTADA, CANCELADA]
+
+    Categoria:
+      type: string
+      description: Catálogo de `src/domain/emergency-type.js`.
+      enum: [MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO, PREVENTIVA]
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: ISO-8601 UTC.
+
+    EmergenciaCreadaData:
+      type: object
+      additionalProperties: false
+      required:
+        - emergenciaId
+        - categoria
+        - prioridad
+        - estado
+        - barrio
+        - ubicacion
+        - afectaCirculacion
+        - causaId
+        - causaTipo
+        - prioridadOriginal
+        - ciudadanoId
+        - correlationId
+        - createdAt
+      properties:
+        emergenciaId:
+          type: string
+        categoria:
+          oneOf:
+            - $ref: '#/components/schemas/Categoria'
+            - type: 'null'
+        prioridad:
+          oneOf:
+            - $ref: '#/components/schemas/Prioridad'
+            - type: 'null'
+        estado:
+          oneOf:
+            - $ref: '#/components/schemas/Estado'
+            - type: 'null'
+        barrio:
+          type: [string, 'null']
+          description: Barrio del catálogo oficial de CABA (48), en claro. Lo leen Reclamos y Analítica.
+        ubicacion:
+          type: object
+          additionalProperties: false
+          required: [barrio, latitud, longitud]
+          properties:
+            barrio:
+              type: [string, 'null']
+              description: Mismo valor que `barrio`, anidado para Espacios.
+            latitud:
+              type: [string, 'null']
+              description: Ciphertext AES-256-GCM con la clave de bus (ver docs/bus-ubicacion-para-consumidores.md). Null sin clave de bus.
+            longitud:
+              type: [string, 'null']
+              description: Igual que `latitud`. No hay coordenadas en la raíz de `data`.
+        afectaCirculacion:
+          type: [boolean, 'null']
+          description: Derivado de `categoria`. true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y PREVENTIVA; false para MEDICA, PANICO y OTRO; null sin categoría.
+        causaId:
+          type: [string, 'null']
+        causaTipo:
+          type: [string, 'null']
+          examples: [EVENTO_PUBLICO]
+        prioridadOriginal:
+          oneOf:
+            - $ref: '#/components/schemas/Prioridad'
+            - type: 'null'
+        ciudadanoId:
+          type: [string, 'null']
+        correlationId:
+          type: string
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+
+    EmergenciaActualizadaData:
+      type: object
+      additionalProperties: false
+      required:
+        - emergenciaId
+        - estadoAnterior
+        - estadoNuevo
+        - updatedAt
+        - resueltoAt
+        - usuarioId
+        - asignadoA
+        - areaResponsable
+        - resolucion
+        - prioridad
+        - causasRelacionadas
+        - barrio
+        - ubicacion
+        - correlationId
+      properties:
+        emergenciaId:
+          type: string
+        estadoAnterior:
+          oneOf:
+            - $ref: '#/components/schemas/Estado'
+            - type: 'null'
+        estadoNuevo:
+          oneOf:
+            - $ref: '#/components/schemas/Estado'
+            - type: 'null'
+        updatedAt:
+          $ref: '#/components/schemas/Timestamp'
+        resueltoAt:
+          description: Solo en transición a `RESUELTA`.
+          oneOf:
+            - $ref: '#/components/schemas/Timestamp'
+            - type: 'null'
+        usuarioId:
+          type: [string, 'null']
+          description: Actor del request.
+        asignadoA:
+          type: [string, 'null']
+          description: Oficial asignado, solo en `DESPACHADA`.
+        areaResponsable:
+          type: [string, 'null']
+          description: Null hasta #85.
+        resolucion:
+          type: [string, 'null']
+        prioridad:
+          oneOf:
+            - $ref: '#/components/schemas/Prioridad'
+            - type: 'null'
+        causasRelacionadas:
+          type: array
+          default: []
+          items:
+            type: string
+            enum: [VIA, ESPACIO_PUBLICO, RESIDUOS]
+        barrio:
+          type: [string, 'null']
+          description: Barrio del catálogo oficial de CABA (48), en claro.
+        ubicacion:
+          type: object
+          additionalProperties: false
+          required: [barrio, latitud, longitud]
+          properties:
+            barrio:
+              type: [string, 'null']
+            latitud:
+              type: [string, 'null']
+              description: Ciphertext AES-256-GCM con la clave de bus. Null sin clave de bus.
+            longitud:
+              type: [string, 'null']
+              description: Ciphertext AES-256-GCM con la clave de bus. Null sin clave de bus.
+        correlationId:
+          type: string
+
+    EmergenciaPriorizadaData:
+      type: object
+      additionalProperties: false
+      required: [id, correlationId, incidentId, priorityIndividual, incidentPriority, priority, score, reasonCodes, algorithmVersion]
+      properties:
+        id:
+          type: string
+        correlationId:
+          type: string
+        incidentId:
+          type: string
+        priorityIndividual:
+          type: [string, 'null']
+        incidentPriority:
+          type: [string, 'null']
+        priority:
+          type: [string, 'null']
+        score:
+          type: [number, 'null']
+        reasonCodes:
+          type: [array, 'null']
+          items:
+            type: string
+        algorithmVersion:
+          type: [string, 'null']
+
+    EventoComunitarioPublicadoData:
+      type: object
+      additionalProperties: true
+      required: [eventoId]
+      properties:
+        eventoId:
+          type: string
+          minLength: 1
+        titulo:
+          type: string
+        latitud:
+          type: [number, 'null']
+        longitud:
+          type: [number, 'null']
+        direccion:
+          type: [string, 'null']
+        capacidad:
+          type: number
+          description: Asistentes esperados. Si falta se usa `cupoMaximo`.
+        cupoMaximo:
+          type: number
+        estado:
+          type: string
+          description: Con `CANCELLED` no se programa cobertura.
+        correlationId:
+          type: string
+          description: En Espacios no es UUID (`evento-<id>`).
+
+    EventoCanceladoData:
+      type: object
+      additionalProperties: true
+      required: [eventoId]
+      properties:
+        eventoId:
+          type: string
+          minLength: 1
+        motivo:
+          type: string
+        canceladoEn:
+          $ref: '#/components/schemas/Timestamp'

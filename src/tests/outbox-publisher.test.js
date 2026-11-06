@@ -29,6 +29,7 @@ describe('OutboxPublisher', () => {
     const published = [];
     const kafka = {
       isEnabled: () => true,
+      isConnected: () => true,
       publishEvent: async (topic, payload) => published.push({ topic, payload }),
     };
     const publisher = new OutboxPublisher(pool, kafka, { maxAttempts: 3 });
@@ -57,10 +58,11 @@ describe('OutboxPublisher', () => {
     expect(pool.queries.some(({ sql }) => sql === 'ROLLBACK')).toBe(true);
   });
 
-  it('runOnce marca failed y sigue si publishEvent lanza, y no reclama nada si kafka está deshabilitado', async () => {
+  it('runOnce marca failed y sigue si publishEvent lanza', async () => {
     const pool = createPool({ events: [{ id: 'event-2', topic: 'topic', payload: {}, attempts: 1 }] });
     const kafka = {
       isEnabled: () => true,
+      isConnected: () => true,
       publishEvent: async () => { throw new Error('send failed'); },
     };
     const publisher = new OutboxPublisher(pool, kafka, { maxAttempts: 3 });
@@ -73,7 +75,7 @@ describe('OutboxPublisher', () => {
 
   it('runOnce marca failed si publishEvent devuelve false (kafka deshabilitado dinámicamente)', async () => {
     const pool = createPool({ events: [{ id: 'event-3', topic: 'topic', payload: {}, attempts: 1 }] });
-    const kafka = { isEnabled: () => true, publishEvent: async () => false };
+    const kafka = { isEnabled: () => true, isConnected: () => true, publishEvent: async () => false };
     const publisher = new OutboxPublisher(pool, kafka, { maxAttempts: 3 });
 
     const published = await publisher.runOnce();
@@ -81,16 +83,115 @@ describe('OutboxPublisher', () => {
     expect(published).toBe(0);
   });
 
-  it('runOnce no reclama batch si kafka está deshabilitado, pero sí purga', async () => {
+  it('runOnce con kafka deshabilitado sale sin tocar la base (ni reclama ni purga)', async () => {
     const pool = createPool();
+    const connect = jest.spyOn(pool, 'connect');
     const kafka = { isEnabled: () => false };
     const publisher = new OutboxPublisher(pool, kafka);
 
     const published = await publisher.runOnce();
 
     expect(published).toBe(0);
-    expect(pool.queries.some(({ sql }) => sql.includes('RETURNING id, topic, payload, attempts'))).toBe(false);
-    expect(pool.queries.some(({ sql }) => sql.includes('DELETE FROM outbox_events'))).toBe(true);
+    expect(pool.queries).toHaveLength(0);
+    expect(connect).not.toHaveBeenCalled();
+    expect(publisher.lastPollAt).toBeNull();
+  });
+
+  it('runOnce con el producer desconectado intenta reconectar y, si no puede, sale sin tocar la base', async () => {
+    const pool = createPool({ events: [{ id: 'event-4', topic: 'topic', payload: {}, attempts: 1 }] });
+    const kafka = {
+      isEnabled: () => true,
+      isConnected: () => false,
+      connect: jest.fn().mockResolvedValue(false),
+      publishEvent: jest.fn(),
+    };
+    const publisher = new OutboxPublisher(pool, kafka);
+
+    await expect(publisher.runOnce()).resolves.toBe(0);
+
+    expect(kafka.connect).toHaveBeenCalledTimes(1);
+    expect(pool.queries).toHaveLength(0);
+    expect(kafka.publishEvent).not.toHaveBeenCalled();
+  });
+
+  it('runOnce conecta el producer en el primer poll y publica si la conexión sale bien', async () => {
+    const pool = createPool({ events: [{ id: 'event-5', topic: 'topic', payload: {}, attempts: 1 }] });
+    let connected = false;
+    const kafka = {
+      isEnabled: () => true,
+      isConnected: () => connected,
+      connect: jest.fn(async () => {
+        connected = true;
+        return true;
+      }),
+      publishEvent: jest.fn().mockResolvedValue(true),
+    };
+    const publisher = new OutboxPublisher(pool, kafka);
+
+    await expect(publisher.runOnce()).resolves.toBe(1);
+    await expect(publisher.runOnce()).resolves.toBe(1);
+
+    expect(kafka.connect).toHaveBeenCalledTimes(1);
+    expect(Date.parse(publisher.health().lastPollAt)).not.toBeNaN();
+  });
+
+  it('runOnce no purga: la purga va por su propio timer', async () => {
+    const pool = createPool();
+    const kafka = { isEnabled: () => true, isConnected: () => true };
+    const publisher = new OutboxPublisher(pool, kafka);
+
+    await publisher.runOnce();
+
+    expect(pool.queries.some(({ sql }) => sql.includes('RETURNING id, topic, payload, attempts'))).toBe(true);
+    expect(pool.queries.some(({ sql }) => sql.includes('DELETE FROM outbox_events'))).toBe(false);
+  });
+
+  it('start purga al arrancar y después una vez por hora (no en cada poll); stop corta los dos timers', async () => {
+    jest.useFakeTimers();
+    const pool = createPool();
+    const publisher = new OutboxPublisher(pool, { isEnabled: () => false }, { intervalMs: 5000 });
+    const purgeSpy = jest.spyOn(publisher, 'purgePublished');
+
+    publisher.start();
+    expect(purgeSpy).toHaveBeenCalledTimes(1);
+
+    jest.advanceTimersByTime(60 * 60 * 1000 - 1);
+    expect(purgeSpy).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(1);
+    expect(purgeSpy).toHaveBeenCalledTimes(2);
+
+    publisher.stop();
+    jest.advanceTimersByTime(3 * 60 * 60 * 1000);
+    expect(purgeSpy).toHaveBeenCalledTimes(2);
+
+    jest.useRealTimers();
+  });
+
+  it('purgeExpired loguea el error sin relanzar', async () => {
+    const pool = createPool();
+    const publisher = new OutboxPublisher(pool, { isEnabled: () => false });
+    jest.spyOn(publisher, 'purgePublished').mockRejectedValue(new Error('db down'));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(publisher.purgeExpired()).resolves.toBeUndefined();
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Outbox purge failed'));
+    errorSpy.mockRestore();
+  });
+
+  it('health(): enabled solo mientras corre el poller', () => {
+    jest.useFakeTimers();
+    const publisher = new OutboxPublisher(createPool(), { isEnabled: () => false });
+    expect(publisher.health()).toEqual({ enabled: false, publisher: 'kafka', lastPollAt: null });
+    const gateway = { isEnabled: () => true, publishEvent: async () => ({}) };
+    expect(new OutboxPublisher(createPool(), {}, { publisher: gateway }).health().publisher).toBe('gateway');
+
+    publisher.start();
+    expect(publisher.health().enabled).toBe(true);
+
+    publisher.stop();
+    expect(publisher.health().enabled).toBe(false);
+    jest.useRealTimers();
   });
 
   it('runOnce evita ejecuciones concurrentes (this.running)', async () => {
@@ -246,12 +347,137 @@ describe('OutboxPublisher', () => {
       jest.useRealTimers();
     });
   });
+
+  // Issue #74: publisher inyectado (GatewayPublisher) + clasificacion de errores.
+  describe('publisher inyectado (issue #74)', () => {
+    it('con el GatewayPublisher no conecta el producer de Kafka', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: { type: 'EmergenciaCreada' }, attempts: 1 }] });
+      const kafka = { isEnabled: () => true, isConnected: jest.fn(() => false), connect: jest.fn(async () => false) };
+      const gateway = { isEnabled: () => true, publishEvent: async () => ({ eventId: 'evt-gw-1', payloadHash: 'hash-1' }) };
+      const publisher = new OutboxPublisher(pool, kafka, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(1);
+
+      expect(kafka.connect).not.toHaveBeenCalled();
+    });
+
+    it('con el GatewayPublisher apagado sale sin tocar la base', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: {}, attempts: 1 }] });
+      const gateway = { isEnabled: () => false, publishEvent: jest.fn() };
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(0);
+
+      expect(pool.queries).toHaveLength(0);
+      expect(gateway.publishEvent).not.toHaveBeenCalled();
+    });
+
+    it('usa options.publisher en vez de kafkaService cuando se inyecta', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: {}, attempts: 1 }] });
+      const gatewayCalls = [];
+      const gateway = {
+        isEnabled: () => true,
+        publishEvent: async (topic, payload) => {
+          gatewayCalls.push({ topic, payload });
+          return { eventId: 'evt-gw-1', payloadHash: 'hash-1' };
+        },
+      };
+      const kafka = { isEnabled: () => false, publishEvent: async () => { throw new Error('no debe llamarse'); } };
+      const publisher = new OutboxPublisher(pool, kafka, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(1);
+
+      expect(gatewayCalls).toHaveLength(1);
+    });
+
+    it('un evento que el publisher saltea queda SKIPPED y no cuenta como publicado', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: { type: 'EmergenciaPriorizada' }, attempts: 1 }] });
+      const gateway = { isEnabled: () => true, publishEvent: async () => ({ skipped: true }) };
+      const publisher = new OutboxPublisher(pool, {}, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(0);
+
+      const skipQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'SKIPPED'"));
+      expect(skipQ).toBeDefined();
+      expect(skipQ.params).toEqual(['e1']);
+      expect(pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"))).toBeUndefined();
+    });
+
+    it('markPublished escribe payload_hash y gateway_event_id cuando el publisher devuelve objeto', async () => {
+      const pool = createPool({ events: [{ id: 'e1', topic: 't', payload: {}, attempts: 1 }] });
+      const gateway = {
+        isEnabled: () => true,
+        publishEvent: async () => ({ eventId: 'evt-gw-1', payloadHash: 'hash-1' }),
+      };
+      const publisher = new OutboxPublisher(pool, {}, { publisher: gateway });
+
+      await publisher.runOnce();
+
+      const markQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"));
+      expect(markQ).toBeDefined();
+      expect(markQ.params).toEqual(['e1', 'hash-1', 'evt-gw-1']);
+    });
+
+    it('markPublished deja payload_hash/gateway_event_id en NULL cuando el publisher devuelve true (KafkaService)', async () => {
+      const pool = createPool({ events: [{ id: 'e2', topic: 't', payload: {}, attempts: 1 }] });
+      const kafka = {
+        isEnabled: () => true,
+        isConnected: () => true,
+        publishEvent: async () => true,
+      };
+      const publisher = new OutboxPublisher(pool, kafka);
+
+      await publisher.runOnce();
+
+      const markQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"));
+      expect(markQ.params).toEqual(['e2', null, null]);
+    });
+
+    it('markFailed con error.isPermanent → FAILED directo sin importar los attempts', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const err = new Error('bad schema');
+      err.isPermanent = true;
+
+      await publisher.markFailed('e1', 1, err);
+
+      const q = pool.queries.at(-1);
+      expect(q.params[0]).toBe('e1');
+      expect(q.params[1]).toBe('FAILED');
+      expect(q.params[2]).toBe(0);
+    });
+
+    it('markFailed con error.retryAfterMs usa ese backoff en vez del exponencial', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const err = new Error('rate limited');
+      err.retryAfterMs = 45_000;
+
+      await publisher.markFailed('e1', 1, err);
+
+      const q = pool.queries.at(-1);
+      expect(q.params[1]).toBe('PENDING');
+      expect(q.params[2]).toBe(45_000);
+    });
+
+    it('markFailed con retryAfterMs > maxBackoffMs se capa al maximo', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10, maxBackoffMs: 60_000 });
+      const err = new Error('too long');
+      err.retryAfterMs = 300_000;
+
+      await publisher.markFailed('e1', 1, err);
+
+      expect(pool.queries.at(-1).params[2]).toBe(60_000);
+    });
+  });
 });
 
 describe('isOutboxPublisherEnabled', () => {
-  it('publica por default y se apaga solo con OUTBOX_PUBLISHER_ENABLED=false', () => {
-    expect(isOutboxPublisherEnabled({})).toBe(true);
-    expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: 'true' })).toBe(true);
+  it('es opt-in: publica solo con OUTBOX_PUBLISHER_ENABLED=true', () => {
+    expect(isOutboxPublisherEnabled({})).toBe(false);
     expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: 'false' })).toBe(false);
+    expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: '1' })).toBe(false);
+    expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: 'true' })).toBe(true);
   });
 });

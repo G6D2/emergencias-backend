@@ -1,6 +1,7 @@
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
-const { assertTransition } = require('../domain/emergency-status');
+const { assertTransition, isTerminal, TERMINAL_STATUSES } = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
+const { resolveBarrio } = require('../domain/barrio');
 const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
@@ -64,6 +65,8 @@ function mapEmergency(row, locationCrypto) {
     causaTipo: row.causa_tipo ?? null,
     causaId: row.causa_id ?? null,
     causasRelacionadas: row.causas_relacionadas ?? [],
+    // Catálogo oficial CABA en claro; no se borra con la retención de ubicación.
+    barrio: row.barrio ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     closedAt: row.closed_at,
@@ -144,9 +147,9 @@ function mapAccessAudit(row) {
 const INSERT_SQL = `INSERT INTO emergencies (
      id, correlation_id, user_id, latitude, longitude, location_encrypted,
      description, severity, emergency_type, status,
-     source, requires_manual_validation, causa_tipo, causa_id
+     source, requires_manual_validation, causa_tipo, causa_id, barrio
    )
-   VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'), $9, $10, $11, $12)
+   VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'), $9, $10, $11, $12, $13)
    RETURNING *`;
 
 // Repository de persistencia de emergencies.
@@ -164,6 +167,7 @@ class EmergencyRepository {
   async create({
     id, correlationId, userId, latitude, longitude, address, description, severity, emergencyType, status,
     source = 'INTERNAL', requiresManualValidation = false, causaTipo = null, causaId = null,
+    barrioText = null, barrio: barrioOverride = undefined,
     outboxEvent = null, client: externalClient = null,
   }) {
     // Una emergencia externa puede llegar sin ubicación (queda para validación
@@ -173,6 +177,11 @@ class EmergencyRepository {
     const locationEncrypted = hasLocation
       ? this.locationCrypto.encryptLocation({ latitude, longitude, address })
       : null;
+    // barrioOverride permite tests/backfill explícito; si no, se deriva:
+    // coords → PIP; sin coords → texto solo si está en el catálogo CABA.
+    const barrio = barrioOverride !== undefined
+      ? barrioOverride
+      : resolveBarrio({ latitude, longitude, barrioText });
     const insertValues = [
       id,
       correlationId || id,
@@ -188,6 +197,7 @@ class EmergencyRepository {
       Boolean(requiresManualValidation),
       causaTipo,
       causaId,
+      barrio,
     ];
 
     if (externalClient) {
@@ -304,8 +314,11 @@ class EmergencyRepository {
 
   /**
    * Borra ciphertext de ubicaciones cerradas hace más de retentionHours.
-   * Solo aplica a emergencias con closed_at; las abiertas se conservan.
+   * Solo aplica a emergencias con closed_at (lo setea toda transición a un
+   * estado terminal: CLOSED, CANCELLED, DISCARDED); las abiertas se conservan.
    * Las filas siguen existiendo; lat/lng quedan null (minimización).
+   * Si barrio aún es null, lo deriva del ciphertext/coords legacy ANTES de
+   * borrar la ubicación (evita perder el dato agregado en el deploy).
    */
   async anonymizeExpiredLocations(retentionHours) {
     const hours = Number(retentionHours);
@@ -313,13 +326,9 @@ class EmergencyRepository {
       throw new Error('retentionHours must be a positive number');
     }
 
-    const result = await this.pool.query(
-      `UPDATE emergencies
-       SET location_encrypted = NULL,
-           latitude = NULL,
-           longitude = NULL,
-           location_anonymized_at = now(),
-           updated_at = now()
+    const candidates = await this.pool.query(
+      `SELECT id, latitude, longitude, location_encrypted, barrio
+       FROM emergencies
        WHERE location_anonymized_at IS NULL
          AND closed_at IS NOT NULL
          AND (
@@ -327,15 +336,92 @@ class EmergencyRepository {
            OR latitude IS NOT NULL
            OR longitude IS NOT NULL
          )
-         AND closed_at < now() - ($1::double precision * interval '1 hour')
-       RETURNING id`,
+         AND closed_at < now() - ($1::double precision * interval '1 hour')`,
       [hours]
     );
 
+    if (candidates.rows.length === 0) {
+      return { anonymizedCount: 0, ids: [] };
+    }
+
+    const ids = [];
+    for (const row of candidates.rows) {
+      let barrio = row.barrio || null;
+      if (!barrio) {
+        let latitude = row.latitude != null ? Number(row.latitude) : null;
+        let longitude = row.longitude != null ? Number(row.longitude) : null;
+        if (row.location_encrypted) {
+          try {
+            const location = this.locationCrypto.decryptLocation(row.location_encrypted);
+            latitude = location.latitude;
+            longitude = location.longitude;
+          } catch (error) {
+            secureLog('warn', 'anonymizeExpiredLocations: ciphertext indescifrable; se anonimiza sin barrio', {
+              emergencyId: row.id,
+              message: error.message,
+            });
+          }
+        }
+        barrio = resolveBarrio({ latitude, longitude });
+      }
+
+      const result = await this.pool.query(
+        `UPDATE emergencies
+         SET location_encrypted = NULL,
+             latitude = NULL,
+             longitude = NULL,
+             location_anonymized_at = now(),
+             barrio = COALESCE(barrio, $2),
+             updated_at = now()
+         WHERE id = $1
+           AND location_anonymized_at IS NULL
+         RETURNING id`,
+        [row.id, barrio]
+      );
+      if (result.rowCount > 0) ids.push(row.id);
+    }
+
+    if (ids.length > 0) {
+      // El outbox conserva payloads PUBLISHED/PENDING más allá de las 72 h;
+      // hay que scrubear coords cifradas del bus para que no queden descifrables
+      // con la clave compartida tras anonimizar at-rest.
+      await this.scrubOutboxBusCoordinates(ids);
+    }
+
     return {
-      anonymizedCount: result.rowCount,
-      ids: result.rows.map((row) => row.id),
+      anonymizedCount: ids.length,
+      ids,
     };
+  }
+
+  /**
+   * Pone en null data.ubicacion.latitud/longitud en outbox_events ligados
+   * a esas emergencias (cualquier status). Conserva barrio.
+   */
+  async scrubOutboxBusCoordinates(emergencyIds) {
+    if (!Array.isArray(emergencyIds) || emergencyIds.length === 0) return { scrubbedCount: 0 };
+
+    const result = await this.pool.query(
+      `UPDATE outbox_events
+       SET payload = jsonb_set(
+             jsonb_set(payload, '{data,ubicacion,latitud}', 'null'::jsonb, true),
+             '{data,ubicacion,longitud}', 'null'::jsonb, true
+           )
+       WHERE payload->'data'->>'emergenciaId' = ANY($1::text[])
+         AND (
+           jsonb_typeof(payload#>'{data,ubicacion,latitud}') = 'string'
+           OR jsonb_typeof(payload#>'{data,ubicacion,longitud}') = 'string'
+         )`,
+      [emergencyIds]
+    );
+
+    if (result.rowCount > 0) {
+      secureLog('info', 'Scrubbed bus coordinates from outbox payloads', {
+        scrubbedCount: result.rowCount,
+        emergencyIds,
+      });
+    }
+    return { scrubbedCount: result.rowCount };
   }
 
   // Anonimiza las filas cuyo ciphertext no se puede descifrar con el keyring
@@ -376,10 +462,75 @@ class EmergencyRepository {
       [undecryptable]
     );
 
+    const ids = result.rows.map((row) => row.id);
+    if (ids.length > 0) {
+      await this.scrubOutboxBusCoordinates(ids);
+    }
+
     return {
       anonymizedCount: result.rowCount,
-      ids: result.rows.map((row) => row.id),
+      ids,
     };
+  }
+
+  /**
+   * Completa barrio en filas que todavía tienen ubicación descifrable y
+   * barrio vacío. Las ya anonimizadas quedan sin barrio (no hay forma
+   * honesta de recalcular). No toca location_encrypted.
+   */
+  async backfillBarrios() {
+    const candidates = await this.pool.query(
+      `SELECT id, latitude, longitude, location_encrypted
+       FROM emergencies
+       WHERE barrio IS NULL
+         AND location_anonymized_at IS NULL
+         AND (
+           location_encrypted IS NOT NULL
+           OR (latitude IS NOT NULL AND longitude IS NOT NULL)
+         )`
+    );
+
+    const updates = [];
+    for (const row of candidates.rows) {
+      let latitude = row.latitude != null ? Number(row.latitude) : null;
+      let longitude = row.longitude != null ? Number(row.longitude) : null;
+
+      if (row.location_encrypted) {
+        try {
+          const location = this.locationCrypto.decryptLocation(row.location_encrypted);
+          latitude = location.latitude;
+          longitude = location.longitude;
+        } catch (error) {
+          secureLog('warn', 'backfillBarrios: ciphertext indescifrable, se omite', {
+            emergencyId: row.id,
+            message: error.message,
+          });
+          continue;
+        }
+      }
+
+      const barrio = resolveBarrio({ latitude, longitude });
+      if (!barrio) continue;
+      updates.push({ id: row.id, barrio });
+    }
+
+    if (updates.length === 0) {
+      return { updatedCount: 0, ids: [] };
+    }
+
+    const ids = [];
+    for (const item of updates) {
+      const result = await this.pool.query(
+        `UPDATE emergencies
+         SET barrio = $2, updated_at = now()
+         WHERE id = $1 AND barrio IS NULL
+         RETURNING id`,
+        [item.id, item.barrio]
+      );
+      if (result.rowCount > 0) ids.push(item.id);
+    }
+
+    return { updatedCount: ids.length, ids };
   }
 
   async findPage({ userId, statuses, severity, from, to, assignedOfficerId, emergencyType, page, limit, sortBy, order }) {
@@ -504,14 +655,20 @@ class EmergencyRepository {
    *   tomar el lock de la fila. Cierra la carrera "se comprobó el oficial,
    *   pero el dispatcher devolvió y reasignó antes del UPDATE". Si no
    *   coincide responde NotFound, igual que una emergencia ajena.
+   * @param {string|null} [options.requireStatus] - si viene, la transición
+   *   solo se aplica si la emergencia sigue en ese estado con la fila
+   *   bloqueada; si no, ConflictError (409). Lo usan validar (PENDING) y
+   *   devolver (DISPATCHED), que llegan las dos a VALIDATED.
    * @param {object|null} [options.client] - con `client`, la transición corre
    *   en la transacción del caller (la del OutcomeFactory) sin abrir una propia.
    */
   async updateStatus(id, {
     newStatus, actor = null, reason = null, causasRelacionadas = [], outboxEvent = null, requireAssignedOfficerId = null,
-    client: externalClient = null,
+    requireStatus = null, client: externalClient = null,
   }) {
-    const options = { newStatus, actor, reason, causasRelacionadas, outboxEvent, requireAssignedOfficerId };
+    const options = {
+      newStatus, actor, reason, causasRelacionadas, outboxEvent, requireAssignedOfficerId, requireStatus,
+    };
     if (externalClient) {
       return this.applyStatusUpdate(externalClient, id, options);
     }
@@ -530,7 +687,7 @@ class EmergencyRepository {
   }
 
   async applyStatusUpdate(client, id, {
-    newStatus, actor, reason, causasRelacionadas = [], outboxEvent, requireAssignedOfficerId = null,
+    newStatus, actor, reason, causasRelacionadas = [], outboxEvent, requireAssignedOfficerId = null, requireStatus = null,
   }) {
     const current = await client.query(
       'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
@@ -545,19 +702,27 @@ class EmergencyRepository {
       throw new NotFoundError(`Emergency with ID ${id} not found`);
     }
     assertTransition(previousStatus, newStatus);
+    if (requireStatus !== null && previousStatus !== requireStatus) {
+      throw new ConflictError(`Emergency ${id} is ${previousStatus}, expected ${requireStatus}`);
+    }
 
+    // closed_at marca el fin de la emergencia en cualquier estado terminal
+    // (CLOSED, CANCELLED, DISCARDED): la retención de ubicaciones cuenta las
+    // 72 h desde ahí. Al pasar a VALIDATED (validar o devolver) la emergencia
+    // queda sin oficial asignado; el oficial se libera más abajo.
     const updated = await client.query(
       `UPDATE emergencies
        SET status = $1,
            updated_at = now(),
-           closed_at = CASE WHEN $1 = 'CLOSED' THEN now() ELSE closed_at END,
+           closed_at = CASE WHEN $3::boolean THEN now() ELSE closed_at END,
+           assigned_officer_id = CASE WHEN $1 = 'VALIDATED' THEN NULL ELSE assigned_officer_id END,
            causas_relacionadas = CASE
-             WHEN $1 = 'RESOLVED' THEN $3::TEXT[]
+             WHEN $1 = 'RESOLVED' THEN $4::TEXT[]
              ELSE causas_relacionadas
            END
        WHERE id = $2
        RETURNING *`,
-      [newStatus, id, causasRelacionadas]
+      [newStatus, id, isTerminal(newStatus), causasRelacionadas]
     );
 
     const history = await client.query(
@@ -611,21 +776,27 @@ class EmergencyRepository {
   }
 
   /**
-   * Candidatos recientes de un emergencyType para el job de deteccion de
-   * incidentes (#60): sin JOIN a officers, sin paginacion, sin COUNT --
-   * el consumidor es el job, no un endpoint HTTP. Devuelve lat/lng ya
-   * descifrados porque el job los pasa directo a groupNearbyEmergencies.
+   * Candidatos recientes para el job de deteccion de incidentes (#60): sin
+   * JOIN a officers, sin paginacion, sin COUNT -- el consumidor es el job,
+   * no un endpoint HTTP. Recibe un tipo (`emergencyType`) o varios
+   * (`emergencyTypes`): el job pide todos los agrupables en UNA sola query y
+   * los separa en memoria por emergencyType. Las emergencias en estado
+   * terminal (cerradas, canceladas, descartadas) no son candidatas.
+   * Devuelve lat/lng ya descifrados porque el job los pasa directo a
+   * groupNearbyEmergencies.
    * Una fila cuyo ciphertext no se puede descifrar se excluye del
    * resultado (no puede tumbar la corrida del job), dejando constancia
    * con secureLog de cual id se excluyo y por que.
    */
-  async findRecentByType({ emergencyType, since }) {
+  async findRecentByType({ emergencyType, emergencyTypes = [emergencyType], since }) {
     const result = await this.pool.query(
-      `SELECT id, correlation_id, user_id, latitude, longitude, location_encrypted,
+      `SELECT id, correlation_id, user_id, emergency_type, latitude, longitude, location_encrypted,
               severity, incident_id, created_at
        FROM emergencies
-       WHERE emergency_type = $1 AND created_at >= $2`,
-      [emergencyType, since]
+       WHERE emergency_type = ANY($1::text[])
+         AND created_at >= $2
+         AND status <> ALL($3::text[])`,
+      [emergencyTypes, since, TERMINAL_STATUSES]
     );
 
     const candidates = [];
@@ -635,6 +806,7 @@ class EmergencyRepository {
           id: row.id,
           correlationId: row.correlation_id,
           userId: row.user_id,
+          emergencyType: row.emergency_type,
           latitude: null,
           longitude: null,
           severity: row.severity,
@@ -650,6 +822,7 @@ class EmergencyRepository {
           id: row.id,
           correlationId: row.correlation_id,
           userId: row.user_id,
+          emergencyType: row.emergency_type,
           latitude: location.latitude,
           longitude: location.longitude,
           severity: row.severity,

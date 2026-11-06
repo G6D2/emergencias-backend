@@ -33,8 +33,8 @@ CI valida el commit pero **no publica ningún artefacto reusable** (imagen Docke
 
 El deploy hook le dice a Render "empezá a construir el commit HEAD de main". Render entonces:
 1. Clona el repo en su propio worker.
-2. Corre `buildCommand` de `render.yaml` (`npm ci --omit=dev` en backend; en frontend, `next build`).
-3. Levanta el proceso con `startCommand`.
+2. Construye: en backend, la imagen del `Dockerfile` (`npm ci --only=production` + `COPY src`); en frontend, el `buildCommand` (`next build`).
+3. Levanta el proceso (`CMD` del `Dockerfile` en backend, `startCommand` en frontend).
 
 **Es un segundo `npm ci` + `next build` completamente independiente del que corrió CI.**
 
@@ -57,7 +57,7 @@ Beneficios que hoy **no tenemos**:
 
 **Aceptamos el doble build.** Razones:
 
-1. **Costo del cambio:** implementar imagen inmutable requiere Docker en ambos servicios, publicación a GHCR, cambiar `render.yaml` para consumir imagen en vez de repo, y aprender el ciclo `pull → deploy` de Render con imágenes (soportado, pero es distinto al hook actual).
+1. **Costo del cambio:** implementar imagen inmutable requiere Docker también en el frontend (el backend ya se construye con su `Dockerfile` en Render), publicación a GHCR, cambiar `render.yaml` para consumir imagen en vez de repo, y aprender el ciclo `pull → deploy` de Render con imágenes (soportado, pero es distinto al hook actual).
 2. **Beneficio marginal para el volumen actual:** dos builds seguidos toman 2-4 min extras y no somos production-critical. Ninguna de las regresiones que un artefacto inmutable previene apareció en las corridas hasta ahora.
 3. **El delta CI vs Render es acotado hoy:** ambos usan Node 20 y `npm ci`. La probabilidad de que un build pase en CI y falle en Render por diferencia de entorno es baja.
 

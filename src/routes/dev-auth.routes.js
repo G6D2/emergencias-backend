@@ -2,19 +2,19 @@ const express = require('express');
 const { asyncHandler } = require('../utils/async-handler');
 const {
   createDevLoginRateLimiter,
-  createAuthCredentialRateLimiter,
+  createAuthLoginRateLimiter,
+  createAuthRegisterRateLimiter,
 } = require('../security/rate-limit');
 const { AuthController } = require('../controllers/auth.controller');
 const { resolveDevLoginClaims } = require('../auth/dev-login-policy');
 
 /**
- * Rutas de auth local (AUTH_MODE=local).
+ * Rutas de auth local (AUTH_MODE=local o hybrid).
  * - /auth/dev/login: emite JWT inventando sub (tests / atajos).
  * - /auth/register + /auth/login: usuarios reales en auth_users.
  */
 function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
   const router = express.Router();
-  const credentialLimiter = createAuthCredentialRateLimiter();
   const authController = authUserRepository
     ? new AuthController(authUserRepository, tokenIssuer)
     : null;
@@ -24,7 +24,7 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
    * /auth/dev/login:
    *   post:
    *     tags: [Dev Auth]
-   *     summary: "[Solo AUTH_MODE=local] Obtener access token de desarrollo"
+   *     summary: "[AUTH_MODE=local o hybrid] Obtener access token de desarrollo"
    *     description: |
    *       Emite un JWT con la misma forma que CityPass+ para probar la API sin IdP.
    *       En production (ALLOW_LOCAL_AUTH) solo acepta sujetos de la allowlist demo.
@@ -55,7 +55,7 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      * /auth/register:
      *   post:
      *     tags: [Dev Auth]
-     *     summary: "[AUTH_MODE=local] Registro email+password"
+     *     summary: "[AUTH_MODE=local o hybrid] Registro email+password"
      *     requestBody:
      *       required: true
      *       content:
@@ -72,8 +72,10 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      *         description: Usuario creado + access_token
      *       409:
      *         description: Email ya registrado
+     *       429:
+     *         description: Rate limit (por IP)
      */
-    router.post('/register', credentialLimiter, asyncHandler(async (req, res) => {
+    router.post('/register', createAuthRegisterRateLimiter(), asyncHandler(async (req, res) => {
       const result = await authController.register(req.body);
       res.status(201).json(result);
     }));
@@ -83,7 +85,7 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      * /auth/login:
      *   post:
      *     tags: [Dev Auth]
-     *     summary: "[AUTH_MODE=local] Login email+password"
+     *     summary: "[AUTH_MODE=local o hybrid] Login email+password"
      *     requestBody:
      *       required: true
      *       content:
@@ -98,9 +100,11 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      *       200:
      *         description: access_token + user
      *       401:
-     *         description: Credenciales inválidas
+     *         description: Credenciales inválidas (misma respuesta si el correo no existe)
+     *       429:
+     *         description: Rate limit (intentos fallidos por IP)
      */
-    router.post('/login', credentialLimiter, asyncHandler(async (req, res) => {
+    router.post('/login', createAuthLoginRateLimiter(), asyncHandler(async (req, res) => {
       const result = await authController.login(req.body);
       res.json(result);
     }));

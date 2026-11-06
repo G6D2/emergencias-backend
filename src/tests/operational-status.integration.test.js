@@ -4,6 +4,7 @@ const { createApp } = require('../app');
 const { getPool, closePool } = require('../db/pool');
 const { EmergencyRepository } = require('../repositories/emergency.repository');
 const { NotFoundError } = require('../errors/app-errors');
+const { createBusLocationCrypto, setBusLocationCryptoForTests } = require('../security/bus-location-crypto');
 
 const mockKafkaService = {
   publishEvent: async () => {},
@@ -13,6 +14,7 @@ const mockKafkaService = {
 
 const OFFICER = { sub: 'of-001', groups: ['officer'] };
 const OTHER_OFFICER = { sub: 'of-002', groups: ['officer'] };
+const BUS_TEST_KEY = Buffer.alloc(32, 9).toString('base64');
 
 describe('Estado operativo del oficial (integración contra Postgres real)', () => {
   let pool;
@@ -44,6 +46,10 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
   beforeAll(() => {
     process.env.LOCATION_ENCRYPTION_KEY = process.env.LOCATION_ENCRYPTION_KEY
       || 'flxqyJtbe6+mibyHqK76N6LSnFe0w22hnyDZg9KWIcs=';
+    setBusLocationCryptoForTests(createBusLocationCrypto({
+      keys: { test: BUS_TEST_KEY },
+      activeKeyId: 'test',
+    }));
     pool = getPool();
     repository = new EmergencyRepository(pool);
   });
@@ -57,6 +63,8 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     // Las suites de integración comparten base: lo que crea esta suite no debe
     // alterar el agrupamiento de incidentes de las otras.
     await pool.query('DELETE FROM emergency_status_history WHERE emergency_id = ANY($1::uuid[])', [createdIds]);
+    // Los eventos de emergencia usan data.emergenciaId; EmergenciaPriorizada
+    // conserva data.id.
     await pool.query(
       `DELETE FROM outbox_events
        WHERE COALESCE(payload->'data'->>'emergenciaId', payload->'data'->>'id') = ANY($1::text[])`,
@@ -65,6 +73,7 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     await pool.query('DELETE FROM emergencies WHERE id = ANY($1::uuid[])', [createdIds]);
     await pool.query("UPDATE officers SET status = 'disponible' WHERE id IN ('of-001', 'of-002')");
     await closePool();
+    setBusLocationCryptoForTests(undefined);
   });
 
   it('recorre el flujo completo y deja historial con el oficial como actor', async () => {
@@ -135,14 +144,18 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     expect(events.rows[0].data).toMatchObject({
       estadoNuevo: 'RESUELTA',
       causasRelacionadas: ['RESIDUOS'],
-      latitud: -34.6037,
-      longitud: -58.3816,
+      ubicacion: {
+        latitud: expect.any(String),
+        longitud: expect.any(String),
+      },
     });
     expect(events.rows[1].data).toMatchObject({
       estadoNuevo: 'CERRADA',
       causasRelacionadas: ['RESIDUOS'],
-      latitud: -34.6037,
-      longitud: -58.3816,
+      ubicacion: {
+        latitud: expect.any(String),
+        longitud: expect.any(String),
+      },
     });
   });
 
@@ -181,11 +194,9 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     const id = await createDispatched();
     await repository.updateStatus(id, { newStatus: 'VALIDATED', actor: 'D1', reason: 'devuelta' });
 
-    // Hoy la devolución libera al oficial pero NO limpia assigned_officer_id
-    // (ver nota en el PR), así que el permiso todavía lo reconoce y el que
-    // frena es el dominio: VALIDATED → EN_ROUTE no existe (409). Si algún día
-    // la devolución limpia la asignación, este caso pasa a ser 404.
-    await request(appAs(OFFICER)).patch(`/api/emergencies/${id}/en-route`).expect(409);
+    // La devolución libera al oficial y limpia assigned_officer_id: para el
+    // permiso la emergencia ya no es suya, así que responde 404 (no 409).
+    await request(appAs(OFFICER)).patch(`/api/emergencies/${id}/en-route`).expect(404);
     expect(await statusOf(id)).toBe('VALIDATED');
   });
 

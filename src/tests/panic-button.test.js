@@ -165,10 +165,11 @@ describe('Panic Button API', () => {
       eventId: 'event-1',
       correlationId: savedEmergency.id,
     });
-    // Contrato cerrado 2026-11-02: latitud/longitud publicadas como null hasta
-    // que la regla de "mandar solo si afectaCirculacion=true" cierre con Valen.
-    expect(event.data.latitud).toBeNull();
-    expect(event.data.longitud).toBeNull();
+    // Coords en claro no van en la raíz; cifradas solo en ubicacion (null sin clave de bus).
+    expect(event.data.latitud).toBeUndefined();
+    expect(event.data.longitud).toBeUndefined();
+    expect(event.data.ubicacion.latitud).toBeNull();
+    expect(event.data.ubicacion.longitud).toBeNull();
   });
 
   describe('POST /api/panic-button', () => {
@@ -364,8 +365,10 @@ describe('Panic Button API', () => {
       // descripcion/titulo/direccion NO van al bus (contrato cerrado 2026-11-02).
       expect(event.data.address).toBeUndefined();
       expect(event.data.direccion).toBeUndefined();
-      expect(event.data.latitud).toBeNull();
-      expect(event.data.longitud).toBeNull();
+      expect(event.data.latitud).toBeUndefined();
+      expect(event.data.longitud).toBeUndefined();
+      expect(event.data.ubicacion.latitud).toBeNull();
+      expect(event.data.ubicacion.longitud).toBeNull();
     });
 
     it('rechaza con 400 un emergencyType fuera del catálogo y no crea nada', async () => {
@@ -1306,7 +1309,7 @@ describe('GET /health with Kafka disabled', () => {
 });
 
 describe('GET /health', () => {
-  it('reports kafka status from checkHealth', async () => {
+  it('sin el detalle de index.js, reporta disconnected si nada de Kafka está en uso', async () => {
     const response = await request(app).get('/health').expect(200);
 
     expect(response.body.status).toBe('ok');

@@ -24,6 +24,8 @@ function startLocationRetentionJob(emergencyRepository, options = {}) {
 
   async function runOnce() {
     try {
+      // anonymizeExpiredLocations ya deriva barrio (si faltaba) antes de borrar
+      // la ubicación; no hace falta un backfill previo en cada tick.
       const result = await emergencyRepository.anonymizeExpiredLocations(retentionHours);
       if (result.anonymizedCount > 0) {
         secureLog('info', 'Location retention anonymized emergencies', {

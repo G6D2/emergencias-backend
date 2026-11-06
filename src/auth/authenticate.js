@@ -1,20 +1,28 @@
 const { UnauthorizedError } = require('../errors/app-errors');
 const { loadAuthConfig } = require('./config');
+const { applySubAlias } = require('./federated-claims');
 const { createJwtVerifier } = require('./jwt-verifier');
 
 /**
  * Middleware: exige Authorization: Bearer <JWT> y deja la identidad en req.user.
  *
+ * Con IDP_SUB_ALIASES (AUTH_MODE=hybrid), a los tokens del Login Federado se
+ * les reemplaza el sub por el id interno (ej. 'of-001') antes de seguir: todo
+ * lo que usa req.user.sub (oficial asignado, auditoría, rate limit) ve el id
+ * interno, y el sub federado queda en req.user.idpSub.
+ *
  * @param {object} [options]
  * @param {object} [options.config] - override de loadAuthConfig()
  * @param {import('jose').JWTVerifyGetKey} [options.jwks] - JWKS inyectable (tests)
  * @param {(token: string) => Promise<object>} [options.verifyAccessToken] - verifier inyectable
+ * @param {Map<string, string>} [options.subAliases] - sub federado → id interno
  */
 function createAuthenticateMiddleware(options = {}) {
   const config = options.config || loadAuthConfig();
   const verifier = options.verifyAccessToken
     ? { verifyAccessToken: options.verifyAccessToken }
     : createJwtVerifier(config, options.jwks);
+  const subAliases = options.subAliases || null;
 
   return async function authenticate(req, res, next) {
     try {
@@ -28,7 +36,7 @@ function createAuthenticateMiddleware(options = {}) {
         throw new UnauthorizedError('Invalid Authorization header');
       }
 
-      req.user = await verifier.verifyAccessToken(token);
+      req.user = applySubAlias(await verifier.verifyAccessToken(token), subAliases);
       next();
     } catch (err) {
       if (err instanceof UnauthorizedError) {

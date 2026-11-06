@@ -49,8 +49,16 @@ class SiempreAplica extends BusinessRule {
   }
 }
 
+// Consumer falso con los eventos de instrumentación de kafkajs: emit(nombre,
+// payload) llama a los handlers registrados con on().
 function buildKafka() {
+  const handlers = {};
   const consumer = {
+    events: { FETCH_START: 'consumer.fetch_start', CRASH: 'consumer.crash' },
+    on: jest.fn((event, handler) => {
+      handlers[event] = handler;
+    }),
+    emit: (event, payload) => handlers[event] && handlers[event]({ payload }),
     connect: jest.fn().mockResolvedValue(undefined),
     subscribe: jest.fn().mockResolvedValue(undefined),
     run: jest.fn().mockResolvedValue(undefined),
@@ -62,6 +70,16 @@ function buildKafka() {
 const toMessage = (value) => ({ value: Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)) });
 
 describe('EventListener', () => {
+  // Los defaults de arranque se leen del entorno: que una variable exportada en
+  // la shell no cambie el resultado de estos tests.
+  const savedEnv = {};
+  beforeEach(() => {
+    ['EDA_CONSUMER_FROM_BEGINNING', 'EDA_CONSUMER_SINCE'].forEach((k) => { savedEnv[k] = process.env[k]; delete process.env[k]; });
+  });
+  afterEach(() => {
+    Object.entries(savedEnv).forEach(([k, v]) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; });
+  });
+
   it('no se puede instanciar directamente', () => {
     expect(() => new EventListener(buildKafka().kafka, { topic: 't' })).toThrow(/abstracto/);
   });
@@ -126,7 +144,7 @@ describe('EventListener', () => {
     await expect(listener.start()).resolves.toBe(true);
 
     expect(kafka.consumer).toHaveBeenCalledWith({ groupId: 'com.citypass.emergencias.TestListener' });
-    expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 'espacios.evento', fromBeginning: false });
+    expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 'espacios.evento', fromBeginning: true });
     expect(consumer.run).toHaveBeenCalledTimes(1);
   });
 
@@ -247,6 +265,159 @@ describe('EventListener', () => {
     await listener.stop();
     expect(consumer.disconnect).toHaveBeenCalledTimes(1);
     expect(listener.consumer).toBeNull();
+    expect(listener.status().running).toBe(false);
+  });
+
+  describe('estado para /health', () => {
+    it('status(): no corre antes de start, corre después y cada fetch marca lastPollAt', async () => {
+      const { kafka, consumer } = buildKafka();
+      const listener = new TestListener(kafka, { topic: 't' });
+      expect(listener.status()).toEqual({ name: 'TestListener', running: false, lastPollAt: null });
+
+      await listener.start();
+      expect(listener.status().running).toBe(true);
+      expect(listener.status().lastPollAt).toBeNull();
+
+      consumer.emit(consumer.events.FETCH_START, {});
+      expect(Date.parse(listener.status().lastPollAt)).not.toBeNaN();
+    });
+
+    it('si start falla, no queda marcado como corriendo', async () => {
+      const { kafka, consumer } = buildKafka();
+      consumer.connect.mockRejectedValue(new Error('no broker'));
+      const listener = new TestListener(kafka, { topic: 't' });
+
+      await expect(listener.start()).rejects.toThrow('no broker');
+      expect(listener.status().running).toBe(false);
+    });
+
+    it('un CRASH sin restart lo marca caído, suelta el consumer y avisa por onCrash', async () => {
+      const { kafka, consumer } = buildKafka();
+      const listener = new TestListener(kafka, { topic: 't' });
+      listener.onCrash = jest.fn();
+      await listener.start();
+
+      const error = new Error('Topic authorization failed');
+      consumer.emit(consumer.events.CRASH, { error, restart: false });
+
+      expect(listener.status().running).toBe(false);
+      expect(listener.consumer).toBeNull();
+      expect(listener.onCrash).toHaveBeenCalledWith(error);
+    });
+
+    it('un CRASH con restart lo deja en manos de kafkajs (sigue corriendo)', async () => {
+      const { kafka, consumer } = buildKafka();
+      const listener = new TestListener(kafka, { topic: 't' });
+      listener.onCrash = jest.fn();
+      await listener.start();
+
+      consumer.emit(consumer.events.CRASH, { error: new Error('KafkaJSNumberOfRetriesExceeded'), restart: true });
+
+      expect(listener.status().running).toBe(true);
+      expect(listener.onCrash).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('EventListener: arranque sin offset y piso EDA_CONSUMER_SINCE', () => {
+  const ENV_KEYS = ['EDA_CONSUMER_FROM_BEGINNING', 'EDA_CONSUMER_SINCE'];
+  const saved = {};
+
+  beforeEach(() => {
+    ENV_KEYS.forEach((k) => { saved[k] = process.env[k]; delete process.env[k]; });
+  });
+
+  afterEach(() => {
+    ENV_KEYS.forEach((k) => {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    });
+  });
+
+  const at = (iso) => String(new Date(iso).getTime());
+  const message = (iso, value = { metadata: { eventId: 'e1' } }) => ({ ...toMessage(value), offset: '7', timestamp: at(iso) });
+
+  it('sin offset commiteado lee desde el principio por default', () => {
+    expect(new TestListener(buildKafka().kafka, { topic: 't' }).fromBeginning).toBe(true);
+  });
+
+  it('EDA_CONSUMER_FROM_BEGINNING=false vuelve a arrancar en el final del topic', async () => {
+    process.env.EDA_CONSUMER_FROM_BEGINNING = 'false';
+    const { kafka, consumer } = buildKafka();
+    await new TestListener(kafka, { topic: 't' }).start();
+    expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 't', fromBeginning: false });
+  });
+
+  it('la opción del constructor pisa a la variable de entorno', () => {
+    process.env.EDA_CONSUMER_FROM_BEGINNING = 'false';
+    expect(new TestListener(buildKafka().kafka, { topic: 't', fromBeginning: true }).fromBeginning).toBe(true);
+  });
+
+  it('un EDA_CONSUMER_SINCE que no es fecha falla al construir, no al primer mensaje', () => {
+    process.env.EDA_CONSUMER_SINCE = 'ayer';
+    expect(() => new TestListener(buildKafka().kafka, { topic: 't' })).toThrow(/EDA_CONSUMER_SINCE invalido/);
+  });
+
+  it('saltea sin decodificar ni procesar un mensaje anterior al piso', async () => {
+    process.env.EDA_CONSUMER_SINCE = '2026-11-05T15:00:00Z';
+    const decoder = { decode: jest.fn() };
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', decoder });
+
+    await expect(listener.onMessage(message('2026-11-02T12:00:00Z'))).resolves.toBeNull();
+
+    expect(decoder.decode).not.toHaveBeenCalled();
+    expect(listener.handled).toEqual([]);
+  });
+
+  it('procesa los mensajes desde el piso en adelante', async () => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', consumeSince: '2026-11-05T15:00:00Z' });
+
+    await listener.onMessage(message('2026-11-05T15:00:00Z', { metadata: { eventId: 'justo' } }));
+    await listener.onMessage(message('2026-11-05T18:30:00Z', { metadata: { eventId: 'despues' } }));
+
+    expect(listener.handled.map((e) => e.metadata.eventId)).toEqual(['justo', 'despues']);
+  });
+
+  it('sin piso procesa todo, aunque el mensaje sea viejo', async () => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't' });
+    await listener.onMessage(message('2026-10-01T00:00:00Z'));
+    expect(listener.handled).toHaveLength(1);
+  });
+
+  it.each([
+    ['05/11/2026'],
+    ['2026-11-05T15:00:00'],
+    ['5'],
+  ])('EDA_CONSUMER_SINCE "%s" (sin formato ISO con zona) falla al construir', (value) => {
+    process.env.EDA_CONSUMER_SINCE = value;
+    expect(() => new TestListener(buildKafka().kafka, { topic: 't' })).toThrow(/ISO 8601 con zona/);
+  });
+
+  it('acepta ISO con offset y lo normaliza a UTC', () => {
+    process.env.EDA_CONSUMER_SINCE = '2026-11-05T12:00:00-03:00';
+    expect(new TestListener(buildKafka().kafka, { topic: 't' }).consumeSince.toISOString()).toBe('2026-11-05T15:00:00.000Z');
+  });
+
+  it('un piso en el futuro falla al construir (saltearía todo lo que llegue)', () => {
+    process.env.EDA_CONSUMER_SINCE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    expect(() => new TestListener(buildKafka().kafka, { topic: 't' })).toThrow(/en el futuro/);
+  });
+
+  it.each([['-1'], [null], [''], ['0']])('un mensaje con timestamp %p se procesa aunque haya piso', async (timestamp) => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', consumeSince: '2026-11-05T15:00:00Z' });
+    await listener.onMessage({ ...toMessage({ metadata: { eventId: 'e1' } }), offset: '1', timestamp });
+    expect(listener.handled).toHaveLength(1);
+  });
+
+  it.each([['FALSE'], ['0'], ['no'], ['off']])('EDA_CONSUMER_FROM_BEGINNING=%s también apaga la lectura desde el principio', (value) => {
+    process.env.EDA_CONSUMER_FROM_BEGINNING = value;
+    expect(new TestListener(buildKafka().kafka, { topic: 't' }).fromBeginning).toBe(false);
+  });
+
+  it('un mensaje sin timestamp se procesa aunque haya piso', async () => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', consumeSince: '2026-11-05T15:00:00Z' });
+    await listener.onMessage(toMessage({ metadata: { eventId: 'e1' } }));
+    expect(listener.handled).toHaveLength(1);
   });
 });
 

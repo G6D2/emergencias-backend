@@ -42,7 +42,9 @@ describe('startLocationRetentionJob', () => {
   });
 
   it('runOnce loguea cuando anonimiza filas', async () => {
-    const repo = { anonymizeExpiredLocations: jest.fn().mockResolvedValue({ anonymizedCount: 3, ids: ['a', 'b', 'c'] }) };
+    const repo = {
+      anonymizeExpiredLocations: jest.fn().mockResolvedValue({ anonymizedCount: 3, ids: ['a', 'b', 'c'] }),
+    };
     const job = startLocationRetentionJob(repo, { env: {} });
 
     const result = await job.runOnce();

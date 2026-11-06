@@ -1,6 +1,7 @@
 const { EmergencyRepository, mapEmergency } = require('../repositories/emergency.repository');
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
 const { createLocationCrypto } = require('../security/location-crypto');
+const { TERMINAL_STATUSES } = require('../domain/emergency-status');
 
 const fakeCrypto = {
   encryptLocation: () => 'encrypted-blob',
@@ -83,6 +84,96 @@ describe('EmergencyRepository.create', () => {
     expect(encryptLocation).toHaveBeenCalledWith({ latitude: -34, longitude: -58, address: 'Av. Corrientes 1234' });
   });
 
+  it('deriva barrio por PIP al crear y lo manda en el INSERT', async () => {
+    let insertParams;
+    const pool = createPool({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO emergencies')) insertParams = params;
+        return { rows: [{ id: 'e-barrio', correlation_id: 'e-barrio', barrio: 'PALERMO' }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const created = await repo.create({
+      id: 'e-barrio',
+      userId: 'u-1',
+      latitude: -34.5735,
+      longitude: -58.4233,
+      emergencyType: 'PANICO',
+    });
+
+    expect(insertParams[12]).toBe('PALERMO');
+    expect(created.barrio).toBe('PALERMO');
+  });
+
+  it('sin coords usa barrioText solo si está en el catálogo', async () => {
+    let insertParams;
+    const pool = createPool({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO emergencies')) insertParams = params;
+        return { rows: [{ id: 'e-txt', correlation_id: 'e-txt', barrio: 'ALMAGRO' }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.create({
+      id: 'e-txt',
+      userId: null,
+      latitude: null,
+      longitude: null,
+      emergencyType: 'PREVENTIVA',
+      source: 'EXTERNAL',
+      barrioText: 'Almagro',
+    });
+
+    expect(insertParams[12]).toBe('ALMAGRO');
+  });
+
+  it('sin coords y barrioText fuera de catálogo (Centro) → barrio null', async () => {
+    let insertParams;
+    const pool = createPool({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO emergencies')) insertParams = params;
+        return { rows: [{ id: 'e-centro', correlation_id: 'e-centro', barrio: null }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.create({
+      id: 'e-centro',
+      userId: null,
+      latitude: null,
+      longitude: null,
+      emergencyType: 'PREVENTIVA',
+      source: 'EXTERNAL',
+      barrioText: 'Centro',
+    });
+
+    expect(insertParams[12]).toBeNull();
+  });
+
+  it('coords de San Telmo ganan sobre barrioText discrepante', async () => {
+    let insertParams;
+    const pool = createPool({
+      query: async (sql, params) => {
+        if (sql.includes('INSERT INTO emergencies')) insertParams = params;
+        return { rows: [{ id: 'e-st', correlation_id: 'e-st', barrio: 'SAN TELMO' }] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.create({
+      id: 'e-st',
+      userId: 'u-1',
+      latitude: -34.6211,
+      longitude: -58.3736,
+      emergencyType: 'PANICO',
+      barrioText: 'Almagro',
+    });
+
+    expect(insertParams[12]).toBe('SAN TELMO');
+  });
+
   it('inserta con outbox en una transacción y hace COMMIT', async () => {
     const client = createClient((sql) => {
       if (sql.includes('INSERT INTO emergencies')) {
@@ -135,9 +226,9 @@ describe('EmergencyRepository.create', () => {
     expect(pool.connect).not.toHaveBeenCalled();
     expect(client.calls.map((c) => c.sql)).not.toContain('BEGIN');
     const insert = client.calls.find((c) => c.sql.includes('INSERT INTO emergencies'));
-    // Sin ubicación no se cifra nada.
+    // Sin ubicación no se cifra nada; barrio queda null (sin coords ni texto de catálogo).
     expect(insert.params[3]).toBeNull();
-    expect(insert.params.slice(8)).toEqual(['EXTERNAL', true, 'EVENTO_PUBLICO', 'ev-1']);
+    expect(insert.params.slice(8)).toEqual(['EXTERNAL', true, 'EVENTO_PUBLICO', 'ev-1', null]);
     expect(created).toMatchObject({ source: 'EXTERNAL', causaTipo: 'EVENTO_PUBLICO', causaId: 'ev-1' });
     expect(client.release).not.toHaveBeenCalled();
   });
@@ -297,6 +388,48 @@ describe('EmergencyRepository lecturas', () => {
   });
 });
 
+describe('EmergencyRepository.backfillBarrios', () => {
+  it('actualiza barrio desde ciphertext descifrable y omite indescifrables', async () => {
+    const decryptLocation = jest.fn((blob) => {
+      if (blob === 'bad') throw new Error('cannot decrypt');
+      return { latitude: -34.5735, longitude: -58.4233 };
+    });
+    const queries = [];
+    const pool = createPool({
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        if (sql.includes('SELECT id, latitude, longitude, location_encrypted')) {
+          return {
+            rows: [
+              { id: 'e-ok', latitude: null, longitude: null, location_encrypted: 'ok' },
+              { id: 'e-bad', latitude: null, longitude: null, location_encrypted: 'bad' },
+            ],
+          };
+        }
+        if (sql.includes('SET barrio =')) {
+          return { rowCount: 1, rows: [{ id: params[0] }] };
+        }
+        throw new Error(`unexpected sql: ${sql}`);
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: { ...fakeCrypto, decryptLocation } });
+
+    const result = await repo.backfillBarrios();
+
+    expect(result).toEqual({ updatedCount: 1, ids: ['e-ok'] });
+    const update = queries.find((q) => q.sql.includes('SET barrio ='));
+    expect(update.params).toEqual(['e-ok', 'PALERMO']);
+  });
+
+  it('sin candidatos devolvé cero', async () => {
+    const pool = createPool({
+      query: async () => ({ rows: [] }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    await expect(repo.backfillBarrios()).resolves.toEqual({ updatedCount: 0, ids: [] });
+  });
+});
+
 describe('EmergencyRepository.anonymizeExpiredLocations', () => {
   it('rechaza retentionHours no positivo', async () => {
     const pool = createPool();
@@ -305,21 +438,49 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
     await expect(repo.anonymizeExpiredLocations('nope')).rejects.toThrow('retentionHours must be a positive number');
   });
 
-  it('anonimiza y devuelve ids afectados', async () => {
+  it('anonimiza, deriva barrio si faltaba y scrubea coords del outbox', async () => {
     const queries = [];
     const pool = createPool({
       query: async (sql, params) => {
         queries.push({ sql, params });
-        return { rowCount: 2, rows: [{ id: 'e-1' }, { id: 'e-2' }] };
+        if (sql.includes('SELECT id, latitude, longitude, location_encrypted, barrio')) {
+          return {
+            rows: [
+              { id: 'e-1', latitude: null, longitude: null, location_encrypted: 'blob', barrio: 'PALERMO' },
+              { id: 'e-2', latitude: null, longitude: null, location_encrypted: 'blob', barrio: null },
+            ],
+          };
+        }
+        if (sql.includes('UPDATE outbox_events')) {
+          return { rowCount: 2, rows: [] };
+        }
+        return { rowCount: 1, rows: [{ id: params[0] }] };
       },
     });
-    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    const decryptLocation = jest.fn(() => ({ latitude: -34.5735, longitude: -58.4233 }));
+    const repo = new EmergencyRepository(pool, {
+      locationCrypto: { ...fakeCrypto, decryptLocation },
+    });
     const result = await repo.anonymizeExpiredLocations(72);
     expect(result).toEqual({ anonymizedCount: 2, ids: ['e-1', 'e-2'] });
     expect(queries[0].sql).toMatch(/closed_at IS NOT NULL/);
     expect(queries[0].sql).toMatch(/closed_at < now\(\)/);
     expect(queries[0].sql).not.toMatch(/created_at </);
     expect(queries[0].params).toEqual([72]);
+    // e-1 ya tenía barrio; e-2 lo deriva antes de borrar la ubicación.
+    expect(queries[1].params).toEqual(['e-1', 'PALERMO']);
+    expect(queries[2].params).toEqual(['e-2', 'PALERMO']);
+    expect(queries[1].sql).toMatch(/COALESCE\(barrio/);
+    const scrub = queries.find((q) => q.sql.includes('UPDATE outbox_events'));
+    expect(scrub.params[0]).toEqual(['e-1', 'e-2']);
+  });
+
+  it('sin candidatos devolvé cero', async () => {
+    const pool = createPool({
+      query: async () => ({ rows: [] }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    await expect(repo.anonymizeExpiredLocations(72)).resolves.toEqual({ anonymizedCount: 0, ids: [] });
   });
 });
 
@@ -587,6 +748,84 @@ describe('EmergencyRepository.updateStatus', () => {
   });
 });
 
+describe('EmergencyRepository.updateStatus: estado de origen, closed_at y oficial asignado', () => {
+  function clientWithCurrent(current) {
+    return createClient((sql, params) => {
+      if (sql.includes('SELECT status, assigned_officer_id')) return { rows: [current] };
+      if (sql.startsWith('UPDATE emergencies')) return { rows: [{ id: 'e-1', status: params[0] }] };
+      if (sql.includes('INSERT INTO emergency_status_history')) {
+        return { rows: [{ id: 1, previous_status: current.status, new_status: params[2] }] };
+      }
+      return { rows: [] };
+    });
+  }
+
+  it('con requireStatus distinto del estado bajo lock responde ConflictError sin tocar la fila', async () => {
+    const client = clientWithCurrent({ status: 'DISPATCHED', assigned_officer_id: 'o-1' });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await expect(repo.updateStatus('e-1', { newStatus: 'VALIDATED', requireStatus: 'PENDING' }))
+      .rejects.toThrow(new ConflictError('Emergency e-1 is DISPATCHED, expected PENDING'));
+
+    expect(client.calls.some((c) => c.sql.startsWith('UPDATE emergencies'))).toBe(false);
+    expect(client.calls.some((c) => c.sql.includes('officers'))).toBe(false);
+    expect(client.calls.some((c) => c.sql === 'ROLLBACK')).toBe(true);
+  });
+
+  it('con requireStatus igual al estado bajo lock aplica la transición', async () => {
+    const client = clientWithCurrent({ status: 'DISPATCHED', assigned_officer_id: 'o-1' });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    const result = await repo.updateStatus('e-1', { newStatus: 'VALIDATED', requireStatus: 'DISPATCHED' });
+
+    expect(result.emergency.status).toBe('VALIDATED');
+    expect(client.calls.some((c) => c.sql === 'COMMIT')).toBe(true);
+  });
+
+  it.each([
+    ['CLOSED', 'RESOLVED'],
+    ['CANCELLED', 'VALIDATED'],
+    ['DISCARDED', 'PENDING'],
+  ])('setea closed_at al pasar a %s (terminal)', async (newStatus, from) => {
+    const client = clientWithCurrent({ status: from, assigned_officer_id: null });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await repo.updateStatus('e-1', { newStatus });
+
+    const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
+    expect(update.sql).toMatch(/closed_at = CASE WHEN \$3::boolean THEN now\(\) ELSE closed_at END/);
+    expect(update.params).toEqual([newStatus, 'e-1', true, []]);
+  });
+
+  it.each([
+    ['VALIDATED', 'PENDING'],
+    ['EN_ROUTE', 'DISPATCHED'],
+    ['RESOLVED', 'ON_SCENE'],
+  ])('no toca closed_at al pasar a %s (no terminal)', async (newStatus, from) => {
+    const client = clientWithCurrent({ status: from, assigned_officer_id: null });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await repo.updateStatus('e-1', { newStatus });
+
+    const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
+    expect(update.params).toEqual([newStatus, 'e-1', false, []]);
+  });
+
+  it('al pasar a VALIDATED limpia assigned_officer_id y libera al oficial en la misma transacción', async () => {
+    const client = clientWithCurrent({ status: 'DISPATCHED', assigned_officer_id: 'o-1' });
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await repo.updateStatus('e-1', { newStatus: 'VALIDATED', requireStatus: 'DISPATCHED' });
+
+    const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
+    expect(update.sql).toMatch(/assigned_officer_id = CASE WHEN \$1 = 'VALIDATED' THEN NULL ELSE assigned_officer_id END/);
+    const release = client.calls.find((c) => c.sql.includes("UPDATE officers SET status = 'disponible'"));
+    expect(release.params).toEqual(['o-1']);
+    const sqls = client.calls.map((c) => c.sql);
+    expect(sqls.indexOf(release.sql)).toBeLessThan(sqls.indexOf('COMMIT'));
+  });
+});
+
 describe('EmergencyRepository.setIncidentId', () => {
   it('lanza NotFoundError si no actualiza ninguna fila', async () => {
     const pool = createPool({ query: async () => ({ rows: [] }) });
@@ -754,12 +993,13 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
     const pool = createPool({
       query: async (sql, params) => {
         expect(sql).toMatch(/FROM emergencies/);
-        expect(params).toEqual(['INCENDIO', since]);
+        expect(params).toEqual([['INCENDIO'], since, ['CLOSED', 'CANCELLED', 'DISCARDED']]);
         return {
           rows: [{
             id: 'e1',
             correlation_id: 'c1',
             user_id: 'u1',
+            emergency_type: 'INCENDIO',
             latitude: null,
             longitude: null,
             location_encrypted: null,
@@ -778,12 +1018,37 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
       id: 'e1',
       correlationId: 'c1',
       userId: 'u1',
+      emergencyType: 'INCENDIO',
       latitude: null,
       longitude: null,
       severity: 'low',
       incidentId: null,
       createdAt: 'c',
     }]);
+  });
+
+  it('con emergencyTypes pide varios tipos en una sola query y excluye los estados terminales', async () => {
+    const since = new Date('2026-01-01T00:00:00.000Z');
+    const query = jest.fn(async () => ({
+      rows: [
+        {
+          id: 'e5', correlation_id: 'c5', user_id: 'u5', emergency_type: 'PANICO', location_encrypted: null, severity: 'high', incident_id: null, created_at: 'c',
+        },
+        {
+          id: 'e6', correlation_id: 'c6', user_id: 'u6', emergency_type: 'MEDICA', location_encrypted: null, severity: 'medium', incident_id: null, created_at: 'c',
+        },
+      ],
+    }));
+    const repo = new EmergencyRepository(createPool({ query }), { locationCrypto: crypto });
+
+    const candidates = await repo.findRecentByType({ emergencyTypes: ['PANICO', 'MEDICA'], since });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/emergency_type = ANY\(\$1::text\[\]\)/);
+    expect(sql).toMatch(/status <> ALL\(\$3::text\[\]\)/);
+    expect(params).toEqual([['PANICO', 'MEDICA'], since, TERMINAL_STATUSES]);
+    expect(candidates.map((c) => [c.id, c.emergencyType])).toEqual([['e5', 'PANICO'], ['e6', 'MEDICA']]);
   });
 
   it('descifra la ubicación cuando hay ciphertext válido', async () => {
