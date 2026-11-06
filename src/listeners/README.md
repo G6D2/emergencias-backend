@@ -75,6 +75,16 @@ marca transitorios: si no consigue conexion, o si ni el `ROLLBACK` anda.
   restart), `listener-supervisor.js` lo reintenta a los 5 s, 30 s, 2 min y
   despues cada 2 min. El estado de cada uno (`running`, `retrying`, ultimo
   fetch al broker) sale en `GET /health`.
+- Arranque sin offset commiteado (grupo nuevo, o que todavia no proceso
+  ningun mensaje): lee el topic desde el principio
+  (`EDA_CONSUMER_FROM_BEGINNING`, default `true`). Con `false` arranca en el
+  final y pierde lo publicado mientras el servicio dormia (Render free lo
+  duerme a los 15 min sin trafico). Con offset commiteado, kafkajs retoma
+  desde ahi y esto no aplica.
+- Piso temporal: `EDA_CONSUMER_SINCE` (ISO 8601 UTC). Los mensajes con
+  timestamp de Kafka anterior se saltean sin decodificarlos y el offset
+  avanza. Sirve para no procesar los eventos de prueba viejos al leer desde el
+  principio. Vacio = sin piso (la dedup por `eventId` cubre los repetidos).
 
 ## Agregar una regla
 

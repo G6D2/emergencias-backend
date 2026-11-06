@@ -1,125 +1,166 @@
 # Eventos de dominio
 
-Para qué sirve: documentar qué eventos publica hoy el módulo (`src/services/emergency-events.js`),
-por qué tópico, cuándo se disparan, y qué tan lejos está el payload actual del envelope que
-pide Analítica (Grupo 8) en `tableros-analitica.md`.
+Para qué sirve: documentar qué eventos publica y consume hoy el módulo, cuándo se disparan,
+por dónde salen y qué garantías de entrega y orden damos.
+
+**Fuente de verdad del contrato (campos, tipos, enums): [`asyncapi.yaml`](../../asyncapi.yaml).**
+Este documento no repite el schema campo por campo; `src/tests/asyncapi.test.js` valida en
+`npm test` que los builders cumplen el spec. El detalle de cada campo y sus defaults también
+está en el README (sección "Contrato de eventos (bus EDA)").
 
 ```mermaid
 flowchart LR
     subgraph triggers["Disparadores"]
         t1["POST /api/panic-button"]
-        t2["PATCH .../validate"]
-        t3["PATCH .../discard"]
-        t4["PATCH .../assign"]
-        t5["PATCH .../cancel"]
-        t6["PATCH .../close"]
-        t7["incident-detection-job<br/>cada 60s, si cambió priority"]:::incident
+        t2["PATCH .../validate · return · discard<br/>assign · cancel · close"]
+        t3["PATCH .../en-route · on-scene · resolve"]
+        t4["incident-detection-job<br/>cada 60s, si cambió priority"]:::internal
     end
 
     subgraph builders["src/services/emergency-events.js"]
-        e1["buildEmergencyCreatedEvent<br/>type: EmergenciaCreada"]
-        e2["buildEmergencyStatusUpdatedEvent<br/>type: EmergenciaEstadoActualizado"]
-        e3["buildEmergencyClosedEvent<br/>type: EmergenciaCerrada"]
-        e4["buildEmergencyPrioritizedEvent<br/>type: EmergenciaPriorizada"]:::incident
+        e1["buildEmergencyCreatedEvent<br/>EmergenciaCreada"]
+        e2["buildEmergencyUpdatedEvent<br/>EmergenciaActualizada"]
+        e3["buildEmergencyPrioritizedEvent<br/>EmergenciaPriorizada (interno)"]:::internal
     end
 
     outbox[("outbox_events<br/>(misma transacción SQL)")]
-    pub["OutboxPublisher<br/>(poll 5000ms, key: null)"]
-    kafka["Kafka<br/>KAFKA_ENABLED=false en prod hoy"]:::planned
-    analitica["Analítica / otros módulos<br/>(previsto, sin consumer hoy)"]:::planned
+    pub["OutboxPublisher<br/>(poll 5s)"]
+    gw["GatewayPublisher<br/>EDA_PUBLISHER_MODE=gateway<br/>POST /api/v1/event-types/{fqn}/events"]
+    kafkaDirect["KafkaService<br/>EDA_PUBLISHER_MODE=kafka (default)<br/>JSON, key: null"]
+    bus["Bus EDA (Grupo 1)<br/>com.citypass.emergencias.*"]
+    consumers["Reclamos · Espacios · Movilidad<br/>Residuos · Analítica"]
+
+    espacios["Espacios Públicos<br/>EventoComunitarioPublicado<br/>EventoCancelado"]
+    listeners["src/listeners/cobertura-preventiva<br/>KAFKA_CONSUMER_ENABLED=true"]
 
     t1 --> e1
     t2 --> e2
     t3 --> e2
-    t4 --> e2
-    t5 --> e2
-    t6 --> e3
-    t7 --> e4
+    t4 --> e3
+    listeners -->|"ProgramarCobertura"| e1
+    listeners -->|"CancelarCobertura"| e2
 
-    e1 -->|"topic: emergencias.boton-panico"| outbox
-    e2 -->|"topic: emergencias.estado-actualizado"| outbox
-    e3 -->|"topic: emergencias.cerrada"| outbox
-    e4 -->|"topic: emergencias.priorizada"| outbox
+    e1 --> outbox
+    e2 --> outbox
+    e3 --> outbox
 
     outbox --> pub
-    pub -.->|"deshabilitado: eventos quedan PENDING"| kafka
-    kafka -.-> analitica
+    pub --> gw
+    pub -.-> kafkaDirect
+    gw -->|"EmergenciaPriorizada → SKIPPED"| bus
+    kafkaDirect -.->|"tópicos viejos (emergencias.*)"| bus
+    bus --> consumers
 
-    classDef planned fill:#f1f3f5,stroke:#adb5bd,color:#495057,stroke-width:1px,stroke-dasharray: 4 3;
-    classDef incident fill:#d3f9d8,stroke:#2f9e44,color:#1b4332,stroke-width:1.5px;
+    espacios --> bus
+    bus -->|"Avro (Confluent) + schema registry"| listeners
+
+    classDef internal fill:#f1f3f5,stroke:#adb5bd,color:#495057,stroke-width:1px,stroke-dasharray: 4 3;
 ```
 
-## Eventos publicados hoy
+## Eventos publicados
 
-| Evento (`type`) | Tópico (env var, default) | Cuándo | Payload resumido (`data`) |
+| Evento | FQN en el bus (modo `gateway`) | Tópico en modo `kafka` (env var → default) | Cuándo |
 |---|---|---|---|
-| `EmergenciaCreada` | `TOPIC_PANIC_BUTTON` → `emergencias.boton-panico` | Al crear una emergencia vía `POST /api/panic-button` | `id, correlationId, userId, description, severity, status, assignedOfficerId, emergencyType, createdAt, updatedAt` |
-| `EmergenciaEstadoActualizado` | `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO` → `emergencias.estado-actualizado` | En `validate`, `discard`, `assign` y `cancel` (los 4 endpoints reusan el mismo evento) | `id, correlationId, previousStatus, newStatus, actor, reason, timestamp` |
-| `EmergenciaCerrada` | `TOPIC_EMERGENCIA_CERRADA` → `emergencias.cerrada` | En `PATCH .../close` | `id, correlationId, actor, closedAt` |
-| `EmergenciaPriorizada` | `TOPIC_EMERGENCIA_PRIORIZADA` → `emergencias.priorizada` | Cada 60s, dentro de `incident-detection-job.js`, **solo si la `priority` del incidente cambió** respecto a la corrida anterior (`IncidentRepository.applyScoringDecision`); se dispara una vez por cada emergencia miembro del incidente | `id, correlationId, incidentId, priorityIndividual, incidentPriority, priority (finalPriority del miembro), score, reasonCodes, algorithmVersion` |
+| `EmergenciaCreada` | `com.citypass.emergencias.EmergenciaCreada` | `TOPIC_PANIC_BUTTON` → `emergencias.boton-panico` | Alta por `POST /api/panic-button`, o cobertura preventiva creada por el listener de `EventoComunitarioPublicado` (`categoria = PREVENTIVA`, `causaTipo = EVENTO_PUBLICO`) |
+| `EmergenciaActualizada` | `com.citypass.emergencias.EmergenciaActualizada` | `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO` → `emergencias.estado-actualizado` | Todo cambio de estado: `validate`, `return`, `discard`, `assign`, `cancel`, `close`, `en-route`, `on-scene`, `resolve`, y la cancelación de una cobertura preventiva por `EventoCancelado` |
+| `EmergenciaPriorizada` (interno) | — (no sale: el `GatewayPublisher` la marca `SKIPPED`) | `TOPIC_EMERGENCIA_PRIORIZADA` → `emergencias.priorizada` | Cada 60s en `incident-detection-job.js`, **solo si cambió la `priority` del incidente** (`IncidentRepository.applyScoringDecision`); un evento por cada emergencia miembro |
 
-Cada evento lleva además, **fuera de `data`**: `type`, `eventId` (`randomUUID()`, generado en
-`insertOutboxEvent`) y `correlationId` (duplicado: está en la raíz **y** dentro de `data`).
+Puntos del contrato (issue #48, cerrado el 2026-11-02) que conviene tener presentes:
 
-**El módulo hoy solo publica: no hay ningún consumer de Kafka en este repo** (`kafka.service.js`
-únicamente crea un `producer`, nunca un `consumer`). Todos los mensajes salen con `key: null`
-(`producer.send({ topic, messages: [{ key: null, value }] })` en `KafkaService.publishEvent`):
-sin partition key, Kafka no puede garantizar orden entre eventos de la misma emergencia si caen
-en particiones distintas. A eso se suma que `OutboxPublisher` reintenta con **backoff
-exponencial** (`markFailed`, hasta `OUTBOX_MAX_ATTEMPTS`) cuando falla un envío: un evento viejo
-que reintenta puede publicarse después que uno más nuevo del mismo `correlationId`. Ningún
-consumidor previsto (Analítica u otro) debería asumir que el orden de llegada coincide con el
-orden de negocio.
+- Los campos viajan **en español** (`emergenciaId`, `categoria`, `prioridad`, `estado`,
+  `estadoAnterior`/`estadoNuevo`, `ciudadanoId`, `usuarioId`...). La base sigue en inglés: la
+  traducción se hace solo al armar el evento (`STATUS_TO_ESTADO`, `SEVERITY_TO_PRIORIDAD`).
+- **No hay `EmergenciaCerrada` ni `EmergenciaDespachada`**: el cierre viaja como
+  `EmergenciaActualizada` con `estadoNuevo = CERRADA`, y la asignación con
+  `estadoNuevo = DESPACHADA` y `asignadoA` = oficial asignado.
+- `descripcion`, `titulo` y `direccion` (texto libre) **nunca** van al bus.
 
-## Brecha contra el contrato de Analítica (`tableros-analitica.md`)
+## Eventos consumidos
 
-Analítica define un envelope común (`metadata.eventId`, `metadata.eventType`,
-`metadata.occurredAt`, `metadata.source`, `metadata.version`, `data.correlationId`). El código
-actual no lo respeta:
+| Evento (Espacios Públicos) | Tópico (env var) | Listener | Qué hace |
+|---|---|---|---|
+| `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` (ej. `com.citypass.espacios.EventoComunitarioPublicado`) | `EventoComunitarioPublicadoListener` | Si `capacidad` (o `cupoMaximo`) ≥ `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea una única emergencia `PREVENTIVA` por `eventoId` → publica `EmergenciaCreada` |
+| `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` (ej. `com.citypass.espacios.EventoCancelado`) | `EventoCanceladoListener` | Cancela las coberturas de ese `eventoId` que sigan en `PENDING`/`VALIDATED` → publica `EmergenciaActualizada` con `estadoNuevo = CANCELADA`. Si ya fue despachada, no la toca |
 
-| Campo esperado | Estado en el código |
-|---|---|
-| `metadata.eventId` | Existe como `eventId`, pero **en la raíz del payload**, no dentro de un objeto `metadata` |
-| `metadata.eventType` | Existe como `type` en la raíz (mismo valor PascalCase-pasado que pide el contrato: `EmergenciaCreada`, etc.), pero fuera de `metadata` |
-| `metadata.occurredAt` | **No existe a nivel evento.** Solo `EmergenciaEstadoActualizado` trae `data.timestamp`; `EmergenciaCreada` y `EmergenciaCerrada` no traen ningún timestamp propio (habría que inferirlo de `createdAt`/`closedAt` dentro de `data`) |
-| `metadata.source` | No existe en ningún evento |
-| `metadata.version` | No existe en ningún evento |
-| `data.correlationId` | Sí existe (además duplicado en la raíz del payload) |
-| `EmergenciaPriorizada` | **Se publica** desde los PRs #36/#39/#41 (ver `01-casos-de-uso.md`, CU-04 implementado), pero solo cuando cambia la `priority` del incidente — no hay un evento por cada corrida del job, y su payload tampoco tiene el envelope `metadata.*` que pide Analítica (mismas brechas que los otros tres eventos) |
-| `EmergenciaDespachada` | No se publica como tipo propio: `assign` reusa `EmergenciaEstadoActualizado` con `reason: "Assigned officer <id>"` en vez de un evento dedicado |
-| Entrega real al bus | `KAFKA_ENABLED=false` en `render.yaml` de producción: ningún evento sale de `outbox_events` hoy, así que Analítica no podría consumir nada aunque el contrato estuviera alineado (ver `05-secuencias.md`, flujo c) |
+Los listeners arrancan solo con `KAFKA_CONSUMER_ENABLED=true` y cada uno necesita su tópico
+seteado. Consumer group `com.citypass.emergencias.<Listener>`, deduplicación por
+`metadata.eventId` en `eventos_procesados`, y los mensajes ilegibles o inválidos se descartan sin
+frenar el tópico. Detalle en [`src/listeners/README.md`](../../src/listeners/README.md).
+
+## Envelope según el modo de publicación
+
+| Modo | Qué se manda | Envelope que ve el consumidor |
+|---|---|---|
+| `EDA_PUBLISHER_MODE=gateway` | Solo `data`, por HTTP al gateway con token OAuth2 client-credentials (`grupo5`) | `{ metadata, data }`: el gateway agrega `metadata` (`eventId`, `eventType`, `source`...) y escribe Avro en formato Confluent |
+| `EDA_PUBLISHER_MODE=kafka` (default) | El payload completo del outbox, JSON, directo al broker | `{ type, eventId, correlationId, data }` (envelope propio, sin `metadata`) |
+
+El modo `kafka` publica en los tópicos viejos (`emergencias.*`) y en JSON, mientras que los demás
+grupos leen Avro de los FQN `com.citypass.*`. Por eso `OUTBOX_PUBLISHER_ENABLED=false` permite
+prender Kafka solo para consumir sin publicar directo en el bus. El contrato que vale para los
+otros módulos es el del modo `gateway`.
+
+Estado de los entornos según `render.yaml`: `KAFKA_ENABLED=false` y sin `EDA_PUBLISHER_MODE`
+(o sea, modo `kafka` deshabilitado). En ese caso `OutboxPublisher` no reclama eventos y quedan
+`PENDING` en `outbox_events`. Al prender el bus, `OUTBOX_PUBLISH_SINCE` descarta como `SKIPPED`
+los `PENDING` viejos (issue #71). `TOPIC_EMERGENCIA_CERRADA`, que sigue en `render.yaml`, ya no
+lo lee ningún código.
+
+## Campos del contrato todavía sin poblar
+
+Viajan con su valor por defecto (`null`) hasta que se cierren los issues correspondientes:
+
+| Campo | Evento | Pendiente de |
+|---|---|---|
+| `barrio`, `ubicacion.barrio` | `EmergenciaCreada` | #76 (resolver barrio desde lat/lng) |
+| `afectaCirculacion` | `EmergenciaCreada` | #76 / #85 (con `false`, Reclamos descarta el evento) |
+| `latitud`, `longitud` | `EmergenciaCreada` | Regla de cuándo mandarlas (Juani con Valentina) |
+| `causaId`, `causaTipo` | `EmergenciaCreada` | Solo los completa hoy la cobertura preventiva; el resto llega con #77 / #79 / #80 |
+| `prioridadOriginal` | `EmergenciaCreada` | #79 / #85 |
+| `areaResponsable` | `EmergenciaActualizada` | #85 |
+| Un evento por recurso despachado | `EmergenciaActualizada` | #85 (hoy sale un único evento con `asignadoA`) |
 
 ## Semántica de orden y entrega
 
-No prometemos orden estricto de entrega — no de los eventos hoy publicados, ni de los eventos pendientes cuando se prende Kafka. Los detalles:
+No prometemos orden estricto de entrega. Los detalles:
 
 | Aspecto | Comportamiento actual | Consecuencia |
 |---|---|---|
-| **Orden de reclamo** | `OutboxPublisher.claimBatch()` corre `SELECT ... ORDER BY created_at FOR UPDATE SKIP LOCKED` (`src/services/outbox-publisher.js:28`) | Dentro de un batch, los más viejos salen primero |
-| **Retries** | Si `publishEvent` falla, `markFailed()` setea `available_at = now() + backoff` (30 s, 60 s, 120 s, … hasta 15 min). El evento vuelve a `PENDING` pero **demorado** | Un evento posterior con `created_at` mayor puede **adelantar** al fallido si el próximo poll (5 s) llega antes que el backoff |
-| **Partition key en Kafka** | `producer.send({ messages: [{ key: null, value }] })` (`src/services/kafka.service.js:91`) | Sin key: Kafka distribuye round-robin entre las particiones del tópico. **Cero ordenamiento cross-partition**, ni siquiera para eventos de la misma emergencia |
-| **Entrega** | Producer con `at-least-once` (default de KafkaJS + outbox transaccional) | Un consumer puede recibir el mismo evento más de una vez si el `markPublished` falla después de que Kafka confirmó |
-| **Prender Kafka con eventos acumulados** | El poll de 5 s reclama el batch más viejo primero. Si alguno falla, el resto del batch sigue publicando y el fallido se demora | La afirmación "salen todos en orden al prender Kafka" es **falsa** en cuanto hay una falla intermedia |
+| **Orden de reclamo** | `OutboxPublisher.claimBatch()` corre `... ORDER BY created_at FOR UPDATE SKIP LOCKED` | Dentro de un batch, los más viejos salen primero |
+| **Retries** | Si la publicación falla, `markFailed()` setea `available_at = now() + backoff` (30 s, 60 s, 120 s… hasta `OUTBOX_MAX_BACKOFF_MS`, 15 min por default; con 429 del gateway respeta `Retry-After`). El evento vuelve a `PENDING` pero **demorado**. Los errores permanentes del gateway (400/403/404/413, 401 tras reintentar) pasan a `FAILED` sin reintento | Un evento posterior puede **adelantar** al fallido si el próximo poll (5 s) llega antes que el backoff |
+| **Partition key** | Modo `kafka`: `producer.send({ messages: [{ key: null, value }] })` en `KafkaService.publishEvent`. Modo `gateway`: la key la decide el gateway | En modo `kafka`, cero ordenamiento entre particiones, ni siquiera para la misma emergencia. En modo `gateway` no hay garantía documentada por nuestro lado |
+| **Entrega** | Outbox transaccional + reintentos = **at-least-once** | Un consumidor puede recibir el mismo evento más de una vez (si `markPublished` falla después de que el bus confirmó). Deduplicar por `metadata.eventId`, como hace nuestro `OutcomeFactory` |
+| **Prender el bus con eventos acumulados** | El poll reclama el batch más viejo primero. Si alguno falla, el resto sigue y el fallido se demora | "Salen todos en orden al prender el bus" es **falso** en cuanto hay una falla intermedia |
 
-### Qué habría que hacer si un consumer necesitase orden
+### Qué habría que hacer si un consumidor necesitase orden
 
-- **Ordenamiento por emergencia:** setear `key = emergencyId` en `kafka.service.js` → Kafka garantiza orden dentro de la partición para una misma key. **No implementado.**
-- **Ordenamiento estricto global:** un solo tópico con una sola partición y sin retries paralelos. Descarta throughput. **No aplica al diseño del gateway del Grupo 1.**
-- **Ordenamiento por `correlationId`:** similar a `key = emergencyId` pero agrupa por cadena de eventos. **No implementado.**
+- **Orden por emergencia:** usar `key = emergenciaId` (en `KafkaService`, o pedirle al gateway
+  que particione por esa key). **No implementado.**
+- **Orden por `correlationId`:** igual que lo anterior, agrupando por cadena de eventos.
+  **No implementado.**
+- **Orden estricto global:** un tópico con una sola partición y sin retries paralelos. Descarta
+  throughput. **No aplica al diseño del gateway del Grupo 1.**
 
-Mientras ningún consumidor exija orden, el diseño actual está bien. Cuando aparezca alguno que lo necesite (Analítica podría), se decide `key` de tópico y se documenta en la ADR-005.
+Mientras ningún consumidor exija orden, el diseño actual alcanza. Si alguno lo necesita, se
+define la key y se documenta en la ADR correspondiente. Mientras tanto, los consumidores pueden
+reordenar con `updatedAt` / `createdAt` del propio `data`.
 
 ### Respuesta canónica para la presentación
 
-Si preguntan "¿los eventos salen en orden cuando prende Kafka?": **no garantizamos orden estricto**. El outbox reclama por `created_at`, pero un fallo con retry deja al evento demorado mientras otros posteriores salen antes. Aparte, se publica con `key: null`, así que Kafka distribuye entre particiones sin ordenamiento cross-partition. Si algún consumer futuro necesita orden, se implementa `key = emergencyId` o `key = correlationId`.
+Si preguntan "¿los eventos salen en orden?": **no garantizamos orden estricto**. El outbox reclama
+por `created_at`, pero un fallo con retry deja ese evento demorado mientras otros posteriores salen
+antes, y no publicamos con partition key. La entrega es at-least-once: los consumidores deduplican
+por `eventId`. Si un consumidor necesita orden, se publica con `key = emergenciaId`.
 
 ## Fuente en el código
 
-- `src/services/emergency-events.js` (builders de los 4 eventos, incluido `buildEmergencyPrioritizedEvent`)
-- `src/repositories/emergency.repository.js` (`insertOutboxEvent` — genera `eventId`, arma el `INSERT` a `outbox_events`)
-- `src/repositories/incident.repository.js` (`applyScoringDecision` — decide si notifica comparando `previousPriority` vs `priority`)
-- `src/services/incident-detection-job.js` (dispara la decisión cada 60s)
-- `src/services/outbox-publisher.js`, `src/services/kafka.service.js` (`publishEvent` — `key: null`, sin consumer)
-- `src/controllers/panic-button.controller.js`, `src/controllers/emergency.controller.js` (tópicos vía `process.env.TOPIC_*`)
-- `render.yaml` (`KAFKA_ENABLED`, `TOPIC_PANIC_BUTTON`, `TOPIC_EMERGENCIA_CERRADA`); `.env.example` trae además `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO` y `TOPIC_EMERGENCIA_PRIORIZADA`, que en producción no están seteadas y caen al default hardcodeado en cada builder
-- Documento de producto: `tableros-analitica.md` (sección 1.2 y 3), `Emergencias - Roadmap y Historias de Usuario.md` (contrato de eventos del bus)
+- `asyncapi.yaml` (spec AsyncAPI del contrato vigente, validado contra los builders en `src/tests/asyncapi.test.js`)
+- `src/services/emergency-events.js` (builders y tablas de traducción `STATUS_TO_ESTADO` / `SEVERITY_TO_PRIORIDAD`)
+- `src/repositories/emergency.repository.js` (`insertOutboxEvent`: genera `eventId` y hace el `INSERT` en `outbox_events`, en la misma transacción que el cambio de negocio)
+- `src/repositories/incident.repository.js` (`applyScoringDecision`: decide si emite `EmergenciaPriorizada`)
+- `src/controllers/panic-button.controller.js`, `src/controllers/emergency.controller.js` (disparadores HTTP)
+- `src/services/outbox-publisher.js` (poll, reintentos, `SKIPPED`/`FAILED`, `OUTBOX_PUBLISH_SINCE`, `OUTBOX_PUBLISHER_ENABLED`)
+- `src/services/gateway-publisher.js` (modo `gateway`: `PUBLISHED_TYPES`, clasificación de errores HTTP)
+- `src/services/kafka.service.js` (modo `kafka`: `key: null`, SASL OAUTHBEARER)
+- `src/listeners/` (consumo: decoder Avro/JSON, reglas, `OutcomeFactory` con deduplicación)
+- `src/index.js` (elección del publisher según `EDA_PUBLISHER_MODE`, arranque de listeners)
+- `render.yaml`, `.env.example` (variables de entorno)

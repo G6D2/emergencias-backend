@@ -37,6 +37,8 @@ class ProgramarCoberturaPreventivaRule extends BusinessRule {
         latitud: typeof data.latitud === 'number' ? data.latitud : null,
         longitud: typeof data.longitud === 'number' ? data.longitud : null,
         direccion: typeof data.direccion === 'string' ? data.direccion : null,
+        // Texto libre del evento: solo se usa si no hay coords y matchea el catálogo.
+        barrio: typeof data.barrio === 'string' ? data.barrio : null,
         capacidad: this.capacidad(data),
         correlationId: typeof data.correlationId === 'string' ? data.correlationId : null,
       },
