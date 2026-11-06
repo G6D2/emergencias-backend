@@ -113,6 +113,8 @@ async function start() {
     secureLog('info', `Swagger UI: http://localhost:${PORT}/api-docs`);
     if (auth.mode === 'local') {
       secureLog('info', `Auth LOCAL — POST http://localhost:${PORT}/auth/login | /auth/register | /auth/dev/login`);
+    } else if (auth.mode === 'hybrid') {
+      secureLog('info', `Auth HYBRID — Login Federado (${auth.config.federated.issuer}) + local (${auth.config.local.issuer}): /auth/login | /auth/register | /auth/dev/login`);
     } else {
       secureLog('info', `Auth IdP (${auth.config.issuer})`);
     }

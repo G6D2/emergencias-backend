@@ -9,7 +9,7 @@ const { AuthController } = require('../controllers/auth.controller');
 const { resolveDevLoginClaims } = require('../auth/dev-login-policy');
 
 /**
- * Rutas de auth local (AUTH_MODE=local).
+ * Rutas de auth local (AUTH_MODE=local o hybrid).
  * - /auth/dev/login: emite JWT inventando sub (tests / atajos).
  * - /auth/register + /auth/login: usuarios reales en auth_users.
  */
@@ -24,7 +24,7 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
    * /auth/dev/login:
    *   post:
    *     tags: [Dev Auth]
-   *     summary: "[Solo AUTH_MODE=local] Obtener access token de desarrollo"
+   *     summary: "[AUTH_MODE=local o hybrid] Obtener access token de desarrollo"
    *     description: |
    *       Emite un JWT con la misma forma que CityPass+ para probar la API sin IdP.
    *       En production (ALLOW_LOCAL_AUTH) solo acepta sujetos de la allowlist demo.
@@ -55,7 +55,7 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      * /auth/register:
      *   post:
      *     tags: [Dev Auth]
-     *     summary: "[AUTH_MODE=local] Registro email+password"
+     *     summary: "[AUTH_MODE=local o hybrid] Registro email+password"
      *     requestBody:
      *       required: true
      *       content:
@@ -85,7 +85,7 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
      * /auth/login:
      *   post:
      *     tags: [Dev Auth]
-     *     summary: "[AUTH_MODE=local] Login email+password"
+     *     summary: "[AUTH_MODE=local o hybrid] Login email+password"
      *     requestBody:
      *       required: true
      *       content:

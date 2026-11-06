@@ -38,6 +38,33 @@ describe('authorize', () => {
       requireCitizen(req, {}, next);
       expect(next).toHaveBeenCalledWith(expect.any(UnauthorizedError));
     });
+
+    it('passes with the group in another case or with surrounding spaces', () => {
+      const next = jest.fn();
+      requireCitizen({ user: { sub: 'U1', groups: [' Citizen '] } }, {}, next);
+      expect(next).toHaveBeenCalledWith();
+    });
+  });
+
+  describe('userHasGroup', () => {
+    it('ignores case on both sides', () => {
+      expect(userHasGroup({ groups: ['DISPATCHER'] }, 'dispatcher')).toBe(true);
+      expect(userHasGroup({ groups: ['dispatcher'] }, 'Dispatcher')).toBe(true);
+    });
+
+    it('skips non-string groups', () => {
+      expect(userHasGroup({ groups: [null, 42, { name: 'dispatcher' }] }, 'dispatcher')).toBe(false);
+    });
+
+    it('never matches an empty or non-string group', () => {
+      expect(userHasGroup({ groups: ['', null] }, '')).toBe(false);
+      expect(userHasGroup({ groups: [null] }, null)).toBe(false);
+    });
+
+    it('returns false without a groups array', () => {
+      expect(userHasGroup({ groups: 'dispatcher' }, 'dispatcher')).toBe(false);
+      expect(userHasGroup(null, 'dispatcher')).toBe(false);
+    });
   });
 
   describe('canViewEmergency', () => {
