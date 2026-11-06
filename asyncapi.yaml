@@ -242,6 +242,12 @@ components:
               areaResponsable: null
               resolucion: null
               prioridad: CRITICA
+              causasRelacionadas: []
+              barrio: null
+              ubicacion:
+                barrio: null
+                latitud: null
+                longitud: null
               correlationId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
 
     EmergenciaPriorizada:
@@ -419,6 +425,9 @@ components:
         - areaResponsable
         - resolucion
         - prioridad
+        - causasRelacionadas
+        - barrio
+        - ubicacion
         - correlationId
       properties:
         emergenciaId:
@@ -453,6 +462,28 @@ components:
           oneOf:
             - $ref: '#/components/schemas/Prioridad'
             - type: 'null'
+        causasRelacionadas:
+          type: array
+          default: []
+          items:
+            type: string
+            enum: [VIA, ESPACIO_PUBLICO, RESIDUOS]
+        barrio:
+          type: [string, 'null']
+          description: Barrio del catálogo oficial de CABA (48), en claro.
+        ubicacion:
+          type: object
+          additionalProperties: false
+          required: [barrio, latitud, longitud]
+          properties:
+            barrio:
+              type: [string, 'null']
+            latitud:
+              type: [string, 'null']
+              description: Ciphertext AES-256-GCM con la clave de bus. Null sin clave de bus.
+            longitud:
+              type: [string, 'null']
+              description: Ciphertext AES-256-GCM con la clave de bus. Null sin clave de bus.
         correlationId:
           type: string
 

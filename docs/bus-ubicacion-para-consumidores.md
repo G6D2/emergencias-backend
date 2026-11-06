@@ -1,6 +1,6 @@
 # Guía de ubicación en eventos de Emergencias (CityPass+)
 
-Documento **autocontenido** para equipos que consumen `EmergenciaCreada` del bus (Reclamos, Analítica, Espacios, Movilidad, Residuos, etc.). No hace falta clonar el repo de Emergencias para usarlo.
+Documento **autocontenido** para equipos que consumen `EmergenciaCreada` y `EmergenciaActualizada` del bus (Reclamos, Analítica, Espacios, Movilidad, Residuos, etc.). No hace falta clonar el repo de Emergencias para usarlo.
 
 ---
 
@@ -9,7 +9,7 @@ Documento **autocontenido** para equipos que consumen `EmergenciaCreada` del bus
 | Dato | Dónde viene | Forma |
 |------|-------------|--------|
 | Barrio | `data.barrio` **y** `data.ubicacion.barrio` (mismo valor) | Texto en claro (catálogo oficial CABA, 48 barrios) |
-| Latitud / longitud | **Solo** `data.ubicacion.latitud` y `data.ubicacion.longitud` | String base64 cifrado (AES-256-GCM) |
+| Latitud / longitud | **Solo** `data.ubicacion.latitud` y `data.ubicacion.longitud`, en ambos eventos | String base64 cifrado (AES-256-GCM) |
 
 No hay `latitud` / `longitud` en la raíz de `data`.
 

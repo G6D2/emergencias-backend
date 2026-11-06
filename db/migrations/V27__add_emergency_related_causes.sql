@@ -1,0 +1,2 @@
+ALTER TABLE emergencies
+  ADD COLUMN IF NOT EXISTS causas_relacionadas TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

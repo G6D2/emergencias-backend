@@ -16,9 +16,7 @@ const { scrubFreeText } = require('../security/pii-scrub');
 const { secureLog } = require('../security/secure-log');
 const { assertUuid } = require('../utils/uuid');
 
-// El motivo de cancelar, devolver o descartar queda en el historial y viaja
-// en el outbox como `resolucion`: se sanea igual que description (PII
-// redactada y recorte a 280 caracteres). Un valor que no sea string es 400.
+const RELATED_CAUSES = new Set(['VIA', 'ESPACIO_PUBLICO', 'RESIDUOS']);
 const MAX_REASON_LENGTH = 280;
 
 function normalizeReason(reason) {
@@ -29,9 +27,6 @@ function normalizeReason(reason) {
   return scrubFreeText(reason, { maxLength: MAX_REASON_LENGTH }) || null;
 }
 
-// Fecha ISO 8601 para from/to: 2026-11-05, 2026-11-05T10:00 o con segundos,
-// fracción y offset (Z, -03:00). Date.parse solo no alcanza: acepta "1" o
-// "Nov 5", y corre el 30 de febrero al 2 de marzo, que Postgres rechaza (500).
 const ISO_DATE_RE = /^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 
 function parseDateFilter(name, value) {
@@ -44,9 +39,7 @@ function parseDateFilter(name, value) {
   return value;
 }
 
-// incident/effectivePriority son información operativa (a qué incidente fue
-// agrupada la emergencia, con qué prioridad): un citizen no la ve ni en el
-// listado ni en el detalle, aunque sean sus propias emergencias.
+// Citizens should not receive incident aggregation and effective priority details.
 // eslint-disable-next-line no-unused-vars
 function withoutOperationalFields({ incident, effectivePriority, ...rest }) {
   return rest;
@@ -421,7 +414,7 @@ class EmergencyController {
    *   (requireAssignedOfficerId), por si el dispatcher devolvió y reasignó
    *   entre la lectura y el UPDATE.
    */
-  async advanceOperationalStatus(id, newStatus, user) {
+  async advanceOperationalStatus(id, newStatus, user, { causasRelacionadas = [] } = {}) {
     assertUuid(id);
 
     const actor = user.sub;
@@ -432,9 +425,15 @@ class EmergencyController {
 
     assertTransition(emergency.status, newStatus);
 
+    if (!Array.isArray(causasRelacionadas)
+      || causasRelacionadas.some((cause) => !RELATED_CAUSES.has(cause))) {
+      throw new ValidationError('causasRelacionadas must be an array containing only VIA, ESPACIO_PUBLICO, or RESIDUOS');
+    }
+
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus,
       actor,
+      ...(newStatus === 'RESOLVED' ? { causasRelacionadas } : {}),
       requireAssignedOfficerId: actor,
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',
@@ -460,8 +459,8 @@ class EmergencyController {
     return this.advanceOperationalStatus(id, 'ON_SCENE', user);
   }
 
-  async markResolved(id, user) {
-    return this.advanceOperationalStatus(id, 'RESOLVED', user);
+  async markResolved(id, user, options = {}) {
+    return this.advanceOperationalStatus(id, 'RESOLVED', user, options);
   }
 }
 

@@ -103,6 +103,12 @@ const options = {
               enum: [...EMERGENCY_STATUSES],
               example: 'PENDING',
             },
+            causasRelacionadas: {
+              type: 'array',
+              items: { type: 'string', enum: ['VIA', 'ESPACIO_PUBLICO', 'RESIDUOS'] },
+              default: [],
+              description: 'Causas declaradas por el oficial al resolver la emergencia.',
+            },
             assignedOfficerId: {
               type: 'string',
               nullable: true,

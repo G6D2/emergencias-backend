@@ -177,6 +177,8 @@ describe('emergency-events', () => {
         correlationId: 'c-9120',
         severity: 'high',
         assignedOfficerId: 'OFF-123',
+        latitude: -34.6037,
+        longitude: -58.3816,
         updatedAt: '2026-11-02T23:10:00.000Z',
       },
       history: { previousStatus: 'VALIDATED', newStatus: 'DISPATCHED' },
@@ -225,6 +227,36 @@ describe('emergency-events', () => {
         history: { previousStatus: 'PENDING', newStatus: 'VALIDATED' },
       });
       expect(noResuelto.data.resueltoAt).toBeNull();
+    });
+
+    it('incluye causas y ubicación cifrada con valores por defecto compatibles con el contrato', () => {
+      const event = buildEmergencyUpdatedEvent(baseArgs, { busCrypto: null });
+      expect(event.data.causasRelacionadas).toEqual([]);
+      expect(event.data.barrio).toBeNull();
+      expect(event.data.ubicacion).toEqual({
+        barrio: null,
+        latitud: null,
+        longitud: null,
+      });
+
+      const busCrypto = createBusLocationCrypto({ keys: { test: BUS_TEST_KEY }, activeKeyId: 'test' });
+      const resolved = buildEmergencyUpdatedEvent({
+        ...baseArgs,
+        emergency: { ...baseArgs.emergency, causasRelacionadas: ['RESIDUOS'] },
+        history: { previousStatus: 'ON_SCENE', newStatus: 'RESOLVED' },
+      }, { busCrypto });
+      expect(resolved.data.causasRelacionadas).toEqual(['RESIDUOS']);
+      expect(resolved.data.ubicacion.barrio).toBeNull();
+      expect(busCrypto.decryptCoordinate(resolved.data.ubicacion.latitud, {
+        emergencyId: baseArgs.emergency.id,
+        field: 'latitud',
+      })).toBeCloseTo(-34.6037);
+      expect(busCrypto.decryptCoordinate(resolved.data.ubicacion.longitud, {
+        emergencyId: baseArgs.emergency.id,
+        field: 'longitud',
+      })).toBeCloseTo(-58.3816);
+      expect(resolved.data.latitud).toBeUndefined();
+      expect(resolved.data.longitud).toBeUndefined();
     });
 
     it('no publica los nombres viejos', () => {

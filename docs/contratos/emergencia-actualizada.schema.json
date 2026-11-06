@@ -28,6 +28,9 @@
         "areaResponsable",
         "resolucion",
         "prioridad",
+        "causasRelacionadas",
+        "barrio",
+        "ubicacion",
         "correlationId"
       ],
       "properties": {
@@ -57,6 +60,30 @@
         },
         "prioridad": {
           "enum": ["BAJA", "MEDIA", "ALTA", "CRITICA", null]
+        },
+        "causasRelacionadas": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["VIA", "ESPACIO_PUBLICO", "RESIDUOS"] },
+          "default": []
+        },
+        "barrio": { "type": ["string", "null"] },
+        "ubicacion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["barrio", "latitud", "longitud"],
+          "properties": {
+            "barrio": { "type": ["string", "null"] },
+            "latitud": {
+              "description": "Ciphertext AES-256-GCM con BUS_LOCATION_ENCRYPTION_KEY; null si no hay clave/coordenadas.",
+              "type": ["string", "null"],
+              "default": null
+            },
+            "longitud": {
+              "description": "Ciphertext AES-256-GCM con BUS_LOCATION_ENCRYPTION_KEY; null si no hay clave/coordenadas.",
+              "type": ["string", "null"],
+              "default": null
+            }
+          }
         },
         "correlationId": { "$ref": "#/definitions/correlationId" }
       },

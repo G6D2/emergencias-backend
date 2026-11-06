@@ -31,6 +31,9 @@ function createMockRepository(initial = {}) {
     userId: 'U1',
     status: 'DISPATCHED',
     assignedOfficerId: 'of-001',
+    latitude: -34.6037,
+    longitude: -58.3816,
+    causasRelacionadas: [],
     ...initial,
   });
   const updateCalls = [];
@@ -46,7 +49,13 @@ function createMockRepository(initial = {}) {
         && current.assignedOfficerId !== options.requireAssignedOfficerId) {
         throw new NotFoundError(`Emergency with ID ${id} not found`);
       }
-      const updated = { ...current, status: options.newStatus };
+      const updated = {
+        ...current,
+        status: options.newStatus,
+        ...(options.newStatus === 'RESOLVED'
+          ? { causasRelacionadas: options.causasRelacionadas || [] }
+          : {}),
+      };
       emergencies.set(id, updated);
       return {
         emergency: updated,
@@ -120,6 +129,34 @@ describe('PATCH acciones de estado operativo del oficial', () => {
     expect(resolved.body.data.status).toBe('RESOLVED');
 
     expect(repository.updateCalls.map((c) => c.newStatus)).toEqual(['EN_ROUTE', 'ON_SCENE', 'RESOLVED']);
+  });
+
+  it('recibe y persiste las causas al resolver', async () => {
+    const repository = createMockRepository({ status: 'ON_SCENE' });
+    const app = buildApp(repository);
+
+    const resolved = await request(app)
+      .patch(`/api/emergencies/${EMERGENCY_ID}/resolve`)
+      .send({ causasRelacionadas: ['RESIDUOS'] })
+      .expect(200);
+
+    expect(resolved.body.data.causasRelacionadas).toEqual(['RESIDUOS']);
+    expect(repository.updateCalls[0]).toMatchObject({
+      newStatus: 'RESOLVED',
+      causasRelacionadas: ['RESIDUOS'],
+    });
+  });
+
+  it('rechaza causas desconocidas sin cambiar el estado', async () => {
+    const repository = createMockRepository({ status: 'ON_SCENE' });
+
+    const response = await request(buildApp(repository))
+      .patch(`/api/emergencies/${EMERGENCY_ID}/resolve`)
+      .send({ causasRelacionadas: ['OTRA'] })
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
+    expect(repository.updateStatus).not.toHaveBeenCalled();
   });
 
   it('registra al oficial como actor y lo pasa al lock del repositorio', async () => {

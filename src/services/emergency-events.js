@@ -109,9 +109,13 @@ function buildEmergencyCreatedEvent(emergency, eventId, options = {}) {
   };
 }
 
-function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId }) {
+function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId }, options = {}) {
   const correlationId = emergency.correlationId || emergency.id;
   const estadoNuevo = toEstado(history.newStatus);
+  const busCrypto = options.busCrypto !== undefined
+    ? options.busCrypto
+    : getBusLocationCrypto();
+  const encrypted = encryptBusCoords(emergency, busCrypto);
   return {
     type: 'EmergenciaActualizada',
     eventId,
@@ -127,6 +131,13 @@ function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId
       areaResponsable: null,
       resolucion: reason ?? null,
       prioridad: toPrioridad(emergency.severity),
+      causasRelacionadas: emergency.causasRelacionadas ?? [],
+      barrio: emergency.barrio ?? null,
+      ubicacion: {
+        barrio: emergency.barrio ?? null,
+        latitud: encrypted.latitud,
+        longitud: encrypted.longitud,
+      },
       correlationId,
     },
   };

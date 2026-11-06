@@ -4,6 +4,7 @@ const { createApp } = require('../app');
 const { getPool, closePool } = require('../db/pool');
 const { EmergencyRepository } = require('../repositories/emergency.repository');
 const { NotFoundError } = require('../errors/app-errors');
+const { createBusLocationCrypto, setBusLocationCryptoForTests } = require('../security/bus-location-crypto');
 
 const mockKafkaService = {
   publishEvent: async () => {},
@@ -13,6 +14,7 @@ const mockKafkaService = {
 
 const OFFICER = { sub: 'of-001', groups: ['officer'] };
 const OTHER_OFFICER = { sub: 'of-002', groups: ['officer'] };
+const BUS_TEST_KEY = Buffer.alloc(32, 9).toString('base64');
 
 describe('Estado operativo del oficial (integración contra Postgres real)', () => {
   let pool;
@@ -44,6 +46,10 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
   beforeAll(() => {
     process.env.LOCATION_ENCRYPTION_KEY = process.env.LOCATION_ENCRYPTION_KEY
       || 'flxqyJtbe6+mibyHqK76N6LSnFe0w22hnyDZg9KWIcs=';
+    setBusLocationCryptoForTests(createBusLocationCrypto({
+      keys: { test: BUS_TEST_KEY },
+      activeKeyId: 'test',
+    }));
     pool = getPool();
     repository = new EmergencyRepository(pool);
   });
@@ -57,16 +63,17 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     // Las suites de integración comparten base: lo que crea esta suite no debe
     // alterar el agrupamiento de incidentes de las otras.
     await pool.query('DELETE FROM emergency_status_history WHERE emergency_id = ANY($1::uuid[])', [createdIds]);
-    // El contrato del #48 identifica la emergencia en data.emergenciaId
-    // (EmergenciaCreada y EmergenciaActualizada); data.id queda solo en
-    // EmergenciaPriorizada.
+    // Los eventos de emergencia usan data.emergenciaId; EmergenciaPriorizada
+    // conserva data.id.
     await pool.query(
-      "DELETE FROM outbox_events WHERE COALESCE(payload->'data'->>'emergenciaId', payload->'data'->>'id') = ANY($1::text[])",
+      `DELETE FROM outbox_events
+       WHERE COALESCE(payload->'data'->>'emergenciaId', payload->'data'->>'id') = ANY($1::text[])`,
       [createdIds]
     );
     await pool.query('DELETE FROM emergencies WHERE id = ANY($1::uuid[])', [createdIds]);
     await pool.query("UPDATE officers SET status = 'disponible' WHERE id IN ('of-001', 'of-002')");
     await closePool();
+    setBusLocationCryptoForTests(undefined);
   });
 
   it('recorre el flujo completo y deja historial con el oficial como actor', async () => {
@@ -107,6 +114,49 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     expect(outbox.rows.map((r) => r.payload.data.estadoNuevo)).toEqual(['EN_CAMINO', 'EN_LUGAR']);
     expect(outbox.rows.every((r) => r.topic === 'emergencias.estado-actualizado')).toBe(true);
     expect(outbox.rows[0].payload.data).toMatchObject({ estadoAnterior: 'DESPACHADA', usuarioId: 'of-001' });
+  });
+
+  it('publica causas y coordenadas al resolver y conserva las causas al cerrar', async () => {
+    const id = await createDispatched();
+    const officerApp = appAs(OFFICER);
+
+    await request(officerApp).patch(`/api/emergencies/${id}/en-route`).expect(200);
+    await request(officerApp).patch(`/api/emergencies/${id}/on-scene`).expect(200);
+    await request(officerApp)
+      .patch(`/api/emergencies/${id}/resolve`)
+      .send({ causasRelacionadas: ['RESIDUOS'] })
+      .expect(200);
+
+    const dispatcherApp = appAs({ sub: 'dispatcher-1', groups: ['dispatcher'] });
+    await request(dispatcherApp).patch(`/api/emergencies/${id}/close`).expect(200);
+
+    const events = await pool.query(
+      `SELECT payload->'data' AS data
+       FROM outbox_events
+       WHERE payload->>'type' = 'EmergenciaActualizada'
+         AND payload->'data'->>'emergenciaId' = $1
+         AND payload->'data'->>'estadoNuevo' IN ('RESUELTA', 'CERRADA')
+       ORDER BY created_at`,
+      [id]
+    );
+
+    expect(events.rows).toHaveLength(2);
+    expect(events.rows[0].data).toMatchObject({
+      estadoNuevo: 'RESUELTA',
+      causasRelacionadas: ['RESIDUOS'],
+      ubicacion: {
+        latitud: expect.any(String),
+        longitud: expect.any(String),
+      },
+    });
+    expect(events.rows[1].data).toMatchObject({
+      estadoNuevo: 'CERRADA',
+      causasRelacionadas: ['RESIDUOS'],
+      ubicacion: {
+        latitud: expect.any(String),
+        longitud: expect.any(String),
+      },
+    });
   });
 
   it('otro oficial recibe 404 y la emergencia queda intacta', async () => {

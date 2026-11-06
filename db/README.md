@@ -40,6 +40,8 @@ Las filas `PUBLISHED` se purgan después de `OUTBOX_PUBLISHED_RETENTION_HOURS`
   (ej. cancelar solo desde `PENDING` o `VALIDATED`).
   V1 dejó el `DEFAULT` en `'CREATED'` (valor histórico, ya no forma parte del
   vocabulario de estados); V5 lo cambia al vigente, `'PENDING'`.
+- **`causas_relacionadas` TEXT[] NOT NULL**: causas declaradas por el oficial
+  al resolver; el evento de actualización las publica y conserva al cerrar.
 - **`actor`/`reason` nullable** en el historial: Auth pendiente; no todo cambio tiene motivo.
 
 ## Tablas
