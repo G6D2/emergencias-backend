@@ -103,12 +103,16 @@ describe('AUTH_MODE=hybrid', () => {
 
     it('acepta aud como lista con otras audiences adentro', async () => {
       const token = await ctx.federatedToken({ aud: ['citypass', 'citypass-emergencias-api'] });
-      await me(ctx.app, token).expect(200);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(200);
+      expect(res.body.data.authSource).toBe('federated');
     });
 
     it('acepta aud como string', async () => {
       const token = await ctx.federatedToken({ aud: 'citypass-emergencias-api' });
-      await me(ctx.app, token).expect(200);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(200);
+      expect(res.body.data.authSource).toBe('federated');
     });
 
     it.each([
@@ -197,7 +201,9 @@ describe('AUTH_MODE=hybrid', () => {
 
     it('acepta un token sin token_use ni ver (opcionales por default)', async () => {
       const token = await ctx.federatedToken({ token_use: undefined, ver: undefined });
-      await me(ctx.app, token).expect(200);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(200);
+      expect(res.body.data.authSource).toBe('federated');
     });
 
     it('rechaza un token de servicio del mismo IdP', async () => {
@@ -215,12 +221,16 @@ describe('AUTH_MODE=hybrid', () => {
     it('rechaza un token vencido', async () => {
       const now = Math.floor(Date.now() / 1000);
       const token = await ctx.federatedToken({ iat: now - 3600, exp: now - 1800 });
-      await me(ctx.app, token).expect(401);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('Invalid or expired token');
     });
 
     it('rechaza un token sin exp', async () => {
       const token = await ctx.federatedToken({ exp: undefined });
-      await me(ctx.app, token).expect(401);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('Invalid or expired token');
     });
 
     it('rechaza un sub vacío', async () => {
@@ -232,7 +242,9 @@ describe('AUTH_MODE=hybrid', () => {
     it('rechaza la firma de una clave que no está en el JWKS federado', async () => {
       const other = await createFakeFederatedIdp();
       const token = await other.sign({ groups: ['dispatcher'] });
-      await me(ctx.app, token).expect(401);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('Invalid or expired token');
     });
   });
 
@@ -325,7 +337,9 @@ describe('AUTH_MODE=hybrid', () => {
         iat: now,
         exp: now + 900,
       });
-      await me(ctx.app, token).expect(401);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('Invalid or expired token');
     });
 
     it('sigue exigiendo aud como lista', async () => {
@@ -356,12 +370,16 @@ describe('AUTH_MODE=hybrid', () => {
         iat: now,
         exp: now + 900,
       });
-      await me(ctx.app, token).expect(401);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('Invalid or expired token');
     });
 
     it('un token firmado por el IdP federado que dice ser local da 401', async () => {
       const token = await ctx.federatedToken({ iss: ctx.localConfig.issuer, groups: ['dispatcher'] });
-      await me(ctx.app, token).expect(401);
+      const res = await me(ctx.app, token);
+      expect(res.status).toBe(401);
+      expect(res.body.message).toBe('Invalid or expired token');
     });
   });
 
@@ -389,9 +407,13 @@ describe('AUTH_MODE=hybrid con claims configurados', () => {
   it('IDP_REQUIRE_TOKEN_USE / IDP_REQUIRE_TOKEN_VER los vuelven obligatorios', async () => {
     const ctx = await buildApp({ IDP_REQUIRE_TOKEN_USE: 'true', IDP_REQUIRE_TOKEN_VER: 'true' });
 
-    await me(ctx.app, await ctx.federatedToken({ token_use: undefined })).expect(401);
-    await me(ctx.app, await ctx.federatedToken({ ver: undefined })).expect(401);
-    await me(ctx.app, await ctx.federatedToken()).expect(200);
+    const withoutTokenUse = await me(ctx.app, await ctx.federatedToken({ token_use: undefined }));
+    const withoutVer = await me(ctx.app, await ctx.federatedToken({ ver: undefined }));
+    const complete = await me(ctx.app, await ctx.federatedToken());
+
+    expect(withoutTokenUse.status).toBe(401);
+    expect(withoutVer.status).toBe(401);
+    expect(complete.status).toBe(200);
   });
 
   it('IDP_SUBJECT_CLAIM e IDP_GROUPS_CLAIM leen otros claims', async () => {

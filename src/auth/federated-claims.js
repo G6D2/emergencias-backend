@@ -123,7 +123,7 @@ function mapFederatedGroups(idpGroups, groupMap) {
  * El sub original queda en `idpSub` para logs y para GET /api/user.
  */
 function applySubAlias(user, aliases) {
-  if (!user || user.authSource !== 'federated' || !aliases || aliases.size === 0) {
+  if (user?.authSource !== 'federated' || !aliases?.size) {
     return user;
   }
   const internalId = aliases.get(user.idpSub ?? user.sub);

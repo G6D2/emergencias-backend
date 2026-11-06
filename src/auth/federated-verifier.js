@@ -2,6 +2,15 @@ const { jwtVerify } = require('jose');
 const { UnauthorizedError } = require('../errors/app-errors');
 const { mapFederatedGroups } = require('./federated-claims');
 
+// Grupos del token: lista de strings (lo que dice el contrato) o un string
+// suelto. Cualquier otra cosa es un token mal formado.
+function readGroups(value) {
+  if (value === undefined) return [];
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value)) return value.filter((g) => typeof g === 'string');
+  throw new UnauthorizedError('Invalid groups claim');
+}
+
 /**
  * Valida access tokens humanos del Login Federado del Grupo 2
  * (POST https://api.citypass-login.pp.ua/auth/login). Siempre verify(): firma
@@ -25,13 +34,6 @@ function createFederatedVerifier(config, keySet) {
   const requiredClaims = ['exp', 'iss', 'aud'];
   if (config.requireTokenUse) requiredClaims.push('token_use');
   if (config.requireTokenVer) requiredClaims.push('ver');
-
-  function readGroups(value) {
-    if (value === undefined) return [];
-    if (typeof value === 'string') return [value];
-    if (Array.isArray(value)) return value.filter((g) => typeof g === 'string');
-    throw new UnauthorizedError('Invalid groups claim');
-  }
 
   async function verifyAccessToken(token) {
     let payload;
