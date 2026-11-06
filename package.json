@@ -28,7 +28,7 @@
   "author": "Grupo 6 - Emergencias y Seguridad",
   "license": "MIT",
   "dependencies": {
-    "@kafkajs/confluent-schema-registry": "^3.9.0",
+    "@kafkajs/confluent-schema-registry": "^4.1.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "density-clustering": "^1.3.0",
@@ -80,6 +80,14 @@
         "branches": 80,
         "statements": 80
       }
+    }
+  },
+  "overrides": {
+    "nodemon": {
+      "minimatch": "^11.0.5"
+    },
+    "swagger-jsdoc": {
+      "glob": "^14.0.3"
     }
   }
 }

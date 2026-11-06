@@ -574,6 +574,8 @@ Si Kafka no está conectado, `publishEvent` responde **503** (no se pierde el ev
 > `src/services/emergency-events.js` dejan de cumplir el spec: **si cambiás el contrato,
 > cambiá el YAML en el mismo PR.**
 >
+> - **Página web:** `GET /asyncapi` (al lado de Swagger en `/api-docs`), con el viewer oficial de AsyncAPI;
+>   el YAML crudo está en `GET /asyncapi.yaml`. En Render: https://emergencias-backend-34go.onrender.com/asyncapi
 > - `npm run asyncapi:validate` — valida el spec con el parser oficial.
 > - `npm run asyncapi:docs` — genera la documentación HTML en `docs/asyncapi/` (no se versiona).
 > - También se puede pegar el YAML en [AsyncAPI Studio](https://studio.asyncapi.com).
