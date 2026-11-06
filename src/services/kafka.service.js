@@ -141,9 +141,13 @@ class KafkaService {
 function kafkaHealth(kafkaService, { outbox = { enabled: false, lastPollAt: null }, listeners = [] } = {}) {
   const enabled = Boolean(kafkaService)
     && (typeof kafkaService.isEnabled !== 'function' || kafkaService.isEnabled());
-  const producerConnected = enabled && outbox.enabled && kafkaService.isConnected();
+  // El producer solo cuenta si el outbox publica por Kafka. Con el
+  // GatewayPublisher (EDA_PUBLISHER_MODE=gateway) se publica por HTTP y no
+  // hay producer: exigirlo marcaría "disconnected" con todo andando.
+  const publishesViaKafka = outbox.enabled && outbox.publisher !== 'gateway';
+  const producerConnected = enabled && publishesViaKafka && kafkaService.isConnected();
   const required = [
-    ...(outbox.enabled ? [producerConnected] : []),
+    ...(publishesViaKafka ? [producerConnected] : []),
     ...listeners.filter((listener) => listener.status !== 'disabled')
       .map((listener) => listener.status === 'running'),
   ];

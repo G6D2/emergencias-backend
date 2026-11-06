@@ -182,7 +182,9 @@ describe('OutboxPublisher', () => {
   it('health(): enabled solo mientras corre el poller', () => {
     jest.useFakeTimers();
     const publisher = new OutboxPublisher(createPool(), { isEnabled: () => false });
-    expect(publisher.health()).toEqual({ enabled: false, lastPollAt: null });
+    expect(publisher.health()).toEqual({ enabled: false, publisher: 'kafka', lastPollAt: null });
+    const gateway = { isEnabled: () => true, publishEvent: async () => ({}) };
+    expect(new OutboxPublisher(createPool(), {}, { publisher: gateway }).health().publisher).toBe('gateway');
 
     publisher.start();
     expect(publisher.health().enabled).toBe(true);

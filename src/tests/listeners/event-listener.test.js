@@ -70,6 +70,16 @@ function buildKafka() {
 const toMessage = (value) => ({ value: Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)) });
 
 describe('EventListener', () => {
+  // Los defaults de arranque se leen del entorno: que una variable exportada en
+  // la shell no cambie el resultado de estos tests.
+  const savedEnv = {};
+  beforeEach(() => {
+    ['EDA_CONSUMER_FROM_BEGINNING', 'EDA_CONSUMER_SINCE'].forEach((k) => { savedEnv[k] = process.env[k]; delete process.env[k]; });
+  });
+  afterEach(() => {
+    Object.entries(savedEnv).forEach(([k, v]) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; });
+  });
+
   it('no se puede instanciar directamente', () => {
     expect(() => new EventListener(buildKafka().kafka, { topic: 't' })).toThrow(/abstracto/);
   });
@@ -372,6 +382,36 @@ describe('EventListener: arranque sin offset y piso EDA_CONSUMER_SINCE', () => {
     const listener = new TestListener(buildKafka().kafka, { topic: 't' });
     await listener.onMessage(message('2026-10-01T00:00:00Z'));
     expect(listener.handled).toHaveLength(1);
+  });
+
+  it.each([
+    ['05/11/2026'],
+    ['2026-11-05T15:00:00'],
+    ['5'],
+  ])('EDA_CONSUMER_SINCE "%s" (sin formato ISO con zona) falla al construir', (value) => {
+    process.env.EDA_CONSUMER_SINCE = value;
+    expect(() => new TestListener(buildKafka().kafka, { topic: 't' })).toThrow(/ISO 8601 con zona/);
+  });
+
+  it('acepta ISO con offset y lo normaliza a UTC', () => {
+    process.env.EDA_CONSUMER_SINCE = '2026-11-05T12:00:00-03:00';
+    expect(new TestListener(buildKafka().kafka, { topic: 't' }).consumeSince.toISOString()).toBe('2026-11-05T15:00:00.000Z');
+  });
+
+  it('un piso en el futuro falla al construir (saltearía todo lo que llegue)', () => {
+    process.env.EDA_CONSUMER_SINCE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    expect(() => new TestListener(buildKafka().kafka, { topic: 't' })).toThrow(/en el futuro/);
+  });
+
+  it.each([['-1'], [null], [''], ['0']])('un mensaje con timestamp %p se procesa aunque haya piso', async (timestamp) => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't', consumeSince: '2026-11-05T15:00:00Z' });
+    await listener.onMessage({ ...toMessage({ metadata: { eventId: 'e1' } }), offset: '1', timestamp });
+    expect(listener.handled).toHaveLength(1);
+  });
+
+  it.each([['FALSE'], ['0'], ['no'], ['off']])('EDA_CONSUMER_FROM_BEGINNING=%s también apaga la lectura desde el principio', (value) => {
+    process.env.EDA_CONSUMER_FROM_BEGINNING = value;
+    expect(new TestListener(buildKafka().kafka, { topic: 't' }).fromBeginning).toBe(false);
   });
 
   it('un mensaje sin timestamp se procesa aunque haya piso', async () => {
