@@ -6,6 +6,8 @@
 // Orden de llegada (Kafka reentrega y desordena):
 // - Un alta más vieja que lo guardado no pisa nada.
 // - La baja es lógica y definitiva: un alta posterior no revive el contexto.
+// - La suspensión es reversible: cada alta dice si el evento está suspendido
+//   y la reanudación limpia la marca.
 // - Una baja sin alta previa deja una fila ya dada de baja, así el alta
 //   tardía se ignora.
 // Una escritura que no aplica es un resultado normal, no un error.
@@ -23,6 +25,7 @@ function mapContextoZona(row) {
     descripcion: row.descripcion,
     causationId: row.causation_id,
     sourceUpdatedAt: row.source_updated_at,
+    suspendidoEn: row.suspendido_en ?? null,
     dadoDeBajaEn: row.dado_de_baja_en,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -36,20 +39,26 @@ class ContextoZonaRepository {
 
   // Alta o actualización. Devuelve el contexto si la escritura aplicó, o
   // null si se ignoró (más vieja que lo guardado, o contexto dado de baja).
+  // - suspendido: marca o limpia la suspensión (se conserva la fecha de la
+  //   primera vez que se suspendió).
+  // - ventanaPorDefecto: la ventana no vino en el evento; en un contexto que
+  //   ya existe se conserva la guardada.
   async upsert(executor, {
     tipo, barrio, vigenteDesde, vigenteHasta, origen, referenciaExterna,
     descripcion = null, causationId = null, sourceUpdatedAt,
+    suspendido = false, ventanaPorDefecto = false,
   }) {
     const client = executor || this.pool;
     const result = await client.query(
       `INSERT INTO contexto_zona
          (tipo, barrio, vigente_desde, vigente_hasta, origen, referencia_externa,
-          descripcion, causation_id, source_updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          descripcion, causation_id, source_updated_at, suspendido_en)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $10::boolean THEN now() END)
        ON CONFLICT (tipo, origen, referencia_externa) DO UPDATE
          SET barrio = EXCLUDED.barrio,
-             vigente_desde = EXCLUDED.vigente_desde,
-             vigente_hasta = EXCLUDED.vigente_hasta,
+             vigente_desde = CASE WHEN $11::boolean THEN contexto_zona.vigente_desde ELSE EXCLUDED.vigente_desde END,
+             vigente_hasta = CASE WHEN $11::boolean THEN contexto_zona.vigente_hasta ELSE EXCLUDED.vigente_hasta END,
+             suspendido_en = CASE WHEN $10::boolean THEN COALESCE(contexto_zona.suspendido_en, now()) END,
              descripcion = EXCLUDED.descripcion,
              causation_id = EXCLUDED.causation_id,
              source_updated_at = EXCLUDED.source_updated_at,
@@ -58,7 +67,7 @@ class ContextoZonaRepository {
            AND contexto_zona.source_updated_at <= EXCLUDED.source_updated_at
        RETURNING *`,
       [tipo, barrio, vigenteDesde, vigenteHasta, origen, referenciaExterna,
-        descripcion, causationId, sourceUpdatedAt]
+        descripcion, causationId, sourceUpdatedAt, Boolean(suspendido), Boolean(ventanaPorDefecto)]
     );
     return mapContextoZona(result.rows[0]);
   }

@@ -170,6 +170,28 @@ describe('RegistrarContextoZonaRule', () => {
     expect(payload.vigenteHasta.getTime() - payload.vigenteDesde.getTime()).toBe(DURACION_DEFAULT_HORAS * HORA);
   });
 
+  it('marca suspendido solo para un estado de suspensión', () => {
+    const con = (estado) => rule.apply(contexto({ eventoId: 'ev-6', ...ROSEDAL, estado })).payload.suspendido;
+    expect(con('SUSPENDED')).toBe(true);
+    expect(con('suspendido')).toBe(true);
+    expect(con('ACTIVE')).toBe(false);
+    expect(con('SOLD_OUT')).toBe(false);
+    expect(con(undefined)).toBe(false);
+  });
+
+  it('avisa si la ventana es un default (el evento no trajo fechas)', () => {
+    const sinFechas = rule.apply(contexto({ eventoId: 'ev-7', ...ROSEDAL })).payload;
+    const conFin = rule.apply(contexto({ eventoId: 'ev-7', ...ROSEDAL, fin: '2026-11-21T23:00:00Z' })).payload;
+    expect(sinFechas.ventanaPorDefecto).toBe(true);
+    expect(conFin.ventanaPorDefecto).toBe(false);
+  });
+
+  it('reconoce la cancelación en inglés o en castellano', () => {
+    for (const estado of ['CANCELLED', 'cancelado', 'CANCELADA']) {
+      expect(rule.apply(contexto({ eventoId: 'ev-8', estado })).type).toBe('DarDeBajaContextoZona');
+    }
+  });
+
   it('un evento que llega cancelado aplica aunque no tenga ubicación y da de baja', () => {
     const cancelado = contexto({ eventoId: 'ev-4', estado: 'CANCELLED' }, { eventId: EVENT_ID, timestamp: '2026-11-19T10:00:00Z' });
     expect(rule.appliesTo(cancelado)).toBe(true);
@@ -317,8 +339,21 @@ describe('ContextoZonaRepository', () => {
     expect(sql).toMatch(/contexto_zona\.source_updated_at <= EXCLUDED\.source_updated_at/);
     expect(values).toEqual([
       row.tipo, row.barrio, row.vigente_desde, row.vigente_hasta, row.origen, row.referencia_externa,
-      null, null, row.source_updated_at,
+      null, null, row.source_updated_at, false, false,
     ]);
+  });
+
+  it('upsert marca la suspensión y conserva la ventana guardada si la del evento es un default', async () => {
+    const pool = { query: jest.fn().mockResolvedValue({ rows: [{ ...row, suspendido_en: new Date() }] }) };
+    const repository = new ContextoZonaRepository(pool);
+
+    const result = await repository.upsert(null, { tipo: row.tipo, suspendido: true, ventanaPorDefecto: true });
+
+    expect(result.suspendidoEn).toBeInstanceOf(Date);
+    const [sql, values] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/suspendido_en = CASE WHEN \$10::boolean THEN COALESCE\(contexto_zona\.suspendido_en, now\(\)\) END/);
+    expect(sql).toMatch(/vigente_hasta = CASE WHEN \$11::boolean THEN contexto_zona\.vigente_hasta ELSE EXCLUDED\.vigente_hasta END/);
+    expect(values.slice(-2)).toEqual([true, true]);
   });
 
   it('upsert devuelve null si la escritura no aplicó y usa el executor recibido', async () => {

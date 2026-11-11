@@ -19,7 +19,7 @@ Quien necesite saber con qué prioridad se atendió una emergencia puede recalcu
 
 | Dato | Evento | Campos |
 |------|--------|--------|
-| Lugar y ventana del evento público | `com.citypass.espacios.EventoComunitarioPublicado` | `data.eventoId`, `data.latitud`, `data.longitud`, `data.inicio`, `data.fin`, `data.estado` |
+| Lugar y ventana del evento público | `com.citypass.espacios.EventoComunitarioPublicado` | `data.eventoId`, `data.latitud`, `data.longitud`, `data.inicio`, `data.fin`, `data.estado` (también llegan así la suspensión y la reanudación) |
 | Cancelación del evento | `com.citypass.espacios.EventoCancelado` | `data.eventoId`, `data.canceladoEn` |
 | Emergencia | `EmergenciaCreada` | `data.emergenciaId`, `data.barrio`, `data.categoria`, `data.prioridad`, `data.createdAt` |
 | Cambios de estado | `EmergenciaActualizada` | `data.emergenciaId`, `data.estadoNuevo`, `data.updatedAt` |
@@ -32,9 +32,10 @@ Una emergencia está elevada en un instante `t` si se cumple todo esto:
 
 1. **Mismo barrio.** `data.barrio` de la emergencia es el barrio del evento (ver sección 4).
 2. **Dentro de la ventana.** `inicio <= t < fin` del evento.
-3. **Evento no cancelado.** No llegó un `EventoCancelado` de ese `eventoId` antes de `t`, ni un `EventoComunitarioPublicado` con `estado = CANCELLED`. La cancelación es definitiva: una republicación posterior no reactiva la suba.
-4. **Emergencia abierta.** En `t` no está en `CERRADA`, `CANCELADA` ni `DESCARTADA`.
-5. **No es la cobertura del evento.** `categoria` distinta de `PREVENTIVA`.
+3. **Evento no suspendido.** La última versión publicada del evento antes de `t` no tiene `estado = SUSPENDED`. Al reanudarse (una publicación posterior con otro estado) vuelve a elevar.
+4. **Evento no cancelado.** No llegó un `EventoCancelado` de ese `eventoId` antes de `t`, ni un `EventoComunitarioPublicado` con `estado = CANCELLED`. La cancelación es definitiva: una republicación posterior no reactiva la suba.
+5. **Emergencia abierta.** En `t` no está en `CERRADA`, `CANCELADA` ni `DESCARTADA`.
+6. **No es la cobertura del evento.** `categoria` distinta de `PREVENTIVA`.
 
 Cuando se cumple, la prioridad de despacho es un nivel más que `data.prioridad`:
 
@@ -68,6 +69,8 @@ Atajo para eventos grandes: si la capacidad del evento llega al umbral de cobert
 | Caso | Qué hace Emergencias |
 |---|---|
 | El evento se republica (cambian inscriptos, fechas o lugar) | Vale la última versión: barrio y ventana se reemplazan |
+| El evento se republica sin `inicio` ni `fin` | Se conserva la ventana anterior |
+| El evento se suspende y después se reanuda con otra fecha | No eleva mientras está suspendido; al reanudarse eleva en la ventana nueva |
 | El evento no trae `fin` | La ventana dura 6 horas desde `inicio` |
 | El evento no trae `inicio` | La ventana arranca cuando Emergencias recibe el evento |
 | `fin` no es posterior a `inicio` | Se ignora `fin` y la ventana dura 6 horas |
@@ -78,4 +81,4 @@ Atajo para eventos grandes: si la capacidad del evento llega al umbral de cobert
 ## 6. Límites de este recálculo
 
 - Cubre solo la suba por eventos públicos. La prioridad con la que trabaja el dispatcher también puede subir cuando varias emergencias cercanas se agrupan en un incidente; ese cálculo es interno y no se puede reconstruir desde el bus.
-- Los dos casos que dependen de cuándo recibió Emergencias el evento (sin `inicio`, o republicado sin fechas) no se pueden reproducir con exactitud desde afuera.
+- El caso que depende de cuándo recibió Emergencias el evento (primera publicación sin `inicio`) no se puede reproducir con exactitud desde afuera.

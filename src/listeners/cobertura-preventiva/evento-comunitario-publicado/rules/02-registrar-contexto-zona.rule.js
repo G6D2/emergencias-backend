@@ -4,6 +4,9 @@ const { isUuid } = require('../../../../utils/uuid');
 const {
   CONTEXTO_TIPO,
   ORIGEN_ESPACIOS,
+  esEstadoCancelado,
+  esEstadoSuspendido,
+  parseInstante,
   primerInstante,
   ventanaDeVigencia,
 } = require('../../../../domain/contexto-zona');
@@ -21,8 +24,11 @@ const MAX_DESCRIPCION_LENGTH = 200;
 // - Barrio: por coordenadas; sin coordenadas, el texto `barrio` o `zona` si
 //   coincide con el catálogo de CABA. Sin barrio no hay contexto.
 // - Ventana: `inicio`–`fin` (o `fechaInicio`–`fechaFin`). Sin inicio arranca
-//   al recibirlo; sin fin dura CONTEXTO_ZONA_DURACION_DEFAULT_HORAS.
-// - Un evento que llega ya cancelado da de baja el contexto.
+//   al recibirlo; sin fin dura CONTEXTO_ZONA_DURACION_DEFAULT_HORAS. Una
+//   republicación sin ninguna de las dos fechas conserva la ventana guardada.
+// - Un evento suspendido (pausa temporal de Espacios) deja el contexto
+//   suspendido: no eleva nada hasta que se republica reanudado.
+// - Un evento que llega ya cancelado da de baja el contexto (definitivo).
 class RegistrarContextoZonaRule extends BusinessRule {
   barrio(data) {
     const porUbicacion = resolveBarrio({
@@ -35,7 +41,7 @@ class RegistrarContextoZonaRule extends BusinessRule {
   }
 
   cancelado(data) {
-    return data.estado === 'CANCELLED';
+    return esEstadoCancelado(data.estado);
   }
 
   appliesTo(context) {
@@ -62,16 +68,19 @@ class RegistrarContextoZonaRule extends BusinessRule {
       return { type: 'DarDeBajaContextoZona', payload: referencia };
     }
 
+    const inicio = data.inicio ?? data.fechaInicio;
+    const fin = data.fin ?? data.fechaFin;
+
     return {
       type: 'RegistrarContextoZona',
       payload: {
         ...referencia,
         barrio: this.barrio(data),
-        ...ventanaDeVigencia({
-          inicio: data.inicio ?? data.fechaInicio,
-          fin: data.fin ?? data.fechaFin,
-          ahora,
-        }),
+        ...ventanaDeVigencia({ inicio, fin, ahora }),
+        // Sin fechas en el evento la ventana es un default: sirve para el
+        // alta, pero no pisa la ventana de un contexto que ya existe.
+        ventanaPorDefecto: !parseInstante(inicio) && !parseInstante(fin),
+        suspendido: esEstadoSuspendido(data.estado),
         descripcion: typeof data.titulo === 'string' && data.titulo
           ? data.titulo.slice(0, MAX_DESCRIPCION_LENGTH)
           : null,

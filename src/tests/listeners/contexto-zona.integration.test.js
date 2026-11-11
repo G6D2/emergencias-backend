@@ -226,6 +226,50 @@ describe('contexto de zona por evento comunitario (integration)', () => {
     expect((await contextoDe(evento.data.eventoId)).dadoDeBajaEn).not.toBeNull();
   });
 
+  it('un evento suspendido deja de elevar; al reanudarse vuelve a elevar', async () => {
+    const evento = publicacion();
+    await publicado.onMessage(buildMessage(evento));
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    expect((await detalle(id)).dispatchPriority).toBe('critical');
+
+    await publicado.onMessage(buildMessage(publicacion({ eventoId: evento.data.eventoId, estado: 'SUSPENDED' })));
+    const suspendido = await contextoDe(evento.data.eventoId);
+    expect(suspendido.suspendidoEn).not.toBeNull();
+    expect(suspendido.dadoDeBajaEn).toBeNull();
+    const pausada = await detalle(id);
+    expect(pausada.dispatchPriority).toBe('high');
+    expect(pausada.priorityContext).toBeNull();
+
+    await publicado.onMessage(buildMessage(publicacion({ eventoId: evento.data.eventoId, estado: 'ACTIVE' })));
+    expect((await contextoDe(evento.data.eventoId)).suspendidoEn).toBeNull();
+    expect((await detalle(id)).dispatchPriority).toBe('critical');
+  });
+
+  it('un evento suspendido que después se cancela no vuelve con una reanudación', async () => {
+    const evento = publicacion();
+    await publicado.onMessage(buildMessage(evento));
+    await publicado.onMessage(buildMessage(publicacion({ eventoId: evento.data.eventoId, estado: 'SUSPENDED' })));
+    await cancelado.onMessage(buildMessage(cancelacion(evento.data.eventoId)));
+    await publicado.onMessage(buildMessage(publicacion({ eventoId: evento.data.eventoId, estado: 'ACTIVE' })));
+
+    expect((await contextoDe(evento.data.eventoId)).dadoDeBajaEn).not.toBeNull();
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    expect((await detalle(id)).priorityContext).toBeNull();
+  });
+
+  it('una republicación sin fechas conserva la ventana guardada', async () => {
+    const evento = publicacion();
+    await publicado.onMessage(buildMessage(evento));
+    await publicado.onMessage(buildMessage(publicacion({
+      eventoId: evento.data.eventoId, inicio: undefined, fin: undefined, titulo: 'Recital (cupos actualizados)',
+    })));
+
+    const contexto = await contextoDe(evento.data.eventoId);
+    expect(contexto.vigenteDesde.toISOString()).toBe(evento.data.inicio);
+    expect(contexto.vigenteHasta.toISOString()).toBe(evento.data.fin);
+    expect(contexto.descripcion).toBe('Recital (cupos actualizados)');
+  });
+
   it('antes de que empiece y después de que termina el evento no hay suba', async () => {
     const futuro = publicacion({
       inicio: new Date(Date.now() + HORA).toISOString(),

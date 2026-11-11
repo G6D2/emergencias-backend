@@ -111,6 +111,7 @@ const INCIDENT_SELECT_FIELDS = `
 // el contexto, la próxima lectura ya no lo trae y la prioridad vuelve sola.
 //
 // - Se evalúa contra now(): nada se guarda en emergencies.
+// - Un contexto suspendido (evento pausado por Espacios) no eleva nada.
 // - Varios contextos en el mismo barrio suben un solo nivel (LIMIT 1; se
 //   muestra el que vence último).
 // - No aplica a emergencias terminales ni a las PREVENTIVA: la cobertura del
@@ -120,6 +121,7 @@ const ZONE_CONTEXT_JOIN_SQL = `LEFT JOIN LATERAL (
          FROM contexto_zona c
          WHERE c.barrio = e.barrio
            AND c.dado_de_baja_en IS NULL
+           AND c.suspendido_en IS NULL
            AND c.vigente_desde <= now()
            AND c.vigente_hasta > now()
            AND e.emergency_type IS DISTINCT FROM 'PREVENTIVA'

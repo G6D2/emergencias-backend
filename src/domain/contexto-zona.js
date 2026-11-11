@@ -13,6 +13,24 @@ const CONTEXTO_TIPO = Object.freeze({
 
 const ORIGEN_ESPACIOS = 'espacios';
 
+// Estados de un evento comunitario de Espacios que importan acá. Cancelado es
+// definitivo; suspendido es temporal (se puede reanudar). Cualquier otro
+// (activo, sin cupos) deja el contexto vigente.
+const ESTADOS_CANCELADO = new Set(['CANCELLED', 'CANCELED', 'CANCELADO', 'CANCELADA']);
+const ESTADOS_SUSPENDIDO = new Set(['SUSPENDED', 'SUSPENDIDO', 'SUSPENDIDA']);
+
+function estadoNormalizado(estado) {
+  return typeof estado === 'string' ? estado.trim().toUpperCase() : '';
+}
+
+function esEstadoCancelado(estado) {
+  return ESTADOS_CANCELADO.has(estadoNormalizado(estado));
+}
+
+function esEstadoSuspendido(estado) {
+  return ESTADOS_SUSPENDIDO.has(estadoNormalizado(estado));
+}
+
 const DURACION_DEFAULT_HORAS = 6;
 const MS_POR_HORA = 60 * 60 * 1000;
 // Por debajo de esto un número es un epoch en segundos, no en milisegundos
@@ -69,6 +87,8 @@ module.exports = {
   CONTEXTO_TIPO,
   ORIGEN_ESPACIOS,
   DURACION_DEFAULT_HORAS,
+  esEstadoCancelado,
+  esEstadoSuspendido,
   duracionDefaultMs,
   parseInstante,
   primerInstante,

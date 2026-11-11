@@ -374,6 +374,7 @@ describe('EmergencyRepository lecturas', () => {
     expect(calls[0]).toMatch(/FROM contexto_zona c/);
     expect(calls[0]).toMatch(/c\.barrio = e\.barrio/);
     expect(calls[0]).toMatch(/c\.dado_de_baja_en IS NULL/);
+    expect(calls[0]).toMatch(/c\.suspendido_en IS NULL/);
     expect(calls[0]).toMatch(/c\.vigente_desde <= now\(\)/);
     expect(calls[0]).toMatch(/c\.vigente_hasta > now\(\)/);
     expect(calls[0]).toMatch(/IS DISTINCT FROM 'PREVENTIVA'/);

@@ -8,6 +8,10 @@
 -- - Un contexto por objeto de origen (tipo + origen + referencia_externa).
 -- - La baja es lógica (dado_de_baja_en) y definitiva: un alta que llega
 --   después de la baja no lo revive.
+-- - La suspensión (suspendido_en) es reversible: Espacios suspende un evento
+--   por un motivo temporal y lo puede reanudar. Mientras está suspendido el
+--   contexto no eleva nada; al reanudarse vuelve a pesar en lo que quede de
+--   su ventana.
 -- - Una baja puede llegar antes que su alta: queda una fila ya dada de baja,
 --   sin barrio ni ventana. Por eso esas columnas son nullable, pero un
 --   contexto que no está dado de baja siempre las tiene.
@@ -26,6 +30,7 @@ CREATE TABLE IF NOT EXISTS contexto_zona (
     descripcion         TEXT,
     causation_id        UUID,
     source_updated_at   TIMESTAMPTZ NOT NULL,
+    suspendido_en       TIMESTAMPTZ,
     dado_de_baja_en     TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
