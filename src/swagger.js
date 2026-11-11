@@ -181,6 +181,31 @@ const options = {
               description: 'Máximo entre severity y incident.priority (nunca menor a severity). '
                 + 'Misma visibilidad que incident.',
             },
+            dispatchPriority: {
+              type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
+              example: 'critical',
+              description: 'Prioridad de despacho: effectivePriority más un nivel (tope critical) si '
+                + 'hay un contexto de zona vigente en el barrio de la emergencia, por ejemplo un evento '
+                + 'en un espacio público en curso. Se calcula al leer: cuando el contexto vence o se da '
+                + 'de baja vuelve a ser igual a effectivePriority. No sube en emergencias PREVENTIVA ni '
+                + 'en estados terminales. sortBy=priority ordena por este valor. Solo para el dispatcher.',
+            },
+            priorityContext: {
+              type: 'object',
+              nullable: true,
+              description: 'Contexto de zona que eleva dispatchPriority, o null si no hay ninguno '
+                + 'vigente. Solo para el dispatcher.',
+              properties: {
+                tipo: { type: 'string', enum: ['EVENTO_ESPACIO_PUBLICO', 'ALERTA_CLIMATICA'] },
+                barrio: { type: 'string', example: 'PALERMO' },
+                origen: { type: 'string', example: 'espacios' },
+                referenciaExterna: { type: 'string', description: 'Id del objeto en el módulo de origen (eventoId).' },
+                descripcion: { type: 'string', nullable: true, example: 'Recital en el Rosedal' },
+                vigenteDesde: { type: 'string', format: 'date-time' },
+                vigenteHasta: { type: 'string', format: 'date-time' },
+              },
+            },
           },
         },
         IncidentSummary: {

@@ -329,6 +329,73 @@ describe('EmergencyRepository lecturas', () => {
     expect(detail.effectivePriority).toBe(detail.severity);
   });
 
+  it('findDetailById sube un nivel la prioridad de despacho si hay un contexto de zona vigente', async () => {
+    const vigenteDesde = new Date('2026-11-21T18:00:00Z');
+    const vigenteHasta = new Date('2026-11-21T23:00:00Z');
+    const calls = [];
+    let call = 0;
+    const pool = createPool({
+      query: async (sql) => {
+        calls.push(sql);
+        call += 1;
+        if (call > 1) return { rows: [] };
+        return {
+          rows: [{
+            id: 'e-3',
+            severity: 'medium',
+            barrio: 'PALERMO',
+            contexto_tipo: 'EVENTO_ESPACIO_PUBLICO',
+            contexto_barrio: 'PALERMO',
+            contexto_origen: 'espacios',
+            contexto_referencia_externa: 'ev-1',
+            contexto_descripcion: undefined,
+            contexto_vigente_desde: vigenteDesde,
+            contexto_vigente_hasta: vigenteHasta,
+          }],
+        };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const detail = await repo.findDetailById('e-3');
+
+    expect(detail.effectivePriority).toBe('medium');
+    expect(detail.dispatchPriority).toBe('high');
+    expect(detail.priorityContext).toEqual({
+      tipo: 'EVENTO_ESPACIO_PUBLICO',
+      barrio: 'PALERMO',
+      origen: 'espacios',
+      referenciaExterna: 'ev-1',
+      descripcion: null,
+      vigenteDesde,
+      vigenteHasta,
+    });
+    // El contexto se busca por barrio y vigencia, sin PREVENTIVA ni terminales.
+    expect(calls[0]).toMatch(/FROM contexto_zona c/);
+    expect(calls[0]).toMatch(/c\.barrio = e\.barrio/);
+    expect(calls[0]).toMatch(/c\.dado_de_baja_en IS NULL/);
+    expect(calls[0]).toMatch(/c\.vigente_desde <= now\(\)/);
+    expect(calls[0]).toMatch(/c\.vigente_hasta > now\(\)/);
+    expect(calls[0]).toMatch(/IS DISTINCT FROM 'PREVENTIVA'/);
+    expect(calls[0]).toMatch(/e\.status NOT IN \('CLOSED', 'CANCELLED', 'DISCARDED'\)/);
+  });
+
+  it('sin contexto de zona la prioridad de despacho es la efectiva', async () => {
+    let call = 0;
+    const pool = createPool({
+      query: async () => {
+        call += 1;
+        return call === 1 ? { rows: [{ id: 'e-4', severity: 'high' }] } : { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const detail = await repo.findDetailById('e-4');
+
+    expect(detail.dispatchPriority).toBe('high');
+    expect(detail.priorityContext).toBeNull();
+  });
+
   it('findDetailById devuelve incident con sus campos y effectivePriority combinada (LEFT JOIN a incidents)', async () => {
     let call = 0;
     const pool = createPool({
@@ -558,6 +625,8 @@ describe('EmergencyRepository.findPage', () => {
     expect(selectCall.sql).toMatch(/CASE e.severity/);
     expect(selectCall.sql).toMatch(/CASE i.priority/);
     expect(selectCall.sql).toMatch(/GREATEST\(/);
+    // Prioridad de despacho: +1 con contexto de zona vigente, tope 4.
+    expect(selectCall.sql).toMatch(/LEAST\(GREATEST\(.*\) \+ CASE WHEN cz\.tipo IS NULL THEN 0 ELSE 1 END, 4\)/);
     expect(selectCall.sql).toMatch(/LEFT JOIN incidents i ON i.id = e.incident_id/);
     // sin incidente: incident null y effectivePriority = la propia severity
     expect(result.emergencies[0].incident).toBeNull();

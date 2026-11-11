@@ -21,6 +21,13 @@ const { createEventDecoder, registryFromEnv } = require('./listeners/event-decod
 const { EventosProcesadosRepository } = require('./repositories/eventos-procesados.repository');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/cancelar-cobertura.handler');
+const {
+  REGISTRAR_CONTEXTO_ZONA,
+  DAR_DE_BAJA_CONTEXTO_ZONA,
+  createRegistrarContextoZonaHandler,
+  createDarDeBajaContextoZonaHandler,
+} = require('./listeners/cobertura-preventiva/handlers/contexto-zona.handler');
+const { ContextoZonaRepository } = require('./repositories/contexto-zona.repository');
 const { gracefulShutdown, closeServer } = require('./utils/graceful-shutdown');
 
 const PORT = process.env.PORT || 3000;
@@ -77,6 +84,11 @@ async function start() {
   const outcomeFactory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
   outcomeFactory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository }));
   outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository }));
+  // Contexto de zona: mientras dura el evento, las emergencias de su barrio
+  // suben un nivel de prioridad de despacho (se calcula al leer).
+  const contextoZonaRepository = new ContextoZonaRepository(pool);
+  outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
+  outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
 
   const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true'
     ? createListeners(kafkaService.kafka, {

@@ -544,7 +544,7 @@ Detalle de una emergencia. Delega en el mismo método que `GET /api/emergencies/
 
 ### GET `/api/emergencies`
 
-Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad efectiva. Citizen solo ve las propias y sin `incident`/`effectivePriority`.
+Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad de despacho (`dispatchPriority`: la efectiva más un nivel si hay un [contexto de zona](#prioridad-elevada-durante-un-evento) vigente en el barrio). Citizen solo ve las propias y sin `incident`/`effectivePriority`/`dispatchPriority`/`priorityContext`.
 
 ### GET `/api/emergencies/:id`
 
@@ -678,7 +678,8 @@ src/
 ├── domain/
 │   ├── emergency-status.js       # Máquina de estados (transiciones válidas)
 │   ├── emergency-type.js         # Catálogo cerrado de emergencyType (incluye PREVENTIVA)
-│   ├── severity.js               # severityForType + effectivePriority
+│   ├── severity.js               # severityForType + effectivePriority + dispatchPriority
+│   ├── contexto-zona.js          # tipos y ventana de vigencia de los contextos de zona
 │   ├── incident-detector.js      # Arma incidentes a partir de los grupos
 │   ├── incident-detection-strategy.js  # DBSCAN primaria, reglas como fallback
 │   ├── dbscan-grouper.js
@@ -865,12 +866,22 @@ Los dos eventos están en [`docs/contratos/emergencia-creada.schema.json`](docs/
 
 ## Consumo de eventos externos
 
-Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca los listeners de `src/listeners/` dentro del mismo proceso web. Hoy hay un caso, la **cobertura preventiva**, que escucha dos eventos de Espacios Públicos:
+Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca los listeners de `src/listeners/` dentro del mismo proceso web. Los dos eventos de Espacios Públicos que escucha disparan dos cosas: la **cobertura preventiva** y el **contexto de zona** que eleva la prioridad en el barrio mientras dura el evento (ver [Prioridad elevada durante un evento](#prioridad-elevada-durante-un-evento)):
 
 | Evento | Topic (env) | Qué hace |
 |---|---|---|
-| `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox |
-| `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca |
+| `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox. Aparte, sin importar la capacidad, registra el contexto de zona del evento |
+| `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca. Aparte, da de baja el contexto de zona del evento |
+
+### Prioridad elevada durante un evento
+
+Mientras dura un evento comunitario, las emergencias de su barrio suben **un nivel** de prioridad de despacho (tope `critical`). Es la decisión del ADR *Elevar temporalmente la prioridad con contextos de zona*.
+
+- **Alta.** Cada `EventoComunitarioPublicado` deja (o actualiza) una fila en `contexto_zona` (V28), una por `eventoId`: el barrio se deriva de `latitud`/`longitud` (sin coordenadas, del texto `barrio` o `zona` si coincide con el catálogo de CABA) y la ventana es `inicio`–`fin` del evento (también `fechaInicio`–`fechaFin`). Sin inicio, arranca al recibir el evento; sin fin, dura `CONTEXTO_ZONA_DURACION_DEFAULT_HORAS` (default 6). Un evento sin barrio derivable no genera contexto.
+- **Baja.** `EventoCancelado` (o un `EventoComunitarioPublicado` con `estado = CANCELLED`) marca `dado_de_baja_en`. Es definitiva: una republicación posterior no revive el contexto, y una cancelación que llega antes que la publicación deja la marca para que la publicación tardía se ignore.
+- **Cálculo.** No se escribe nada en `emergencies`. `GET /api/emergencies` y el detalle devuelven al dispatcher `dispatchPriority` (= `effectivePriority` más un nivel si hay un contexto vigente en `emergencies.barrio` en el momento de la lectura) y `priorityContext` con el motivo (`tipo`, `barrio`, `referenciaExterna`, `descripcion`, `vigenteDesde`, `vigenteHasta`), o `null`. `sortBy=priority` ordena por `dispatchPriority` en SQL. Cuando el evento termina o se cancela, la siguiente lectura ya no trae el contexto y la prioridad vuelve sola, sin job.
+- **Alcance.** Varios eventos en el mismo barrio suben un solo nivel. No sube en las `PREVENTIVA` (la cobertura del propio evento) ni en emergencias en estado terminal. El ciudadano no recibe estos campos.
+- **Falta** (del ADR): alta y baja manual desde el tablero, alertas climáticas, el evento `EmergenciaPriorizada` y la prioridad manual por encima del cálculo.
 
 Cómo lee el bus:
 
