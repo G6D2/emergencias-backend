@@ -797,7 +797,8 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | `estado` | string | map desde `status` (ver tabla de estados) |
 | `barrio` | string \| null | catálogo oficial CABA (48 barrios), en claro; lo leen Reclamos/Analítica |
 | `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
-| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null. **No** hay lat/lng en la raíz de `data` |
+| `latitud`, `longitud` | number \| null | en claro, redondeadas a 3 decimales (~100 m); `null` si la emergencia no tiene ubicación. Es lo que leen Movilidad, Residuos, Reclamos, Espacios y Analítica |
+| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | la coordenada exacta, ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null |
 | `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA` (y `TRANSITO` cuando entre al catálogo); `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null | `causa_id` / `causa_tipo`. En un alta ciudadana, `null`; la cobertura preventiva manda el `eventoId` de Espacios y `EVENTO_PUBLICO` |
 | `prioridadOriginal` | enum \| null | hoy siempre `null` |
@@ -822,6 +823,8 @@ Antes era `EmergenciaEstadoActualizado`, y reemplaza también a `EmergenciaCerra
 | `areaResponsable` | string \| null | hoy siempre `null` |
 | `resolucion` | string \| null | `reason` del cambio: motivo de `discard`, `cancel` o `return`, `Assigned officer <id>` en `assign`; `null` en `validate`, `en-route`, `on-scene`, `resolve` y `close` |
 | `prioridad` | enum \| null | map desde `severity` |
+| `causasRelacionadas` | string[] | `VIA`, `ESPACIO_PUBLICO`, `RESIDUOS`; las carga el oficial al resolver. `[]` si no hay |
+| `barrio`, `latitud`, `longitud`, `ubicacion` | igual que en `EmergenciaCreada` | barrio en claro, coordenadas aproximadas en claro y exactas cifradas |
 | `correlationId` | string | `correlation_id` (fallback: `id`) |
 
 #### `EmergenciaPriorizada`

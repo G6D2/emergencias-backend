@@ -106,8 +106,8 @@ describe('createProgramarCoberturaHandler', () => {
       ciudadanoId: null,
     });
     expect(event.data.barrio).toBe('SAN TELMO');
-    expect(event.data.latitud).toBeUndefined();
-    expect(event.data.longitud).toBeUndefined();
+    expect(event.data.latitud).toBe(-34.615);
+    expect(event.data.longitud).toBe(-58.371);
     expect(event.data.ubicacion).toEqual({
       barrio: 'SAN TELMO',
       latitud: null,

@@ -207,6 +207,8 @@ components:
               prioridad: CRITICA
               estado: PENDIENTE
               barrio: null
+              latitud: null
+              longitud: null
               ubicacion: { barrio: null, latitud: null, longitud: null }
               afectaCirculacion: false
               causaId: null
@@ -248,6 +250,8 @@ components:
               prioridad: CRITICA
               causasRelacionadas: []
               barrio: null
+              latitud: null
+              longitud: null
               ubicacion:
                 barrio: null
                 latitud: null
@@ -356,6 +360,8 @@ components:
         - prioridad
         - estado
         - barrio
+        - latitud
+        - longitud
         - ubicacion
         - afectaCirculacion
         - causaId
@@ -382,6 +388,12 @@ components:
         barrio:
           type: [string, 'null']
           description: Barrio del catálogo oficial de CABA (48), en claro. Lo leen Reclamos y Analítica.
+        latitud:
+          type: [number, 'null']
+          description: Latitud en claro, redondeada a 3 decimales (~100 m). Null si la emergencia no tiene ubicación. Es la que leen los consumidores; la exacta va cifrada en `ubicacion`.
+        longitud:
+          type: [number, 'null']
+          description: Igual que `latitud`.
         ubicacion:
           type: object
           additionalProperties: false
@@ -392,10 +404,10 @@ components:
               description: Mismo valor que `barrio`, anidado para Espacios.
             latitud:
               type: [string, 'null']
-              description: Ciphertext AES-256-GCM con la clave de bus (ver docs/bus-ubicacion-para-consumidores.md). Null sin clave de bus.
+              description: Coordenada exacta, ciphertext AES-256-GCM con la clave de bus (ver docs/bus-ubicacion-para-consumidores.md). Null sin clave de bus.
             longitud:
               type: [string, 'null']
-              description: Igual que `latitud`. No hay coordenadas en la raíz de `data`.
+              description: Igual que `latitud`. La versión aproximada en claro va en la raíz de `data`.
         afectaCirculacion:
           type: [boolean, 'null']
           description: Derivado de `categoria`. true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y PREVENTIVA; false para MEDICA, PANICO y OTRO; null sin categoría.
@@ -431,6 +443,8 @@ components:
         - prioridad
         - causasRelacionadas
         - barrio
+        - latitud
+        - longitud
         - ubicacion
         - correlationId
       properties:
@@ -475,6 +489,12 @@ components:
         barrio:
           type: [string, 'null']
           description: Barrio del catálogo oficial de CABA (48), en claro.
+        latitud:
+          type: [number, 'null']
+          description: Latitud en claro, redondeada a 3 decimales (~100 m). Null si la emergencia no tiene ubicación. Es la que leen los consumidores; la exacta va cifrada en `ubicacion`.
+        longitud:
+          type: [number, 'null']
+          description: Igual que `latitud`.
         ubicacion:
           type: object
           additionalProperties: false
