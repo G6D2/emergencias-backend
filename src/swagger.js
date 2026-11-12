@@ -186,8 +186,8 @@ const options = {
               enum: ['low', 'medium', 'high', 'critical'],
               example: 'critical',
               description: 'Prioridad de despacho: effectivePriority más un nivel (tope critical) si '
-                + 'hay un contexto de zona vigente en el barrio de la emergencia, por ejemplo un evento '
-                + 'en un espacio público en curso. Se calcula al leer: cuando el contexto vence o se da '
+                + 'la emergencia se creó dentro del radio de un contexto de zona que sigue en curso, por '
+                + 'ejemplo un evento en un espacio público. Se calcula al leer: cuando el contexto vence o se da '
                 + 'de baja vuelve a ser igual a effectivePriority. No sube en emergencias PREVENTIVA ni '
                 + 'en estados terminales. sortBy=priority ordena por este valor. Solo para el dispatcher.',
             },
@@ -198,7 +198,9 @@ const options = {
                 + 'vigente. Solo para el dispatcher.',
               properties: {
                 tipo: { type: 'string', enum: ['EVENTO_ESPACIO_PUBLICO', 'ALERTA_CLIMATICA'] },
-                barrio: { type: 'string', example: 'PALERMO' },
+                latitud: { type: 'number', example: -34.5711, description: 'Punto del contexto (ubicación del evento).' },
+                longitud: { type: 'number', example: -58.4167 },
+                radioMetros: { type: 'integer', example: 500, description: 'Radio de la zona alrededor del punto.' },
                 origen: { type: 'string', example: 'espacios' },
                 referenciaExterna: { type: 'string', description: 'Id del objeto en el módulo de origen (eventoId).' },
                 descripcion: { type: 'string', nullable: true, example: 'Recital en el Rosedal' },

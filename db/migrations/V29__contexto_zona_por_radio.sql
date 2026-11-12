@@ -1,35 +1,16 @@
 -- El contexto de zona deja de ser un barrio y pasa a ser un punto con radio:
--- eleva la prioridad de las emergencias a no más de radio_metros del evento.
--- El barrio afectaba toda la zona (Palermo entero por un evento en una plaza)
--- y dejaba afuera la vereda de enfrente si era otro barrio.
+-- eleva la prioridad de las emergencias creadas a no más de radio_metros del
+-- evento mientras está ocurriendo. El barrio afectaba toda la zona (Palermo
+-- entero por un evento en una plaza) y dejaba afuera la vereda de enfrente si
+-- era otro barrio.
 --
--- Para medir la distancia en SQL (y así ordenar y paginar por prioridad de
--- despacho) hace falta la ubicación de la emergencia sin descifrar: se guarda
--- la coordenada aproximada, redondeada a 3 decimales (~100 m), la misma que
--- ya viaja en claro en el bus. La exacta sigue cifrada en location_encrypted.
+-- La ubicación de la emergencia sigue cifrada y no se guarda en claro: la
+-- distancia se mide en la aplicación al crear la emergencia, cuando la
+-- coordenada todavía está en memoria, y solo se guarda el resultado (qué
+-- contextos la alcanzan) en emergencia_contexto_zona.
 
--- 1. Coordenada aproximada de la emergencia. Se borra junto con la ubicación
---    cuando vence la retención (LOCATION_RETENTION_HOURS).
-ALTER TABLE emergencies
-    ADD COLUMN IF NOT EXISTS latitud_aprox  DOUBLE PRECISION,
-    ADD COLUMN IF NOT EXISTS longitud_aprox DOUBLE PRECISION;
-
-ALTER TABLE emergencies
-    ADD CONSTRAINT emergencies_coordenada_aprox_par_check
-        CHECK ((latitud_aprox IS NULL) = (longitud_aprox IS NULL));
-
--- Filas legacy (pre-V3) que todavía tienen la coordenada en claro. Las
--- cifradas se completan con `npm run security:backfill-coordenadas-aproximadas`.
-UPDATE emergencies
-SET latitud_aprox = round(latitude::numeric, 3)::double precision,
-    longitud_aprox = round(longitude::numeric, 3)::double precision
-WHERE latitude IS NOT NULL
-  AND longitude IS NOT NULL
-  AND location_anonymized_at IS NULL
-  AND latitud_aprox IS NULL;
-
--- 2. Contexto de zona: punto y radio en lugar de barrio. La ubicación de un
---    evento público no es dato personal: va exacta y en claro.
+-- 1. Contexto de zona: punto y radio en lugar de barrio. La ubicación de un
+--    evento público no es dato personal: va en claro.
 DROP INDEX IF EXISTS idx_contexto_zona_barrio_vigencia;
 
 ALTER TABLE contexto_zona
@@ -49,8 +30,8 @@ ALTER TABLE contexto_zona
 
 -- Un contexto que no está dado de baja siempre tiene punto, radio y ventana.
 -- NOT VALID: los contextos creados por barrio (V28) quedan sin punto y no
--- elevan nada hasta que Espacios republique el evento; la restricción vale
--- para toda escritura nueva.
+-- alcanzan a ninguna emergencia hasta que Espacios republique el evento; la
+-- restricción vale para toda escritura nueva.
 ALTER TABLE contexto_zona
     ADD CONSTRAINT contexto_zona_vigente_completo_check
         CHECK (
@@ -59,8 +40,21 @@ ALTER TABLE contexto_zona
                 AND vigente_desde IS NOT NULL AND vigente_hasta IS NOT NULL)
         ) NOT VALID;
 
--- La lectura de emergencias busca los contextos vigentes (son pocos) y mide
--- la distancia contra cada uno.
+-- Al crear una emergencia se buscan los contextos en curso (son pocos).
 CREATE INDEX IF NOT EXISTS idx_contexto_zona_vigencia
     ON contexto_zona (vigente_desde, vigente_hasta)
     WHERE dado_de_baja_en IS NULL;
+
+-- 2. Qué contextos alcanzan a cada emergencia. Se escribe una sola vez, al
+--    crear la emergencia. No guarda coordenadas ni distancia. La prioridad
+--    sube mientras el contexto vinculado siga en curso: eso se evalúa al leer,
+--    así que baja sola cuando el evento termina, se suspende o se cancela.
+CREATE TABLE IF NOT EXISTS emergencia_contexto_zona (
+    emergency_id UUID        NOT NULL REFERENCES emergencies(id) ON DELETE CASCADE,
+    contexto_id  UUID        NOT NULL REFERENCES contexto_zona(id) ON DELETE CASCADE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (emergency_id, contexto_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_emergencia_contexto_zona_contexto
+    ON emergencia_contexto_zona (contexto_id);

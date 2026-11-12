@@ -142,8 +142,10 @@ operations:
     summary: |
       Programa una cobertura preventiva (emergencia `PREVENTIVA`) si la capacidad
       supera `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500). Además registra
-      un contexto de zona en el barrio del evento: mientras dura (`inicio`–`fin`),
-      las emergencias de ese barrio suben un nivel de prioridad de despacho.
+      un contexto de zona en el punto del evento (`latitud`, `longitud`) con un
+      radio fijo (`CONTEXTO_ZONA_RADIO_DEFAULT_METROS`, default 500): mientras dura
+      (`inicio`–`fin`), las emergencias que se crean dentro de ese radio suben un
+      nivel de prioridad de despacho.
     bindings:
       kafka:
         groupId:
@@ -158,7 +160,7 @@ operations:
       $ref: '#/channels/eventoCancelado'
     summary: |
       Cancela la cobertura preventiva del evento si todavía no fue despachada y da
-      de baja su contexto de zona (la prioridad del barrio vuelve a la normal).
+      de baja su contexto de zona (la prioridad de las emergencias cercanas vuelve a la normal).
     bindings:
       kafka:
         groupId:
