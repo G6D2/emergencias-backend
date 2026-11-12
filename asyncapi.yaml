@@ -141,7 +141,9 @@ operations:
       $ref: '#/channels/eventoComunitarioPublicado'
     summary: |
       Programa una cobertura preventiva (emergencia `PREVENTIVA`) si la capacidad
-      supera `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500).
+      supera `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500). Además registra
+      un contexto de zona en el barrio del evento: mientras dura (`inicio`–`fin`),
+      las emergencias de ese barrio suben un nivel de prioridad de despacho.
     bindings:
       kafka:
         groupId:
@@ -154,7 +156,9 @@ operations:
     action: receive
     channel:
       $ref: '#/channels/eventoCancelado'
-    summary: Cancela la cobertura preventiva del evento si todavía no fue despachada.
+    summary: |
+      Cancela la cobertura preventiva del evento si todavía no fue despachada y da
+      de baja su contexto de zona (la prioridad del barrio vuelve a la normal).
     bindings:
       kafka:
         groupId:
@@ -536,7 +540,19 @@ components:
           type: number
         estado:
           type: string
-          description: Con `CANCELLED` no se programa cobertura.
+          description: Con `CANCELLED` no se programa cobertura y se da de baja el contexto de zona.
+        inicio:
+          description: |
+            Inicio del evento (ISO 8601 o epoch). También se lee `fechaInicio`. Es el
+            comienzo de la ventana en la que sube la prioridad del barrio; si falta,
+            la ventana arranca al recibir el evento.
+        fin:
+          description: |
+            Fin del evento (ISO 8601 o epoch). También se lee `fechaFin`. Si falta,
+            la ventana dura `CONTEXTO_ZONA_DURACION_DEFAULT_HORAS` (default 6).
+        zona:
+          type: [string, 'null']
+          description: Texto libre. Solo se usa sin coordenadas, si coincide con un barrio de CABA.
         correlationId:
           type: string
           description: En Espacios no es UUID (`evento-<id>`).

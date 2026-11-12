@@ -6,7 +6,7 @@ const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
 const { mapOfficer } = require('./officer.repository');
-const { effectivePriority } = require('../domain/severity');
+const { effectivePriority, dispatchPriority } = require('../domain/severity');
 
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
@@ -105,16 +105,68 @@ const INCIDENT_SELECT_FIELDS = `
        (SELECT COUNT(*)::int FROM emergencies em2 WHERE em2.incident_id = e.incident_id) AS incident_report_count,
        (SELECT COUNT(DISTINCT em3.user_id)::int FROM emergencies em3 WHERE em3.incident_id = e.incident_id) AS incident_unique_citizens`;
 
+// Contexto de zona vigente en el barrio de la emergencia (ADR "Elevar
+// temporalmente la prioridad con contextos de zona", tabla de V28). Mientras
+// existe, la prioridad de despacho sube un nivel; al vencer o darse de baja
+// el contexto, la próxima lectura ya no lo trae y la prioridad vuelve sola.
+//
+// - Se evalúa contra now(): nada se guarda en emergencies.
+// - Un contexto suspendido (evento pausado por Espacios) no eleva nada.
+// - Varios contextos en el mismo barrio suben un solo nivel (LIMIT 1; se
+//   muestra el que vence último).
+// - No aplica a emergencias terminales ni a las PREVENTIVA: la cobertura del
+//   propio evento no es un llamado.
+const ZONE_CONTEXT_JOIN_SQL = `LEFT JOIN LATERAL (
+         SELECT c.tipo, c.barrio, c.origen, c.referencia_externa, c.descripcion, c.vigente_desde, c.vigente_hasta
+         FROM contexto_zona c
+         WHERE c.barrio = e.barrio
+           AND c.dado_de_baja_en IS NULL
+           AND c.suspendido_en IS NULL
+           AND c.vigente_desde <= now()
+           AND c.vigente_hasta > now()
+           AND e.emergency_type IS DISTINCT FROM 'PREVENTIVA'
+           AND e.status NOT IN (${TERMINAL_STATUSES.map((status) => `'${status}'`).join(', ')})
+         ORDER BY c.vigente_hasta DESC
+         LIMIT 1
+       ) cz ON true`;
+const ZONE_CONTEXT_SELECT_FIELDS = `
+       cz.tipo AS contexto_tipo,
+       cz.barrio AS contexto_barrio,
+       cz.origen AS contexto_origen,
+       cz.referencia_externa AS contexto_referencia_externa,
+       cz.descripcion AS contexto_descripcion,
+       cz.vigente_desde AS contexto_vigente_desde,
+       cz.vigente_hasta AS contexto_vigente_hasta`;
+
+function mapZoneContext(row) {
+  if (!row.contexto_tipo) return null;
+  return {
+    tipo: row.contexto_tipo,
+    barrio: row.contexto_barrio,
+    origen: row.contexto_origen,
+    referenciaExterna: row.contexto_referencia_externa,
+    descripcion: row.contexto_descripcion ?? null,
+    vigenteDesde: row.contexto_vigente_desde,
+    vigenteHasta: row.contexto_vigente_hasta,
+  };
+}
+
 // mapEmergency + incident: null|{...} + effectivePriority (máximo entre
-// severity individual y incident.priority, ver src/domain/severity.js).
+// severity individual y incident.priority, ver src/domain/severity.js) +
+// dispatchPriority (un nivel más si hay un contexto de zona vigente) y
+// priorityContext: null|{...} con el motivo de la suba.
 function mapEmergencyWithIncident(row, locationCrypto) {
   const emergency = mapEmergency(row, locationCrypto);
   if (!emergency) return null;
   const incident = mapIncidentSummary(row);
+  const priorityContext = mapZoneContext(row);
+  const priority = effectivePriority(emergency.severity, incident ? incident.priority : null);
   return {
     ...emergency,
     incident,
-    effectivePriority: effectivePriority(emergency.severity, incident ? incident.priority : null),
+    effectivePriority: priority,
+    dispatchPriority: dispatchPriority(priority, Boolean(priorityContext)),
+    priorityContext,
   };
 }
 
@@ -278,10 +330,11 @@ class EmergencyRepository {
    */
   async findDetailById(id) {
     const result = await this.pool.query(
-      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}
+      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}, ${ZONE_CONTEXT_SELECT_FIELDS}
        FROM emergencies e
        LEFT JOIN officers o ON o.id = e.assigned_officer_id
        ${INCIDENT_JOIN_SQL}
+       ${ZONE_CONTEXT_JOIN_SQL}
        WHERE e.id = $1`,
       [id]
     );
@@ -572,8 +625,12 @@ class EmergencyRepository {
     // más urgentes primero — mismo sentido que created_at DESC = más
     // reciente primero.
     const priorityRank = (column) => `CASE ${column} WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
+    //
+    // Prioridad de despacho: a ese rank se le suma 1 (tope 4) si hay un
+    // contexto de zona vigente en el barrio (cz, ver ZONE_CONTEXT_JOIN_SQL).
+    // Va en el ORDER BY y no en JS para que el orden valga entre páginas.
     const sortExpression = sortBy === 'priority'
-      ? `GREATEST(${priorityRank('e.severity')}, ${priorityRank('i.priority')})`
+      ? `LEAST(GREATEST(${priorityRank('e.severity')}, ${priorityRank('i.priority')}) + CASE WHEN cz.tipo IS NULL THEN 0 ELSE 1 END, 4)`
       : 'e.created_at';
 
     const countResult = await this.pool.query(
@@ -582,10 +639,11 @@ class EmergencyRepository {
     );
     values.push(limit, offset);
     const result = await this.pool.query(
-      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}
+      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}, ${ZONE_CONTEXT_SELECT_FIELDS}
        FROM emergencies e
        LEFT JOIN officers o ON o.id = e.assigned_officer_id
        ${INCIDENT_JOIN_SQL}
+       ${ZONE_CONTEXT_JOIN_SQL}
        ${where}
        ORDER BY ${sortExpression} ${direction}, e.created_at ASC
        LIMIT $${values.length - 1} OFFSET $${values.length}`,

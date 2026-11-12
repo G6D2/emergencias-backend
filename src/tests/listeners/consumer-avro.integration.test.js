@@ -18,6 +18,8 @@ const { OutcomeFactory } = require('../../listeners/outcome-factory');
 const { createEventDecoder, registryFromEnv, MAGIC_BYTE } = require('../../listeners/event-decoder');
 const { EventoComunitarioPublicadoListener } = require('../../listeners/cobertura-preventiva/evento-comunitario-publicado/evento-comunitario-publicado.listener');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
+const { REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler } = require('../../listeners/cobertura-preventiva/handlers/contexto-zona.handler');
+const { ContextoZonaRepository } = require('../../repositories/contexto-zona.repository');
 
 const CREATED_TOPIC = 'test.avro.emergencias.creada';
 
@@ -146,6 +148,7 @@ afterAll(async () => {
     [usedEventoIds]
   );
   await pool.query('DELETE FROM outbox_events WHERE topic = $1', [CREATED_TOPIC]);
+  await pool.query("DELETE FROM contexto_zona WHERE origen = 'espacios'");
   await pool.query('DELETE FROM eventos_procesados WHERE event_id = ANY($1::uuid[])', [usedEventIds]);
   await pool.end();
   await new Promise((resolve) => server.close(resolve));
@@ -160,6 +163,7 @@ beforeEach(() => {
 function createListener() {
   const factory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
   factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
+  factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository: new ContextoZonaRepository(pool) }));
   const decoder = createEventDecoder({ registry: registryFromEnv({ EDA_SCHEMA_REGISTRY_URL: registryUrl }) });
   return new EventoComunitarioPublicadoListener(fakeKafka(), { factory, decoder });
 }
@@ -182,7 +186,7 @@ describe('consumer con Avro en formato Confluent (registry HTTP local)', () => {
     const outcomes = await createListener().onMessage(message);
 
     expect(registryRequests).toContain(`GET /schemas/ids/${SCHEMA_ID_OK}`);
-    expect(outcomes.map((outcome) => outcome.type)).toEqual([PROGRAMAR_COBERTURA]);
+    expect(outcomes.map((outcome) => outcome.type)).toEqual([PROGRAMAR_COBERTURA, REGISTRAR_CONTEXTO_ZONA]);
 
     const rows = await coberturasDe(event.data.eventoId);
     expect(rows).toHaveLength(1);

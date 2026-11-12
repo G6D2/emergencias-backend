@@ -57,6 +57,22 @@ function effectivePriority(severity, incidentPriority) {
   return compareSeverity(incidentPriority, severity) > 0 ? incidentPriority : severity;
 }
 
+/**
+ * Prioridad de despacho (ADR "Elevar temporalmente la prioridad con contextos
+ * de zona"): la prioridad efectiva más un nivel si hay un contexto de zona
+ * vigente en el barrio de la emergencia, con tope en `critical`. Varios
+ * contextos a la vez suben un solo nivel. No se guarda: se calcula al leer,
+ * con la misma regla que el ORDER BY de EmergencyRepository.findPage.
+ * @param {'low'|'medium'|'high'|'critical'} priority prioridad efectiva
+ * @param {boolean} hasZoneContext
+ * @returns {'low'|'medium'|'high'|'critical'}
+ */
+function dispatchPriority(priority, hasZoneContext) {
+  const index = SEVERITY_LEVELS.indexOf(priority);
+  if (!hasZoneContext || index === -1) return priority;
+  return SEVERITY_LEVELS[Math.min(index + 1, SEVERITY_LEVELS.length - 1)];
+}
+
 module.exports = {
   SEVERITY_LEVELS,
   isValidSeverity,
@@ -65,4 +81,5 @@ module.exports = {
   SEVERITY_BY_TYPE,
   severityForType,
   effectivePriority,
+  dispatchPriority,
 };

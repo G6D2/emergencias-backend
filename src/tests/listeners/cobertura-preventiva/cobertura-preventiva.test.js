@@ -56,7 +56,9 @@ describe('listeners/cobertura-preventiva', () => {
   it('EventoCanceladoListener dispara CancelarCobertura con el eventoId', async () => {
     const evento = { metadata: { eventId: 'e3' }, data: { eventoId: 'ev-1', motivo: 'lluvia' } };
     const outcomes = await new EventoCanceladoListener(kafka).handle(evento);
-    expect(outcomes).toEqual([{ type: 'CancelarCobertura', payload: { eventoId: 'ev-1' } }]);
+    expect(outcomes).toHaveLength(2);
+    expect(outcomes[0]).toEqual({ type: 'CancelarCobertura', payload: { eventoId: 'ev-1' } });
+    expect(outcomes[1].type).toBe('DarDeBajaContextoZona');
   });
 
   it('EventoComunitarioPublicadoListener no dispara cuando capacidad < umbral', async () => {

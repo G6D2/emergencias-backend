@@ -23,6 +23,8 @@ const { EventosProcesadosRepository } = require('../repositories/eventos-procesa
 const { OutcomeFactory } = require('../listeners/outcome-factory');
 const { EventoComunitarioPublicadoListener } = require('../listeners/cobertura-preventiva/evento-comunitario-publicado/evento-comunitario-publicado.listener');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
+const { REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler } = require('../listeners/cobertura-preventiva/handlers/contexto-zona.handler');
+const { ContextoZonaRepository } = require('../repositories/contexto-zona.repository');
 const { createLifecycleHarness, OFFICER_ID } = require('./helpers/emergency-lifecycle');
 
 const CONTRATOS_DIR = path.resolve(__dirname, '..', '..', 'docs', 'contratos');
@@ -170,6 +172,9 @@ describe('filas reales del outbox contra el contrato', () => {
       emergencyRepository: new EmergencyRepository(pool),
       topic: COBERTURA_TOPIC,
     }));
+    factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({
+      contextoZonaRepository: new ContextoZonaRepository(pool),
+    }));
     const listener = new EventoComunitarioPublicadoListener({ consumer: jest.fn() }, { factory });
     await listener.onMessage({ value: Buffer.from(JSON.stringify(coberturaEvent)) });
 
@@ -185,6 +190,7 @@ describe('filas reales del outbox contra el contrato', () => {
   afterAll(async () => {
     await pool.query("DELETE FROM emergencies WHERE causa_tipo = 'EVENTO_PUBLICO' AND causa_id = $1", [coberturaEvent.data.eventoId]);
     await pool.query('DELETE FROM outbox_events WHERE topic = $1', [COBERTURA_TOPIC]);
+    await pool.query('DELETE FROM contexto_zona WHERE referencia_externa = $1', [coberturaEvent.data.eventoId]);
     await pool.query('DELETE FROM eventos_procesados WHERE event_id = $1', [coberturaEvent.metadata.eventId]);
     await h.cleanup();
     await closePool();

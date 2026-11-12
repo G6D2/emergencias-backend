@@ -39,9 +39,10 @@ function parseDateFilter(name, value) {
   return value;
 }
 
-// Citizens should not receive incident aggregation and effective priority details.
+// Citizens should not receive incident aggregation, effective/dispatch
+// priority or the zone context that raised it.
 // eslint-disable-next-line no-unused-vars
-function withoutOperationalFields({ incident, effectivePriority, ...rest }) {
+function withoutOperationalFields({ incident, effectivePriority, dispatchPriority, priorityContext, ...rest }) {
   return rest;
 }
 
