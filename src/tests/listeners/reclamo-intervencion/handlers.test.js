@@ -1,5 +1,6 @@
 jest.mock('../../../security/secure-log', () => ({ secureLog: jest.fn() }));
 
+const { secureLog } = require('../../../security/secure-log');
 const {
   CREAR_INTERVENCION,
   createCrearIntervencionHandler,
@@ -172,6 +173,19 @@ describe('createCerrarIntervencionHandler', () => {
       usuarioId: 'eda:reclamos',
       resolucion: 'Reclamo RESUELTO',
     });
+  });
+
+  it('si la intervención ya terminó no cancela ni dice que canceló', async () => {
+    secureLog.mockClear();
+    const emergencyRepository = buildRepository([{ id: 'em-1', status: 'CLOSED' }]);
+    const handler = createCerrarIntervencionHandler({ emergencyRepository });
+
+    await expect(handler(client, { reclamoId: 'rec-123', estado: 'RESUELTO' })).resolves.toEqual({ cancelled: 0 });
+
+    expect(emergencyRepository.updateStatus).not.toHaveBeenCalled();
+    const messages = secureLog.mock.calls.map(([, message]) => message);
+    expect(messages).toContain('Intervención por reclamo no cancelada: ya avanzó o terminó');
+    expect(messages).not.toContain('Intervención por reclamo cancelada');
   });
 
   it('un reclamo sin intervención no hace nada', async () => {

@@ -56,7 +56,9 @@ function createCerrarIntervencionHandler({ emergencyRepository, topic = emergenc
       cancelled += 1;
     }
 
-    secureLog('info', 'Intervención por reclamo cancelada', { reclamoId, estado, cancelled });
+    if (cancelled > 0) {
+      secureLog('info', 'Intervención por reclamo cancelada', { reclamoId, estado, cancelled });
+    }
     return { cancelled };
   };
 }
