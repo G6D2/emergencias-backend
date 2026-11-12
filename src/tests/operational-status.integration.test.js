@@ -144,6 +144,8 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     expect(events.rows[0].data).toMatchObject({
       estadoNuevo: 'RESUELTA',
       causasRelacionadas: ['RESIDUOS'],
+      latitud: expect.any(Number),
+      longitud: expect.any(Number),
       ubicacion: {
         latitud: expect.any(String),
         longitud: expect.any(String),

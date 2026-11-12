@@ -30,6 +30,8 @@
         "prioridad",
         "causasRelacionadas",
         "barrio",
+        "latitud",
+        "longitud",
         "ubicacion",
         "correlationId"
       ],
@@ -67,6 +69,14 @@
           "default": []
         },
         "barrio": { "type": ["string", "null"] },
+        "latitud": {
+          "description": "Latitud en claro, redondeada a 3 decimales (~100 m). null si la emergencia no tiene ubicación. La exacta va cifrada en ubicacion.latitud.",
+          "type": ["number", "null"]
+        },
+        "longitud": {
+          "description": "Igual que latitud.",
+          "type": ["number", "null"]
+        },
         "ubicacion": {
           "type": "object",
           "additionalProperties": false,

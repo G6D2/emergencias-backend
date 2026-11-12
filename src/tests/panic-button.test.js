@@ -165,9 +165,9 @@ describe('Panic Button API', () => {
       eventId: 'event-1',
       correlationId: savedEmergency.id,
     });
-    // Coords en claro no van en la raíz; cifradas solo en ubicacion (null sin clave de bus).
-    expect(event.data.latitud).toBeUndefined();
-    expect(event.data.longitud).toBeUndefined();
+    // El fixture guardado no trae coordenadas: en la raíz y en ubicacion van null.
+    expect(event.data.latitud).toBeNull();
+    expect(event.data.longitud).toBeNull();
     expect(event.data.ubicacion.latitud).toBeNull();
     expect(event.data.ubicacion.longitud).toBeNull();
   });
@@ -365,8 +365,8 @@ describe('Panic Button API', () => {
       // descripcion/titulo/direccion NO van al bus (contrato cerrado 2026-11-02).
       expect(event.data.address).toBeUndefined();
       expect(event.data.direccion).toBeUndefined();
-      expect(event.data.latitud).toBeUndefined();
-      expect(event.data.longitud).toBeUndefined();
+      expect(event.data.latitud).toBe(-34.604);
+      expect(event.data.longitud).toBe(-58.382);
       expect(event.data.ubicacion.latitud).toBeNull();
       expect(event.data.ubicacion.longitud).toBeNull();
     });
