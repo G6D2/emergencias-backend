@@ -6,7 +6,7 @@ info:
     Contrato de eventos del módulo de Emergencias y Seguridad (CityPass+, Grupo 6)
     en el bus EDA.
 
-    - **Publica** `EmergenciaCreada` yy `EmergenciaActualizada` (contrato cerrado en
+    - **Publica** `EmergenciaCreada` y `EmergenciaActualizada` (contrato cerrado en
       el issue #48 de `G6D2/demo-repository`, 2026-11-02). Los arma
       `src/services/emergency-events.js` y salen por el outbox transaccional
       (`OutboxPublisher`).
