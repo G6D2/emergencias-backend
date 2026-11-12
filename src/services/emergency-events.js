@@ -3,18 +3,22 @@
 // espacios, movilidad, residuos y analitica + lo acordado con Analitica el
 // 29/10. La traduccion se hace solo al armar el evento: la base no cambia.
 //
-// Extensión: ubicacion.latitud/longitud van cifrados con BUS_LOCATION_ENCRYPTION_KEY
-// (solo anidados; no hay latitud/longitud en la raíz de data).
+// Ubicación en el bus (decisión Juani 2026-11-12):
+// - data.latitud / data.longitud: número en claro, redondeado a 3 decimales
+//   (~100 m). Es lo que leen Movilidad, Residuos, Reclamos, Espacios y
+//   Analítica; ninguno descifra. Ubica la cuadra, no el domicilio.
+// - data.ubicacion.latitud / longitud: la coordenada exacta, cifrada con
+//   BUS_LOCATION_ENCRYPTION_KEY (para quien tenga la clave).
 
 const { getBusLocationCrypto } = require('../security/bus-location-crypto');
 const { secureLog } = require('../security/secure-log');
 
 // Tipos que cortan la circulación (decisión Juani 2026-11-05).
-// TRANSITO: pendiente de agregar al catálogo (migration + emergency-type.js).
-// RECLAMO: cuando llegue el listener de ReclamoCreado, usar el afectaCirculacion
-// que manda Reclamos en lugar de derivarlo por categoría.
+// TRANSITO nace de un reclamo de tránsito (listener reclamo-intervencion), que
+// Reclamos siempre publica con afectaCirculacion = true: derivarlo del tipo da
+// el mismo valor.
 const AFECTA_CIRCULACION = new Set([
-  'INCENDIO', 'INFRAESTRUCTURA', 'DISTURBIO_EVENTO_MASIVO', 'PREVENTIVA',
+  'INCENDIO', 'INFRAESTRUCTURA', 'DISTURBIO_EVENTO_MASIVO', 'PREVENTIVA', 'TRANSITO',
 ]);
 
 const SEVERITY_TO_PRIORIDAD = {
@@ -51,6 +55,22 @@ function toEstado(status) {
   return STATUS_TO_ESTADO[String(status).toUpperCase()] || null;
 }
 
+const COORD_DECIMALS = 3;
+
+function roundCoord(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  const factor = 10 ** COORD_DECIMALS;
+  return Math.round(value * factor) / factor;
+}
+
+// Las dos o ninguna: un par incompleto no ubica nada.
+function approximateCoords(emergency) {
+  const latitud = roundCoord(emergency.latitude);
+  const longitud = roundCoord(emergency.longitude);
+  if (latitud === null || longitud === null) return { latitud: null, longitud: null };
+  return { latitud, longitud };
+}
+
 function encryptBusCoords(emergency, busCrypto) {
   const lat = emergency.latitude;
   const lng = emergency.longitude;
@@ -79,6 +99,7 @@ function buildEmergencyCreatedEvent(emergency, eventId, options = {}) {
     ? options.busCrypto
     : getBusLocationCrypto();
   const encrypted = encryptBusCoords(emergency, busCrypto);
+  const approx = approximateCoords(emergency);
 
   return {
     type: 'EmergenciaCreada',
@@ -91,6 +112,8 @@ function buildEmergencyCreatedEvent(emergency, eventId, options = {}) {
       estado: toEstado(emergency.status),
       // Plano (catálogo / Reclamos-Analítica) + anidado (Espacios y coords cifradas).
       barrio: emergency.barrio ?? null,
+      latitud: approx.latitud,
+      longitud: approx.longitud,
       ubicacion: {
         barrio: emergency.barrio ?? null,
         latitud: encrypted.latitud,
@@ -116,6 +139,7 @@ function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId
     ? options.busCrypto
     : getBusLocationCrypto();
   const encrypted = encryptBusCoords(emergency, busCrypto);
+  const approx = approximateCoords(emergency);
   return {
     type: 'EmergenciaActualizada',
     eventId,
@@ -134,6 +158,8 @@ function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId
       causasRelacionadas: emergency.causasRelacionadas ?? [],
       descripcionProblema: emergency.descripcionProblema ?? null,
       barrio: emergency.barrio ?? null,
+      latitud: approx.latitud,
+      longitud: approx.longitud,
       ubicacion: {
         barrio: emergency.barrio ?? null,
         latitud: encrypted.latitud,
@@ -180,4 +206,5 @@ module.exports = {
   buildEmergencyPrioritizedEvent,
   STATUS_TO_ESTADO,
   SEVERITY_TO_PRIORIDAD,
+  COORD_DECIMALS,
 };

@@ -40,6 +40,16 @@ describe('OutboxPublisher', () => {
     expect(pool.queries.some(({ sql }) => sql.includes("SET status = 'PUBLISHED'"))).toBe(true);
   });
 
+  it('claimBatch pide el lote ordenado por fecha de creación (RETURNING no garantiza orden)', async () => {
+    const pool = createPool();
+    const publisher = new OutboxPublisher(pool, { isEnabled: () => true });
+
+    await publisher.claimBatch();
+
+    const claim = pool.queries.find(({ sql }) => sql.includes('RETURNING id, topic, payload, attempts'));
+    expect(claim.sql.replace(/\s+/g, ' ').trim()).toMatch(/FROM claimed ORDER BY created_at, id$/);
+  });
+
   it('marks a repeatedly failing event as FAILED after max attempts', async () => {
     const pool = createPool();
     const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, { maxAttempts: 2 });

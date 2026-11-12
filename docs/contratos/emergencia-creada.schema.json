@@ -23,6 +23,8 @@
         "prioridad",
         "estado",
         "barrio",
+        "latitud",
+        "longitud",
         "ubicacion",
         "afectaCirculacion",
         "causaId",
@@ -58,8 +60,16 @@
           "description": "Barrio del catálogo oficial de CABA (48), calculado por punto en polígono al crear (#82). null si no resuelve. Sin barrio, Reclamos descarta el evento.",
           "type": ["string", "null"]
         },
+        "latitud": {
+          "description": "Latitud en claro, redondeada a 3 decimales (~100 m). null si la emergencia no tiene ubicación. La exacta va cifrada en ubicacion.latitud.",
+          "type": ["number", "null"]
+        },
+        "longitud": {
+          "description": "Igual que latitud.",
+          "type": ["number", "null"]
+        },
         "ubicacion": {
-          "description": "El mismo barrio anidado (Espacios lo lee en data.ubicacion.barrio) y las coordenadas cifradas con la clave de bus (#82). No hay coordenadas en la raíz de data.",
+          "description": "El mismo barrio anidado (Espacios lo lee en data.ubicacion.barrio) y las coordenadas exactas cifradas con la clave de bus (#82). Las aproximadas en claro van en la raíz de data.",
           "type": "object",
           "additionalProperties": false,
           "required": ["barrio", "latitud", "longitud"],

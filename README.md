@@ -544,7 +544,7 @@ Detalle de una emergencia. Delega en el mismo método que `GET /api/emergencies/
 
 ### GET `/api/emergencies`
 
-Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad efectiva. Citizen solo ve las propias y sin `incident`/`effectivePriority`.
+Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad de despacho (`dispatchPriority`: la efectiva más un nivel si hay un [contexto de zona](#prioridad-elevada-durante-un-evento) vigente en el barrio). Citizen solo ve las propias y sin `incident`/`effectivePriority`/`dispatchPriority`/`priorityContext`.
 
 ### GET `/api/emergencies/:id`
 
@@ -678,7 +678,8 @@ src/
 ├── domain/
 │   ├── emergency-status.js       # Máquina de estados (transiciones válidas)
 │   ├── emergency-type.js         # Catálogo cerrado de emergencyType (incluye PREVENTIVA)
-│   ├── severity.js               # severityForType + effectivePriority
+│   ├── severity.js               # severityForType + effectivePriority + dispatchPriority
+│   ├── contexto-zona.js          # tipos y ventana de vigencia de los contextos de zona
 │   ├── incident-detector.js      # Arma incidentes a partir de los grupos
 │   ├── incident-detection-strategy.js  # DBSCAN primaria, reglas como fallback
 │   ├── dbscan-grouper.js
@@ -696,6 +697,7 @@ src/
 │   ├── business-rule.js
 │   ├── load-rules.js
 │   └── cobertura-preventiva/     # EventoComunitarioPublicado y EventoCancelado de Espacios
+│   ├── reclamo-intervencion/     # ReclamoCreado y ReclamoActualizado de Reclamos (caso ciclovía)
 ├── repositories/
 │   ├── auth-user.repository.js
 │   ├── citizen-profile.repository.js
@@ -791,13 +793,14 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | Campo | Tipo | Fuente / valor hoy |
 |---|---|---|
 | `emergenciaId` | string | `emergencies.id` |
-| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; pendiente sumar `TRANSITO`) |
+| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; `TRANSITO`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
 | `barrio` | string \| null | catálogo oficial CABA (48 barrios), en claro; lo leen Reclamos/Analítica |
 | `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
-| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null. **No** hay lat/lng en la raíz de `data` |
-| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA` (y `TRANSITO` cuando entre al catálogo); `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
+| `latitud`, `longitud` | number \| null | en claro, redondeadas a 3 decimales (~100 m); `null` si la emergencia no tiene ubicación. Es lo que leen Movilidad, Residuos, Reclamos, Espacios y Analítica |
+| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | la coordenada exacta, ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null |
+| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA`, `TRANSITO`; `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null | `causa_id` / `causa_tipo`. En un alta ciudadana, `null`; la cobertura preventiva manda el `eventoId` de Espacios y `EVENTO_PUBLICO` |
 | `prioridadOriginal` | enum \| null | hoy siempre `null` |
 | `ciudadanoId` | string \| null | `user_id`; `null` en las emergencias externas |
@@ -822,6 +825,8 @@ Antes era `EmergenciaEstadoActualizado`, y reemplaza también a `EmergenciaCerra
 | `resolucion` | string \| null | `reason` del cambio: motivo de `discard`, `cancel` o `return`, `Assigned officer <id>` en `assign`; `null` en `validate`, `en-route`, `on-scene`, `resolve` y `close` |
 | `descripcionProblema` | string \| null | Descripción breve ingresada por el oficial al resolver con causa `VIA` (hasta 280 caracteres); se conserva en eventos posteriores, incluido el cierre |
 | `prioridad` | enum \| null | map desde `severity` |
+| `causasRelacionadas` | string[] | `VIA`, `ESPACIO_PUBLICO`, `RESIDUOS`; las carga el oficial al resolver. `[]` si no hay |
+| `barrio`, `latitud`, `longitud`, `ubicacion` | igual que en `EmergenciaCreada` | barrio en claro, coordenadas aproximadas en claro y exactas cifradas |
 | `correlationId` | string | `correlation_id` (fallback: `id`) |
 
 #### `EmergenciaPriorizada`
@@ -866,12 +871,26 @@ Los dos eventos están en [`docs/contratos/emergencia-creada.schema.json`](docs/
 
 ## Consumo de eventos externos
 
-Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca los listeners de `src/listeners/` dentro del mismo proceso web. Hoy hay un caso, la **cobertura preventiva**, que escucha dos eventos de Espacios Públicos:
+Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca los listeners de `src/listeners/` dentro del mismo proceso web. Los dos eventos de Espacios Públicos que escucha disparan dos cosas: la **cobertura preventiva** y el **contexto de zona** que eleva la prioridad en el barrio mientras dura el evento (ver [Prioridad elevada durante un evento](#prioridad-elevada-durante-un-evento)):
 
 | Evento | Topic (env) | Qué hace |
 |---|---|---|
-| `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox |
-| `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca |
+| `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox. Aparte, sin importar la capacidad, registra el contexto de zona del evento |
+| `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca. Aparte, da de baja el contexto de zona del evento |
+| `ReclamoCreado` (Reclamos, v3) | `EDA_TOPIC_RECLAMO_CREADO` (default `com.citypass.reclamos.ReclamoCreado.v3`) | Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea **una** emergencia `TRANSITO` por `reclamoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = RECLAMO`, `causaId = reclamoId`, prioridad según la del reclamo (default `MEDIA`). Sin coordenadas queda con `requiresManualValidation`. Cualquier otro reclamo, o uno que ya llega en estado final, no hace nada |
+| `ReclamoActualizado` (Reclamos) | `EDA_TOPIC_RECLAMO_ACTUALIZADO` (default `com.citypass.reclamos.ReclamoActualizado`) | Cuando `estadoNuevo` es `RESUELTO`, `RECHAZADO` o `CERRADO`, cancela la intervención de ese `reclamoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:reclamos`, con historial y `EmergenciaActualizada`). Si ya fue despachada, la termina el oficial |
+
+### Prioridad elevada durante un evento
+
+Mientras dura un evento comunitario, las emergencias de su barrio suben **un nivel** de prioridad de despacho (tope `critical`). Es la decisión del ADR *Elevar temporalmente la prioridad con contextos de zona*.
+
+- **Alta.** Cada `EventoComunitarioPublicado` deja (o actualiza) una fila en `contexto_zona` (V28), una por `eventoId`: el barrio se deriva de `latitud`/`longitud` (sin coordenadas, del texto `barrio` o `zona` si coincide con el catálogo de CABA) y la ventana es `inicio`–`fin` del evento (también `fechaInicio`–`fechaFin`). Sin inicio, arranca al recibir el evento; sin fin, dura `CONTEXTO_ZONA_DURACION_DEFAULT_HORAS` (default 6). Una republicación sin ninguna de las dos fechas conserva la ventana guardada. Un evento sin barrio derivable no genera contexto.
+- **Suspensión.** Espacios puede suspender un evento y reanudarlo; las dos cosas llegan como `EventoComunitarioPublicado` con el estado nuevo. Con `estado = SUSPENDED` el contexto queda suspendido (`suspendido_en`) y no eleva nada. La siguiente publicación con otro estado lo reactiva, con las fechas que traiga.
+- **Baja.** `EventoCancelado` (o un `EventoComunitarioPublicado` con `estado = CANCELLED`) marca `dado_de_baja_en`. Es definitiva: una republicación posterior no revive el contexto, y una cancelación que llega antes que la publicación deja la marca para que la publicación tardía se ignore.
+- **Cálculo.** No se escribe nada en `emergencies`. `GET /api/emergencies` y el detalle devuelven al dispatcher `dispatchPriority` (= `effectivePriority` más un nivel si hay un contexto vigente en `emergencies.barrio` en el momento de la lectura) y `priorityContext` con el motivo (`tipo`, `barrio`, `referenciaExterna`, `descripcion`, `vigenteDesde`, `vigenteHasta`), o `null`. `sortBy=priority` ordena por `dispatchPriority` en SQL. Cuando el evento termina o se cancela, la siguiente lectura ya no trae el contexto y la prioridad vuelve sola, sin job.
+- **Alcance.** Varios eventos en el mismo barrio suben un solo nivel. No sube en las `PREVENTIVA` (la cobertura del propio evento) ni en emergencias en estado terminal. El ciudadano no recibe estos campos.
+- **Hacia afuera.** La suba es interna: `EmergenciaCreada` y `EmergenciaActualizada` siguen publicando la prioridad original y no hay un evento por cada cambio. Quien la necesite la recalcula con los eventos de Espacios y los nuestros: guía autocontenida para otros equipos en **[docs/prioridad-por-contexto-para-consumidores.md](docs/prioridad-por-contexto-para-consumidores.md)**.
+- **Falta** (del ADR): alta y baja manual desde el tablero, alertas climáticas, el evento `EmergenciaPriorizada` y la prioridad manual por encima del cálculo.
 
 Cómo lee el bus:
 

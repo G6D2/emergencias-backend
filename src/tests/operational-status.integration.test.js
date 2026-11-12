@@ -148,6 +148,8 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
       estadoNuevo: 'RESUELTA',
       causasRelacionadas: ['RESIDUOS', 'VIA'],
       descripcionProblema: 'Bache profundo en la calzada',
+      latitud: expect.any(Number),
+      longitud: expect.any(Number),
       ubicacion: {
         latitud: expect.any(String),
         longitud: expect.any(String),

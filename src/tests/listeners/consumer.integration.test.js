@@ -12,6 +12,13 @@ const { EventoComunitarioPublicadoListener } = require('../../listeners/cobertur
 const { EventoCanceladoListener } = require('../../listeners/cobertura-preventiva/evento-cancelado/evento-cancelado.listener');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/cancelar-cobertura.handler');
+const {
+  REGISTRAR_CONTEXTO_ZONA,
+  DAR_DE_BAJA_CONTEXTO_ZONA,
+  createRegistrarContextoZonaHandler,
+  createDarDeBajaContextoZonaHandler,
+} = require('../../listeners/cobertura-preventiva/handlers/contexto-zona.handler');
+const { ContextoZonaRepository } = require('../../repositories/contexto-zona.repository');
 const { createLocationCrypto } = require('../../security/location-crypto');
 
 const CREATED_TOPIC = 'test.emergencias.creada';
@@ -40,6 +47,9 @@ beforeAll(() => {
   outcomeFactory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
   outcomeFactory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
   outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository, topic: UPDATED_TOPIC }));
+  const contextoZonaRepository = new ContextoZonaRepository(pool);
+  outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
+  outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
 
   publicado = new EventoComunitarioPublicadoListener(fakeKafka(), { factory: outcomeFactory });
   cancelado = new EventoCanceladoListener(fakeKafka(), { factory: outcomeFactory });
@@ -51,6 +61,7 @@ afterAll(async () => {
 
 afterEach(async () => {
   await pool.query('DELETE FROM eventos_procesados');
+  await pool.query('DELETE FROM contexto_zona');
   await pool.query(
     "DELETE FROM emergency_status_history WHERE emergency_id IN (SELECT id FROM emergencies WHERE source = 'EXTERNAL')"
   );
@@ -236,6 +247,7 @@ describe('errores del consumer (integration)', () => {
     fallaDeBase.register(CANCELAR_COBERTURA, async () => {
       throw Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01' });
     });
+    fallaDeBase.register(DAR_DE_BAJA_CONTEXTO_ZONA, async () => {});
     const listener = new EventoCanceladoListener(fakeKafka(), { factory: fallaDeBase });
     const evento = cancelacion('c1000000-0000-4000-8000-000000000002');
 
@@ -264,6 +276,7 @@ describe('errores del consumer (integration)', () => {
       // Error real de Postgres: invalid input syntax for type uuid: "timeout-123"
       await client.query('SELECT $1::uuid', ['timeout-123']);
     });
+    datoInvalido.register(DAR_DE_BAJA_CONTEXTO_ZONA, async () => {});
     const listener = new EventoCanceladoListener(fakeKafka(), { factory: datoInvalido });
     const evento = cancelacion('c1000000-0000-4000-8000-000000000003');
 

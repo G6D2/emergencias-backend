@@ -110,6 +110,24 @@ channels:
       eventoCancelado:
         $ref: '#/components/messages/EventoCancelado'
 
+  reclamoCreado:
+    address: com.citypass.reclamos.ReclamoCreado.v3
+    title: ReclamoCreado v3 (Reclamos)
+    description: |
+      Topic configurable con `EDA_TOPIC_RECLAMO_CREADO`. La versión vigente del
+      tipo es la 3 y va en su propio tópico (la 1 no trae `objetoAfectado`).
+    messages:
+      reclamoCreado:
+        $ref: '#/components/messages/ReclamoCreado'
+
+  reclamoActualizado:
+    address: com.citypass.reclamos.ReclamoActualizado
+    title: ReclamoActualizado (Reclamos)
+    description: Topic configurable con `EDA_TOPIC_RECLAMO_ACTUALIZADO`.
+    messages:
+      reclamoActualizado:
+        $ref: '#/components/messages/ReclamoActualizado'
+
 operations:
   publicarEmergenciaCreada:
     action: send
@@ -141,7 +159,9 @@ operations:
       $ref: '#/channels/eventoComunitarioPublicado'
     summary: |
       Programa una cobertura preventiva (emergencia `PREVENTIVA`) si la capacidad
-      supera `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500).
+      supera `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500). Además registra
+      un contexto de zona en el barrio del evento: mientras dura (`inicio`–`fin`),
+      las emergencias de ese barrio suben un nivel de prioridad de despacho.
     bindings:
       kafka:
         groupId:
@@ -154,7 +174,9 @@ operations:
     action: receive
     channel:
       $ref: '#/channels/eventoCancelado'
-    summary: Cancela la cobertura preventiva del evento si todavía no fue despachada.
+    summary: |
+      Cancela la cobertura preventiva del evento si todavía no fue despachada y da
+      de baja su contexto de zona (la prioridad del barrio vuelve a la normal).
     bindings:
       kafka:
         groupId:
@@ -162,6 +184,37 @@ operations:
           const: com.citypass.emergencias.EventoCanceladoListener
     messages:
       - $ref: '#/channels/eventoCancelado/messages/eventoCancelado'
+
+  recibirReclamoCreado:
+    action: receive
+    channel:
+      $ref: '#/channels/reclamoCreado'
+    summary: |
+      Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea una emergencia
+      externa `TRANSITO` (causa `RECLAMO`, `causaId` = `reclamoId`), una sola por
+      reclamo. El resto de los reclamos no hace nada.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.ReclamoCreadoListener
+    messages:
+      - $ref: '#/channels/reclamoCreado/messages/reclamoCreado'
+
+  recibirReclamoActualizado:
+    action: receive
+    channel:
+      $ref: '#/channels/reclamoActualizado'
+    summary: |
+      Cuando el reclamo llega a RESUELTO, RECHAZADO o CERRADO, cancela su
+      intervención si todavía no fue despachada.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.ReclamoActualizadoListener
+    messages:
+      - $ref: '#/channels/reclamoActualizado/messages/reclamoActualizado'
 
 components:
   securitySchemes:
@@ -203,6 +256,8 @@ components:
               prioridad: CRITICA
               estado: PENDIENTE
               barrio: null
+              latitud: null
+              longitud: null
               ubicacion: { barrio: null, latitud: null, longitud: null }
               afectaCirculacion: false
               causaId: null
@@ -245,6 +300,8 @@ components:
               causasRelacionadas: []
               descripcionProblema: null
               barrio: null
+              latitud: null
+              longitud: null
               ubicacion:
                 barrio: null
                 latitud: null
@@ -302,6 +359,34 @@ components:
           data:
             $ref: '#/components/schemas/EventoCanceladoData'
 
+    ReclamoCreado:
+      name: ReclamoCreado
+      title: Reclamo creado
+      contentType: application/json
+      description: Producido por Reclamos. `titulo`, `descripcion` y `direccion` no se publican de vuelta (texto libre).
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/ReclamoCreadoData'
+
+    ReclamoActualizado:
+      name: ReclamoActualizado
+      title: Reclamo actualizado
+      contentType: application/json
+      description: Producido por Reclamos en cada cambio de estado del reclamo.
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/ReclamoActualizadoData'
+
   schemas:
     Metadata:
       type: object
@@ -337,7 +422,7 @@ components:
     Categoria:
       type: string
       description: Catálogo de `src/domain/emergency-type.js`.
-      enum: [MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO, PREVENTIVA]
+      enum: [MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO, PREVENTIVA, TRANSITO]
 
     Timestamp:
       type: string
@@ -353,6 +438,8 @@ components:
         - prioridad
         - estado
         - barrio
+        - latitud
+        - longitud
         - ubicacion
         - afectaCirculacion
         - causaId
@@ -379,6 +466,12 @@ components:
         barrio:
           type: [string, 'null']
           description: Barrio del catálogo oficial de CABA (48), en claro. Lo leen Reclamos y Analítica.
+        latitud:
+          type: [number, 'null']
+          description: Latitud en claro, redondeada a 3 decimales (~100 m). Null si la emergencia no tiene ubicación. Es la que leen los consumidores; la exacta va cifrada en `ubicacion`.
+        longitud:
+          type: [number, 'null']
+          description: Igual que `latitud`.
         ubicacion:
           type: object
           additionalProperties: false
@@ -389,10 +482,10 @@ components:
               description: Mismo valor que `barrio`, anidado para Espacios.
             latitud:
               type: [string, 'null']
-              description: Ciphertext AES-256-GCM con la clave de bus (ver docs/bus-ubicacion-para-consumidores.md). Null sin clave de bus.
+              description: Coordenada exacta, ciphertext AES-256-GCM con la clave de bus (ver docs/bus-ubicacion-para-consumidores.md). Null sin clave de bus.
             longitud:
               type: [string, 'null']
-              description: Igual que `latitud`. No hay coordenadas en la raíz de `data`.
+              description: Igual que `latitud`. La versión aproximada en claro va en la raíz de `data`.
         afectaCirculacion:
           type: [boolean, 'null']
           description: Derivado de `categoria`. true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y PREVENTIVA; false para MEDICA, PANICO y OTRO; null sin categoría.
@@ -429,6 +522,8 @@ components:
         - causasRelacionadas
         - descripcionProblema
         - barrio
+        - latitud
+        - longitud
         - ubicacion
         - correlationId
       properties:
@@ -477,6 +572,12 @@ components:
         barrio:
           type: [string, 'null']
           description: Barrio del catálogo oficial de CABA (48), en claro.
+        latitud:
+          type: [number, 'null']
+          description: Latitud en claro, redondeada a 3 decimales (~100 m). Null si la emergencia no tiene ubicación. Es la que leen los consumidores; la exacta va cifrada en `ubicacion`.
+        longitud:
+          type: [number, 'null']
+          description: Igual que `latitud`.
         ubicacion:
           type: object
           additionalProperties: false
@@ -558,7 +659,19 @@ components:
           type: number
         estado:
           type: string
-          description: Con `CANCELLED` no se programa cobertura.
+          description: Con `CANCELLED` no se programa cobertura y se da de baja el contexto de zona.
+        inicio:
+          description: |
+            Inicio del evento (ISO 8601 o epoch). También se lee `fechaInicio`. Es el
+            comienzo de la ventana en la que sube la prioridad del barrio; si falta,
+            la ventana arranca al recibir el evento.
+        fin:
+          description: |
+            Fin del evento (ISO 8601 o epoch). También se lee `fechaFin`. Si falta,
+            la ventana dura `CONTEXTO_ZONA_DURACION_DEFAULT_HORAS` (default 6).
+        zona:
+          type: [string, 'null']
+          description: Texto libre. Solo se usa sin coordenadas, si coincide con un barrio de CABA.
         correlationId:
           type: string
           description: En Espacios no es UUID (`evento-<id>`).
@@ -575,3 +688,58 @@ components:
           type: string
         canceladoEn:
           $ref: '#/components/schemas/Timestamp'
+
+    ReclamoCreadoData:
+      type: object
+      additionalProperties: true
+      description: Solo los campos que lee Emergencias. El schema completo está en `docs/avro/ReclamoCreado.avsc` del repo de Reclamos.
+      required: [reclamoId, categoria]
+      properties:
+        reclamoId:
+          type: string
+          minLength: 1
+        categoria:
+          type: string
+          description: Solo `TRANSITO` dispara una intervención.
+        objetoAfectado:
+          type: [string, 'null']
+          description: Lo elige el vecino; puede venir null. Solo `CICLOVIA` dispara una intervención.
+        prioridad:
+          type: string
+          description: BAJA, MEDIA, ALTA o CRITICA. Define la prioridad de la emergencia.
+        estado:
+          type: string
+        titulo:
+          type: string
+        direccion:
+          type: [string, 'null']
+        barrio:
+          type: [string, 'null']
+        latitud:
+          type: [number, 'null']
+        longitud:
+          type: [number, 'null']
+        afectaCirculacion:
+          type: boolean
+        correlationId:
+          type: [string, 'null']
+        createdAt:
+          type: integer
+          description: Epoch en milisegundos.
+
+    ReclamoActualizadoData:
+      type: object
+      additionalProperties: true
+      required: [reclamoId, estadoNuevo]
+      properties:
+        reclamoId:
+          type: string
+          minLength: 1
+        estadoAnterior:
+          type: string
+        estadoNuevo:
+          type: string
+          description: RECIBIDO, EN_REVISION, ASIGNADO, EN_PROCESO, RESUELTO, RECHAZADO o CERRADO. Los tres últimos cancelan la intervención pendiente.
+        updatedAt:
+          type: integer
+          description: Epoch en milisegundos.
