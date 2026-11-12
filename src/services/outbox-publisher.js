@@ -62,23 +62,31 @@ class OutboxPublisher {
       // PROCESSING-huerfanos (lock vencido > 1min) se siguen liberando
       // porque son errores operativos ortogonales a la activacion del bus.
       const since = this.publishSince ? this.publishSince.toISOString() : null;
+      // El ORDER BY del subselect solo elige cuáles entran al lote: las filas
+      // que devuelve UPDATE ... RETURNING no salen en ese orden. Como runOnce
+      // publica el lote en el orden en que lo recibe, se ordena acá: sin esto,
+      // varios cambios de estado de una misma emergencia que caen en el mismo
+      // poll podían llegar al bus desordenados (CERRADA antes que RESUELTA).
       const result = await client.query(
-        `UPDATE outbox_events
-         SET status = 'PROCESSING', locked_at = now(), attempts = attempts + 1
-         WHERE id IN (
-           SELECT id FROM outbox_events
-           WHERE (
-             status = 'PENDING'
-             AND available_at <= now()
-             AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
-           ) OR (
-             status = 'PROCESSING' AND locked_at < now() - interval '1 minute'
+        `WITH claimed AS (
+           UPDATE outbox_events
+           SET status = 'PROCESSING', locked_at = now(), attempts = attempts + 1
+           WHERE id IN (
+             SELECT id FROM outbox_events
+             WHERE (
+               status = 'PENDING'
+               AND available_at <= now()
+               AND ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
+             ) OR (
+               status = 'PROCESSING' AND locked_at < now() - interval '1 minute'
+             )
+             ORDER BY created_at
+             FOR UPDATE SKIP LOCKED
+             LIMIT $1
            )
-           ORDER BY created_at
-           FOR UPDATE SKIP LOCKED
-           LIMIT $1
+           RETURNING id, topic, payload, attempts, created_at
          )
-         RETURNING id, topic, payload, attempts`,
+         SELECT id, topic, payload, attempts FROM claimed ORDER BY created_at, id`,
         [this.batchSize, since]
       );
       await client.query('COMMIT');
