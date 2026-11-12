@@ -116,6 +116,7 @@
           "if": {
             "properties": {
               "causasRelacionadas": {
+                "type": "array",
                 "contains": { "const": "VIA" }
               }
             }
