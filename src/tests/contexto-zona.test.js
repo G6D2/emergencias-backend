@@ -3,7 +3,10 @@ jest.mock('../security/secure-log', () => ({ secureLog: jest.fn() }));
 const {
   CONTEXTO_TIPO,
   DURACION_DEFAULT_HORAS,
+  RADIO_DEFAULT_METROS,
   duracionDefaultMs,
+  radioDefaultMetros,
+  puntoDelEvento,
   parseInstante,
   primerInstante,
   ventanaDeVigencia,
@@ -19,7 +22,6 @@ const { DarDeBajaContextoZonaRule } = require('../listeners/cobertura-preventiva
 
 const HORA = 60 * 60 * 1000;
 const EVENT_ID = 'a1000000-0000-4000-8000-000000000001';
-// Rosedal: cae en PALERMO.
 const ROSEDAL = { latitud: -34.5711, longitud: -58.4167 };
 
 describe('domain/contexto-zona', () => {
@@ -53,6 +55,36 @@ describe('domain/contexto-zona', () => {
 
     it('toma las horas de CONTEXTO_ZONA_DURACION_DEFAULT_HORAS', () => {
       expect(duracionDefaultMs({ CONTEXTO_ZONA_DURACION_DEFAULT_HORAS: '2.5' })).toBe(2.5 * HORA);
+    });
+  });
+
+  describe('radioDefaultMetros', () => {
+    it('usa el default si la variable falta o no es un número positivo', () => {
+      for (const value of [undefined, '', 'abc', '0', '-50']) {
+        expect(radioDefaultMetros({ CONTEXTO_ZONA_RADIO_DEFAULT_METROS: value })).toBe(RADIO_DEFAULT_METROS);
+      }
+    });
+
+    it('toma los metros de CONTEXTO_ZONA_RADIO_DEFAULT_METROS, en enteros', () => {
+      expect(radioDefaultMetros({ CONTEXTO_ZONA_RADIO_DEFAULT_METROS: '300' })).toBe(300);
+      expect(radioDefaultMetros({ CONTEXTO_ZONA_RADIO_DEFAULT_METROS: '750.4' })).toBe(750);
+    });
+  });
+
+  describe('puntoDelEvento', () => {
+    it('devuelve el punto si latitud y longitud son números en rango', () => {
+      expect(puntoDelEvento({ ...ROSEDAL, titulo: 'x' })).toEqual(ROSEDAL);
+      expect(puntoDelEvento({ latitud: 0, longitud: 0 })).toEqual({ latitud: 0, longitud: 0 });
+    });
+
+    it('devuelve null si falta una coordenada, no es número o está fuera de rango', () => {
+      for (const data of [
+        undefined, {}, { latitud: -34.57 }, { longitud: -58.41 },
+        { latitud: '-34.57', longitud: '-58.41' }, { latitud: null, longitud: null },
+        { latitud: NaN, longitud: -58.41 }, { latitud: 91, longitud: 0 }, { latitud: 0, longitud: -181 },
+      ]) {
+        expect(puntoDelEvento(data)).toBeNull();
+      }
     });
   });
 
@@ -106,26 +138,34 @@ describe('RegistrarContextoZonaRule', () => {
   const rule = new RegistrarContextoZonaRule();
   const contexto = (data, metadata = { eventId: EVENT_ID }) => ({ metadata, data });
 
-  it('no aplica sin eventoId o sin barrio derivable', () => {
+  it('no aplica sin eventoId o sin coordenadas numéricas', () => {
     expect(rule.appliesTo({ metadata: {} })).toBe(false);
     expect(rule.appliesTo(contexto({ ...ROSEDAL }))).toBe(false);
     expect(rule.appliesTo(contexto({ eventoId: 'ev-1' }))).toBe(false);
-    expect(rule.appliesTo(contexto({ eventoId: 'ev-1', latitud: -31.42, longitud: -64.18 }))).toBe(false);
     expect(rule.appliesTo(contexto({ eventoId: 'ev-1', latitud: '-34.57', longitud: '-58.41' }))).toBe(false);
   });
 
-  it('aplica con coordenadas en CABA, sin importar la capacidad', () => {
+  it('el texto de barrio o de zona no alcanza: sin coordenadas no hay contexto', () => {
+    expect(rule.appliesTo(contexto({ eventoId: 'ev-1', barrio: 'Palermo', zona: 'Palermo' }))).toBe(false);
+  });
+
+  it('aplica con coordenadas, sin importar la capacidad ni el barrio', () => {
     expect(rule.appliesTo(contexto({ eventoId: 'ev-1', capacidad: 10, ...ROSEDAL }))).toBe(true);
+    expect(rule.appliesTo(contexto({ eventoId: 'ev-1', latitud: -31.42, longitud: -64.18 }))).toBe(true);
   });
 
-  it('sin coordenadas usa el texto de barrio o de zona si está en el catálogo', () => {
-    expect(rule.barrio({ barrio: 'palermo' })).toBe('PALERMO');
-    expect(rule.barrio({ zona: 'Nuñez' })).toBe('NUÑEZ');
-    expect(rule.barrio({ zona: 'Zona norte' })).toBeNull();
-    expect(rule.barrio({ zona: 42 })).toBeNull();
+  it('el radio sale de CONTEXTO_ZONA_RADIO_DEFAULT_METROS', () => {
+    const original = process.env.CONTEXTO_ZONA_RADIO_DEFAULT_METROS;
+    process.env.CONTEXTO_ZONA_RADIO_DEFAULT_METROS = '300';
+    try {
+      expect(rule.apply(contexto({ eventoId: 'ev-1', ...ROSEDAL })).payload.radioMetros).toBe(300);
+    } finally {
+      if (original === undefined) delete process.env.CONTEXTO_ZONA_RADIO_DEFAULT_METROS;
+      else process.env.CONTEXTO_ZONA_RADIO_DEFAULT_METROS = original;
+    }
   });
 
-  it('devuelve RegistrarContextoZona con barrio, ventana y trazabilidad', () => {
+  it('devuelve RegistrarContextoZona con punto, radio, ventana y trazabilidad', () => {
     const outcome = rule.apply(contexto({
       eventoId: 'ev-1',
       titulo: 'Recital en el Rosedal',
@@ -140,7 +180,8 @@ describe('RegistrarContextoZonaRule', () => {
       tipo: CONTEXTO_TIPO.EVENTO_ESPACIO_PUBLICO,
       origen: 'espacios',
       referenciaExterna: 'ev-1',
-      barrio: 'PALERMO',
+      ...ROSEDAL,
+      radioMetros: RADIO_DEFAULT_METROS,
       descripcion: 'Recital en el Rosedal',
       causationId: EVENT_ID,
     });
@@ -200,7 +241,8 @@ describe('RegistrarContextoZonaRule', () => {
     expect(outcome.type).toBe('DarDeBajaContextoZona');
     expect(outcome.payload).toMatchObject({ referenciaExterna: 'ev-4', causationId: EVENT_ID });
     expect(outcome.payload.sourceUpdatedAt.toISOString()).toBe('2026-11-19T10:00:00.000Z');
-    expect(outcome.payload).not.toHaveProperty('barrio');
+    expect(outcome.payload).not.toHaveProperty('latitud');
+    expect(outcome.payload).not.toHaveProperty('radioMetros');
   });
 
   it('tolera un contexto sin data ni metadata', () => {
@@ -246,7 +288,8 @@ describe('handlers de contexto de zona', () => {
     tipo: CONTEXTO_TIPO.EVENTO_ESPACIO_PUBLICO,
     origen: 'espacios',
     referenciaExterna: 'ev-1',
-    barrio: 'PALERMO',
+    ...ROSEDAL,
+    radioMetros: 500,
     vigenteDesde: new Date('2026-11-21T18:00:00Z'),
     vigenteHasta: new Date('2026-11-21T23:00:00Z'),
   };
@@ -272,7 +315,9 @@ describe('handlers de contexto de zona', () => {
   it('RegistrarContextoZona valida el payload', async () => {
     const handler = createRegistrarContextoZonaHandler({ contextoZonaRepository: { upsert: jest.fn() } });
     await expect(handler(client, undefined)).rejects.toThrow(/tipo, origen y referenciaExterna/);
-    await expect(handler(client, { ...payload, barrio: null })).rejects.toThrow(/barrio, vigenteDesde y vigenteHasta/);
+    await expect(handler(client, { ...payload, latitud: null })).rejects.toThrow(/latitud, longitud y radioMetros/);
+    await expect(handler(client, { ...payload, radioMetros: 0 })).rejects.toThrow(/latitud, longitud y radioMetros/);
+    await expect(handler(client, { ...payload, vigenteHasta: null })).rejects.toThrow(/vigenteDesde y vigenteHasta/);
   });
 
   it('DarDeBajaContextoZona da de baja y avisa si ya lo estaba', async () => {
@@ -294,7 +339,9 @@ describe('ContextoZonaRepository', () => {
   const row = {
     id: 'ctx-1',
     tipo: 'EVENTO_ESPACIO_PUBLICO',
-    barrio: 'PALERMO',
+    latitud: ROSEDAL.latitud,
+    longitud: ROSEDAL.longitud,
+    radio_metros: 500,
     vigente_desde: new Date('2026-11-21T18:00:00Z'),
     vigente_hasta: new Date('2026-11-21T23:00:00Z'),
     origen: 'espacios',
@@ -311,7 +358,8 @@ describe('ContextoZonaRepository', () => {
     expect(mapContextoZona(undefined)).toBeNull();
     expect(mapContextoZona(row)).toMatchObject({
       id: 'ctx-1',
-      barrio: 'PALERMO',
+      ...ROSEDAL,
+      radioMetros: 500,
       referenciaExterna: 'ev-1',
       vigenteHasta: row.vigente_hasta,
       dadoDeBajaEn: null,
@@ -324,7 +372,9 @@ describe('ContextoZonaRepository', () => {
 
     const result = await repository.upsert(null, {
       tipo: row.tipo,
-      barrio: row.barrio,
+      latitud: row.latitud,
+      longitud: row.longitud,
+      radioMetros: row.radio_metros,
       vigenteDesde: row.vigente_desde,
       vigenteHasta: row.vigente_hasta,
       origen: row.origen,
@@ -338,7 +388,7 @@ describe('ContextoZonaRepository', () => {
     expect(sql).toMatch(/contexto_zona\.dado_de_baja_en IS NULL/);
     expect(sql).toMatch(/contexto_zona\.source_updated_at <= EXCLUDED\.source_updated_at/);
     expect(values).toEqual([
-      row.tipo, row.barrio, row.vigente_desde, row.vigente_hasta, row.origen, row.referencia_externa,
+      row.tipo, row.latitud, row.longitud, row.radio_metros, row.vigente_desde, row.vigente_hasta, row.origen, row.referencia_externa,
       null, null, row.source_updated_at, false, false,
     ]);
   });
@@ -351,8 +401,8 @@ describe('ContextoZonaRepository', () => {
 
     expect(result.suspendidoEn).toBeInstanceOf(Date);
     const [sql, values] = pool.query.mock.calls[0];
-    expect(sql).toMatch(/suspendido_en = CASE WHEN \$10::boolean THEN COALESCE\(contexto_zona\.suspendido_en, now\(\)\) END/);
-    expect(sql).toMatch(/vigente_hasta = CASE WHEN \$11::boolean THEN contexto_zona\.vigente_hasta ELSE EXCLUDED\.vigente_hasta END/);
+    expect(sql).toMatch(/suspendido_en = CASE WHEN \$12::boolean THEN COALESCE\(contexto_zona\.suspendido_en, now\(\)\) END/);
+    expect(sql).toMatch(/vigente_hasta = CASE WHEN \$13::boolean THEN contexto_zona\.vigente_hasta ELSE EXCLUDED\.vigente_hasta END/);
     expect(values.slice(-2)).toEqual([true, true]);
   });
 

@@ -1,8 +1,9 @@
 // Contexto de zona de punta a punta (ADR "Elevar temporalmente la prioridad
 // con contextos de zona"): un EventoComunitarioPublicado de Espacios deja un
-// contexto en su barrio y, mientras está vigente, las emergencias de ese
-// barrio suben un nivel de prioridad de despacho. Un EventoCancelado lo da de
-// baja y la prioridad vuelve sola.
+// contexto alrededor de su ubicación y, mientras está en curso, las
+// emergencias que se crean dentro de su radio suben un nivel de prioridad de
+// despacho. Cuando el evento termina, se suspende o se cancela, la prioridad
+// vuelve sola.
 //
 // Kafka no corre: se llama a EventListener.onMessage() con el mensaje
 // serializado. Postgres y la app HTTP son reales.
@@ -29,9 +30,13 @@ const { createLifecycleHarness } = require('../helpers/emergency-lifecycle');
 const CREATED_TOPIC = 'test.contexto.emergencias.creada';
 const UPDATED_TOPIC = 'test.contexto.emergencias.actualizada';
 
-// Rosedal (PALERMO) y Obelisco (SAN NICOLAS).
-const EN_PALERMO = { latitude: -34.5711, longitude: -58.4167 };
-const EN_SAN_NICOLAS = { latitude: -34.6037, longitude: -58.3816 };
+// El evento es en el Rosedal. CERCA está a ~330 m (dentro del radio default
+// de 500 m). PLAZA_ITALIA está a ~1,2 km en el mismo barrio (PALERMO): con la
+// regla vieja subía, ahora no. El Obelisco queda a más de 4 km.
+const ROSEDAL = { latitude: -34.5711, longitude: -58.4167 };
+const CERCA = { latitude: -34.5740, longitude: -58.4160 };
+const PLAZA_ITALIA = { latitude: -34.5810, longitude: -58.4212 };
+const OBELISCO = { latitude: -34.6037, longitude: -58.3816 };
 
 const HORA = 60 * 60 * 1000;
 const haceUnaHora = () => new Date(Date.now() - HORA).toISOString();
@@ -67,8 +72,8 @@ function publicacion(overrides = {}) {
       eventoId,
       titulo: 'Recital en el Rosedal',
       capacidad: 50,
-      latitud: EN_PALERMO.latitude,
-      longitud: EN_PALERMO.longitude,
+      latitud: ROSEDAL.latitude,
+      longitud: ROSEDAL.longitude,
       estado: 'ACTIVE',
       inicio: haceUnaHora(),
       fin: enDosHoras(),
@@ -138,14 +143,16 @@ afterAll(async () => {
 });
 
 describe('contexto de zona por evento comunitario (integration)', () => {
-  it('la publicación crea el contexto en el barrio del evento con su ventana', async () => {
+  it('la publicación crea el contexto en el punto del evento, con el radio default y su ventana', async () => {
     const evento = publicacion();
     await publicado.onMessage(buildMessage(evento));
 
     const contexto = await contextoDe(evento.data.eventoId);
     expect(contexto).toMatchObject({
       tipo: 'EVENTO_ESPACIO_PUBLICO',
-      barrio: 'PALERMO',
+      latitud: ROSEDAL.latitude,
+      longitud: ROSEDAL.longitude,
+      radioMetros: 500,
       origen: 'espacios',
       descripcion: 'Recital en el Rosedal',
       causationId: evento.metadata.eventId,
@@ -155,36 +162,126 @@ describe('contexto de zona por evento comunitario (integration)', () => {
     expect(contexto.vigenteHasta.toISOString()).toBe(evento.data.fin);
   });
 
-  it('durante el evento, una emergencia nueva del barrio sube un nivel; la de otro barrio no', async () => {
+  it('durante el evento, una emergencia nueva dentro del radio sube un nivel; fuera del radio no', async () => {
     const evento = publicacion();
     await publicado.onMessage(buildMessage(evento));
 
-    const enElBarrio = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
-    const enOtroBarrio = await h.createPending({ emergencyType: 'MEDICA', location: EN_SAN_NICOLAS });
+    const dentro = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
+    const mismoBarrio = await h.createPending({ emergencyType: 'MEDICA', location: PLAZA_ITALIA });
+    const lejos = await h.createPending({ emergencyType: 'MEDICA', location: OBELISCO });
 
-    const elevada = await detalle(enElBarrio);
+    const elevada = await detalle(dentro);
     expect(elevada.severity).toBe('high');
     expect(elevada.effectivePriority).toBe('high');
     expect(elevada.dispatchPriority).toBe('critical');
     expect(elevada.priorityContext).toMatchObject({
       tipo: 'EVENTO_ESPACIO_PUBLICO',
-      barrio: 'PALERMO',
+      latitud: ROSEDAL.latitude,
+      longitud: ROSEDAL.longitude,
+      radioMetros: 500,
       referenciaExterna: evento.data.eventoId,
       descripcion: 'Recital en el Rosedal',
     });
 
-    const normal = await detalle(enOtroBarrio);
+    // Mismo barrio (PALERMO) pero a más de 500 m: el barrio ya no cuenta.
+    const enElBarrio = await detalle(mismoBarrio);
+    expect(enElBarrio.barrio).toBe('PALERMO');
+    expect(enElBarrio.dispatchPriority).toBe('high');
+    expect(enElBarrio.priorityContext).toBeNull();
+
+    const normal = await detalle(lejos);
     expect(normal.dispatchPriority).toBe('high');
     expect(normal.priorityContext).toBeNull();
 
-    // La prioridad guardada no se toca.
-    expect((await h.emergencyRow(enElBarrio)).severity).toBe('high');
+    // La prioridad guardada no se toca, y de la emergencia solo se guarda el
+    // vínculo con el contexto: ninguna coordenada en claro.
+    const fila = await h.emergencyRow(dentro);
+    expect(fila.severity).toBe('high');
+    expect(fila.latitude).toBeNull();
+    expect(fila.longitude).toBeNull();
+    const vinculos = await pool.query('SELECT * FROM emergencia_contexto_zona WHERE emergency_id = $1', [dentro]);
+    expect(vinculos.rows).toHaveLength(1);
+    expect(Object.keys(vinculos.rows[0]).sort()).toEqual(['contexto_id', 'created_at', 'emergency_id']);
+  });
+
+  it('una emergencia que ya existía cuando llega el evento no sube', async () => {
+    const previa = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
+    await publicado.onMessage(buildMessage(publicacion()));
+
+    const emergencia = await detalle(previa);
+    expect(emergencia.dispatchPriority).toBe('high');
+    expect(emergencia.priorityContext).toBeNull();
+  });
+
+  it('una emergencia creada antes de que empiece el evento no sube cuando el evento empieza', async () => {
+    const evento = publicacion({
+      inicio: new Date(Date.now() + HORA).toISOString(),
+      fin: new Date(Date.now() + 3 * HORA).toISOString(),
+    });
+    await publicado.onMessage(buildMessage(evento));
+    const anterior = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
+
+    // El evento empieza.
+    await pool.query(
+      "UPDATE contexto_zona SET vigente_desde = now() - interval '1 minute' WHERE referencia_externa = $1",
+      [evento.data.eventoId]
+    );
+
+    expect((await detalle(anterior)).priorityContext).toBeNull();
+    const durante = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
+    expect((await detalle(durante)).dispatchPriority).toBe('critical');
+  });
+
+  it('cuando el evento termina la prioridad vuelve sola, sin que nadie avise', async () => {
+    const evento = publicacion();
+    await publicado.onMessage(buildMessage(evento));
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
+    expect((await detalle(id)).dispatchPriority).toBe('critical');
+
+    // Pasa la hora de fin.
+    await pool.query(
+      "UPDATE contexto_zona SET vigente_hasta = now() - interval '1 second' WHERE referencia_externa = $1",
+      [evento.data.eventoId]
+    );
+
+    const despues = await detalle(id);
+    expect(despues.dispatchPriority).toBe('high');
+    expect(despues.priorityContext).toBeNull();
+  });
+
+  it('el radio es el de CONTEXTO_ZONA_RADIO_DEFAULT_METROS al registrar el evento', async () => {
+    const original = process.env.CONTEXTO_ZONA_RADIO_DEFAULT_METROS;
+    process.env.CONTEXTO_ZONA_RADIO_DEFAULT_METROS = '1500';
+    try {
+      const evento = publicacion();
+      await publicado.onMessage(buildMessage(evento));
+      expect((await contextoDe(evento.data.eventoId)).radioMetros).toBe(1500);
+
+      const id = await h.createPending({ emergencyType: 'MEDICA', location: PLAZA_ITALIA });
+      expect((await detalle(id)).dispatchPriority).toBe('critical');
+    } finally {
+      if (original === undefined) delete process.env.CONTEXTO_ZONA_RADIO_DEFAULT_METROS;
+      else process.env.CONTEXTO_ZONA_RADIO_DEFAULT_METROS = original;
+    }
+  });
+
+  it('al anonimizar la ubicación se borra también el vínculo con el contexto', async () => {
+    await publicado.onMessage(buildMessage(publicacion()));
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
+    await h.patch(id, 'cancel', 'citizen', { reason: 'falsa alarma' }).expect(200);
+    await pool.query("UPDATE emergencies SET closed_at = now() - interval '100 hours' WHERE id = $1", [id]);
+
+    const { ids } = await emergencyRepository.anonymizeExpiredLocations(72);
+
+    expect(ids).toContain(id);
+    const vinculos = await pool.query('SELECT 1 FROM emergencia_contexto_zona WHERE emergency_id = $1', [id]);
+    expect(vinculos.rows).toHaveLength(0);
   });
 
   it('la cancelación da de baja el contexto y la prioridad vuelve a la normal', async () => {
     const evento = publicacion();
     await publicado.onMessage(buildMessage(evento));
-    const id = await h.createPending({ emergencyType: 'INFRAESTRUCTURA', location: EN_PALERMO });
+    const id = await h.createPending({ emergencyType: 'INFRAESTRUCTURA', location: CERCA });
     expect((await detalle(id)).dispatchPriority).toBe('high');
 
     await cancelado.onMessage(buildMessage(cancelacion(evento.data.eventoId)));
@@ -202,7 +299,7 @@ describe('contexto de zona por evento comunitario (integration)', () => {
     await publicado.onMessage(buildMessage(publicacion({ eventoId: evento.data.eventoId })));
 
     expect((await contextoDe(evento.data.eventoId)).dadoDeBajaEn).not.toBeNull();
-    const id = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
     expect((await detalle(id)).dispatchPriority).toBe('high');
   });
 
@@ -213,8 +310,9 @@ describe('contexto de zona por evento comunitario (integration)', () => {
 
     const contexto = await contextoDe(evento.data.eventoId);
     expect(contexto.dadoDeBajaEn).not.toBeNull();
-    expect(contexto.barrio).toBeNull();
-    const id = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    expect(contexto.latitud).toBeNull();
+    expect(contexto.radioMetros).toBeNull();
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
     expect((await detalle(id)).priorityContext).toBeNull();
   });
 
@@ -229,7 +327,7 @@ describe('contexto de zona por evento comunitario (integration)', () => {
   it('un evento suspendido deja de elevar; al reanudarse vuelve a elevar', async () => {
     const evento = publicacion();
     await publicado.onMessage(buildMessage(evento));
-    const id = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
     expect((await detalle(id)).dispatchPriority).toBe('critical');
 
     await publicado.onMessage(buildMessage(publicacion({ eventoId: evento.data.eventoId, estado: 'SUSPENDED' })));
@@ -253,7 +351,7 @@ describe('contexto de zona por evento comunitario (integration)', () => {
     await publicado.onMessage(buildMessage(publicacion({ eventoId: evento.data.eventoId, estado: 'ACTIVE' })));
 
     expect((await contextoDe(evento.data.eventoId)).dadoDeBajaEn).not.toBeNull();
-    const id = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
     expect((await detalle(id)).priorityContext).toBeNull();
   });
 
@@ -282,7 +380,7 @@ describe('contexto de zona por evento comunitario (integration)', () => {
     await publicado.onMessage(buildMessage(futuro));
     await publicado.onMessage(buildMessage(pasado));
 
-    const id = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
     const emergencia = await detalle(id);
     expect(emergencia.dispatchPriority).toBe('high');
     expect(emergencia.priorityContext).toBeNull();
@@ -302,12 +400,12 @@ describe('contexto de zona por evento comunitario (integration)', () => {
     expect(rows[0].vigente_hasta.toISOString()).toBe(nuevoFin);
   });
 
-  it('dos eventos en el mismo barrio suben un solo nivel, y critical sigue critical', async () => {
+  it('dos eventos que alcanzan a la emergencia suben un solo nivel, y critical sigue critical', async () => {
     await publicado.onMessage(buildMessage(publicacion()));
     await publicado.onMessage(buildMessage(publicacion({ titulo: 'Feria en Plaza Italia' })));
 
-    const otro = await h.createPending({ emergencyType: 'OTRO', location: EN_PALERMO });
-    const panico = await h.createPending({ location: EN_PALERMO });
+    const otro = await h.createPending({ emergencyType: 'OTRO', location: CERCA });
+    const panico = await h.createPending({ location: CERCA });
 
     expect((await detalle(otro)).dispatchPriority).toBe('medium');
     expect((await detalle(panico)).dispatchPriority).toBe('critical');
@@ -326,16 +424,16 @@ describe('contexto de zona por evento comunitario (integration)', () => {
     expect(preventiva.barrio).toBe('PALERMO');
     expect(preventiva.dispatchPriority).toBe('low');
 
-    const cancelada = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    const cancelada = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
     await h.patch(cancelada, 'cancel', 'citizen', { reason: 'falsa alarma' }).expect(200);
     expect((await detalle(cancelada)).dispatchPriority).toBe('high');
   });
 
   it('sortBy=priority ordena por prioridad de despacho, también entre páginas', async () => {
     await publicado.onMessage(buildMessage(publicacion()));
-    // Misma severity (high): la del barrio del evento es posterior, pero va primero.
-    const fuera = await h.createPending({ emergencyType: 'INCENDIO', location: EN_SAN_NICOLAS });
-    const dentro = await h.createPending({ emergencyType: 'INCENDIO', location: EN_PALERMO });
+    // Misma severity (high): la que está cerca del evento es posterior, pero va primero.
+    const fuera = await h.createPending({ emergencyType: 'INCENDIO', location: OBELISCO });
+    const dentro = await h.createPending({ emergencyType: 'INCENDIO', location: CERCA });
 
     const pagina = (page) => emergencyRepository.findPage({
       userId: h.identities.citizen.sub,
@@ -357,7 +455,7 @@ describe('contexto de zona por evento comunitario (integration)', () => {
 
   it('el listado del dispatcher trae la prioridad de despacho; el ciudadano no la ve', async () => {
     await publicado.onMessage(buildMessage(publicacion()));
-    const id = await h.createPending({ emergencyType: 'MEDICA', location: EN_PALERMO });
+    const id = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
 
     const comoCiudadano = await h.call('get', '/api/emergencies?limit=100', 'citizen');
     const propia = comoCiudadano.body.data.find((e) => e.id === id);
@@ -370,13 +468,17 @@ describe('contexto de zona por evento comunitario (integration)', () => {
     expect(detalleCiudadano.body.data).not.toHaveProperty('priorityContext');
   });
 
-  it('un evento fuera de CABA o sin ubicación no crea contexto', async () => {
-    const lejos = publicacion({ latitud: -31.4201, longitud: -64.1888 });
-    const sinUbicacion = publicacion({ latitud: null, longitud: null });
-    await publicado.onMessage(buildMessage(lejos));
+  it('un evento sin coordenadas no crea contexto, aunque traiga el barrio en texto', async () => {
+    const sinUbicacion = publicacion({ latitud: null, longitud: null, barrio: 'Palermo', zona: 'Palermo' });
     await publicado.onMessage(buildMessage(sinUbicacion));
 
-    expect(await contextoDe(lejos.data.eventoId)).toBeNull();
     expect(await contextoDe(sinUbicacion.data.eventoId)).toBeNull();
+  });
+
+  it('la zona no depende del catálogo de barrios: un evento fuera de CABA también crea contexto', async () => {
+    const cordoba = publicacion({ latitud: -31.4201, longitud: -64.1888 });
+    await publicado.onMessage(buildMessage(cordoba));
+
+    expect(await contextoDe(cordoba.data.eventoId)).toMatchObject({ latitud: -31.4201, longitud: -64.1888 });
   });
 });

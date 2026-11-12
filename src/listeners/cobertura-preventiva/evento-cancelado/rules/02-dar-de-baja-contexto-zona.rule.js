@@ -3,7 +3,7 @@ const { isUuid } = require('../../../../utils/uuid');
 const { CONTEXTO_TIPO, ORIGEN_ESPACIOS, primerInstante } = require('../../../../domain/contexto-zona');
 
 // Espacios canceló el evento comunitario: su contexto de zona se da de baja
-// y las emergencias del barrio dejan de subir de prioridad en la próxima
+// y las emergencias cercanas dejan de subir de prioridad en la próxima
 // lectura. Si la cancelación llega antes que la publicación, queda la marca
 // y la publicación tardía no crea el contexto.
 class DarDeBajaContextoZonaRule extends BusinessRule {

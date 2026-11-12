@@ -12,19 +12,24 @@ function createRegistrarContextoZonaHandler({ contextoZonaRepository }) {
   if (!contextoZonaRepository) throw new Error('createRegistrarContextoZonaHandler requiere contextoZonaRepository');
 
   return async function registrarContextoZona(client, payload) {
-    const { tipo, origen, referenciaExterna, barrio, vigenteDesde, vigenteHasta } = payload || {};
+    const {
+      tipo, origen, referenciaExterna, latitud, longitud, radioMetros, vigenteDesde, vigenteHasta,
+    } = payload || {};
     if (!tipo || !origen || !referenciaExterna) {
       throw new ValidationError('RegistrarContextoZona requiere tipo, origen y referenciaExterna');
     }
-    if (!barrio || !vigenteDesde || !vigenteHasta) {
-      throw new ValidationError('RegistrarContextoZona requiere barrio, vigenteDesde y vigenteHasta');
+    if (!Number.isFinite(latitud) || !Number.isFinite(longitud) || !(radioMetros > 0)) {
+      throw new ValidationError('RegistrarContextoZona requiere latitud, longitud y radioMetros');
+    }
+    if (!vigenteDesde || !vigenteHasta) {
+      throw new ValidationError('RegistrarContextoZona requiere vigenteDesde y vigenteHasta');
     }
 
     const contexto = await contextoZonaRepository.upsert(client, payload);
     secureLog('info', contexto ? 'Contexto de zona registrado' : 'Contexto de zona no registrado: llegó viejo o ya está dado de baja', {
       tipo,
       referenciaExterna,
-      barrio,
+      radioMetros,
     });
     return { applied: Boolean(contexto), contextoId: contexto ? contexto.id : null };
   };

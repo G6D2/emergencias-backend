@@ -88,8 +88,8 @@ async function start() {
   outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository }));
   outcomeFactory.register(CREAR_INTERVENCION, createCrearIntervencionHandler({ emergencyRepository }));
   outcomeFactory.register(CERRAR_INTERVENCION, createCerrarIntervencionHandler({ emergencyRepository }));
-  // Contexto de zona: mientras dura el evento, las emergencias de su barrio
-  // suben un nivel de prioridad de despacho (se calcula al leer).
+  // Contexto de zona: mientras dura el evento, las emergencias que se crean
+  // dentro de su radio suben un nivel de prioridad de despacho.
   const contextoZonaRepository = new ContextoZonaRepository(pool);
   outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
