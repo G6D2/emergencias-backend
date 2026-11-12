@@ -42,6 +42,31 @@ class EventosProcesadosRepository {
     return result.rowCount === 1;
   }
 
+  // Eventos externos más recientes primero, procesados o descartados. Si el
+  // mensaje es el último que escribió un contexto de zona, trae la referencia
+  // de ese contexto (el eventoId de Espacios). No devuelve el contenido del
+  // evento. Para el tablero de pruebas: GET /api/received-events.
+  async findRecent({ limit = 50 } = {}) {
+    const result = await this.pool.query(
+      `SELECT e.event_id, e.source, e.event_type, e.status, e.discard_reason, e.processed_at,
+              c.referencia_externa AS contexto_referencia
+       FROM eventos_procesados e
+       LEFT JOIN contexto_zona c ON c.causation_id = e.event_id
+       ORDER BY e.processed_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    return result.rows.map((row) => ({
+      eventId: row.event_id,
+      source: row.source,
+      eventType: row.event_type,
+      status: row.status,
+      discardReason: row.discard_reason ?? null,
+      processedAt: row.processed_at,
+      contextoReferencia: row.contexto_referencia ?? null,
+    }));
+  }
+
   async findById(eventId) {
     const result = await this.pool.query(
       `SELECT event_id, source, event_type, causation_id, status, discard_reason, processed_at

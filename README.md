@@ -332,6 +332,8 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 | `PATCH /api/citizen/saved-locations/:id` | `citizen` | modifica una propia |
 | `DELETE /api/citizen/saved-locations/:id` | `citizen` | borra una propia |
 | `GET /api/outbox-events` | `dispatcher` | estado de los eventos sin payload; filtros `status`, `topic`, `page`, `limit` (máx. 100) |
+| `GET /api/zone-contexts` | `dispatcher` | contextos de zona con punto, radio, ventana, `estado` y `emergenciasVinculadas`; `limit` (máx. 100) |
+| `GET /api/received-events` | `dispatcher` | eventos externos recibidos del bus, procesados o descartados, sin su contenido; `limit` (máx. 100) |
 
 Una ruta o método que no existe responde **404** en JSON (`{ "error": "NotFoundError", "message": "Cannot GET /..." }`).
 
@@ -590,6 +592,13 @@ Perfil personal (`GET`/`PUT /api/citizen/profile`) y ubicaciones frecuentes (`GE
 ### GET `/api/outbox-events`
 
 Estado de los eventos del outbox para el dispatcher: `id`, `topic`, `status`, `attempts`, fechas y `lastError`, sin el payload. Filtros `status` (`PENDING`, `PROCESSING`, `PUBLISHED`, `FAILED`, `SKIPPED`) y `topic`.
+
+### GET `/api/zone-contexts` y GET `/api/received-events`
+
+Solo lectura, para ver desde afuera qué llegó del bus y qué dejó (las usa `casos.sh --prod` del banco de pruebas contra un entorno desplegado, sin acceso a su base).
+
+- `/api/zone-contexts`: los contextos de zona, más recientes primero. Cada uno trae `referenciaExterna` (el `eventoId`), `descripcion`, `latitud`, `longitud`, `radioMetros`, `vigenteDesde`, `vigenteHasta`, `estado` calculado al momento del pedido (`EN_CURSO`, `PROGRAMADO`, `SUSPENDIDO`, `FINALIZADO`, `DADO_DE_BAJA`, o `SIN_PUNTO` para los contextos anteriores a V31) y `emergenciasVinculadas`.
+- `/api/received-events`: los eventos externos que consumieron los listeners, más recientes primero: `eventType`, `source`, `status` (`PROCESSED` o `DISCARDED`), `discardReason`, `processedAt` y `contextoReferencia` (el `eventoId` del contexto si ese mensaje fue el último que lo escribió). No devuelve el contenido del evento.
 
 ### GET `/health`
 

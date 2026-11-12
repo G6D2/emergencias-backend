@@ -98,6 +98,25 @@ class ContextoZonaRepository {
     return mapContextoZona(result.rows[0]);
   }
 
+  // Contextos más recientes primero, con cuántas emergencias quedaron
+  // vinculadas a cada uno (creadas dentro de su radio con el contexto en
+  // curso). Para el tablero de pruebas: GET /api/zone-contexts.
+  async findRecent({ limit = 50 } = {}) {
+    const result = await this.pool.query(
+      `SELECT c.*,
+              (SELECT COUNT(*)::int FROM emergencia_contexto_zona ecz WHERE ecz.contexto_id = c.id)
+                AS emergencias_vinculadas
+       FROM contexto_zona c
+       ORDER BY c.updated_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    return result.rows.map((row) => ({
+      ...mapContextoZona(row),
+      emergenciasVinculadas: row.emergencias_vinculadas,
+    }));
+  }
+
   async findByReferencia(executor, { tipo, origen, referenciaExterna }) {
     const client = executor || this.pool;
     const result = await client.query(

@@ -10,6 +10,7 @@ const { createOfficerRoutes } = require('./routes/officer.routes');
 const { createIncidentsRoutes } = require('./routes/incidents.routes');
 const { createCitizenProfileRoutes } = require('./routes/citizen-profile.routes');
 const { createAsyncApiRoutes } = require('./routes/asyncapi.routes');
+const { createZoneContextsRoutes, createReceivedEventsRoutes } = require('./routes/zone-contexts.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
 const { secureLog } = require('./security/secure-log');
@@ -26,6 +27,8 @@ const { kafkaHealth } = require('./services/kafka.service');
  *   officerRepository?: object|null,
  *   incidentRepository?: object|null,
  *   citizenProfileRepository?: object|null,
+ *   contextoZonaRepository?: object|null,
+ *   eventosProcesadosRepository?: object|null,
  * }} [options]
  */
 function createApp(kafkaService, emergencyRepository, options = {}) {
@@ -97,6 +100,12 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   }
   if (citizenProfileRepository) {
     app.use('/api/citizen', createCitizenProfileRoutes(citizenProfileRepository, authenticate));
+  }
+  if (options.contextoZonaRepository) {
+    app.use('/api/zone-contexts', createZoneContextsRoutes(options.contextoZonaRepository, authenticate));
+  }
+  if (options.eventosProcesadosRepository) {
+    app.use('/api/received-events', createReceivedEventsRoutes(options.eventosProcesadosRepository, authenticate));
   }
 
   // Ruta o método no soportado: 404 en JSON con el mismo shape { error, message }

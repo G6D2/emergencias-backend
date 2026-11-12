@@ -33,6 +33,7 @@ const options = {
       { name: 'Emergencies', description: 'Listado, detalle y cambios de estado de emergencias' },
       { name: 'Officers', description: 'Catálogo de oficiales para asignación (dispatcher)' },
       { name: 'Incidents', description: 'Resultado del motor de detección de incidentes (dispatcher)' },
+      { name: 'ZoneContexts', description: 'Contextos de zona y eventos externos recibidos (dispatcher, solo lectura)' },
       { name: 'CitizenProfile', description: 'Perfil personal y ubicaciones frecuentes del ciudadano' },
       { name: 'Outbox', description: 'Estado operativo de los eventos pendientes de publicar (dispatcher)' },
     ],

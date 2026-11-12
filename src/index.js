@@ -121,6 +121,8 @@ async function start() {
     officerRepository,
     incidentRepository,
     citizenProfileRepository,
+    contextoZonaRepository,
+    eventosProcesadosRepository: eventosProcesadosRepo,
   });
 
   const server = app.listen(PORT, () => {

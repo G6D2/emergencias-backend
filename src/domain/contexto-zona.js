@@ -64,6 +64,29 @@ function puntoDelEvento({ latitud, longitud } = {}) {
   return enRango(latitud, 90) && enRango(longitud, 180) ? { latitud, longitud } : null;
 }
 
+// Estado de un contexto en un instante, para mostrarlo (GET /api/zone-contexts).
+// Solo EN_CURSO eleva prioridad. SIN_PUNTO: contextos creados por barrio
+// antes de V31, que no alcanzan a ninguna emergencia hasta que el evento se
+// republique.
+const ESTADO_CONTEXTO = Object.freeze({
+  DADO_DE_BAJA: 'DADO_DE_BAJA',
+  SIN_PUNTO: 'SIN_PUNTO',
+  SUSPENDIDO: 'SUSPENDIDO',
+  PROGRAMADO: 'PROGRAMADO',
+  EN_CURSO: 'EN_CURSO',
+  FINALIZADO: 'FINALIZADO',
+});
+
+function estadoDelContexto(contexto, ahora = new Date()) {
+  if (contexto.dadoDeBajaEn) return ESTADO_CONTEXTO.DADO_DE_BAJA;
+  if (contexto.latitud == null || contexto.longitud == null) return ESTADO_CONTEXTO.SIN_PUNTO;
+  if (contexto.suspendidoEn) return ESTADO_CONTEXTO.SUSPENDIDO;
+  const t = ahora.getTime();
+  if (new Date(contexto.vigenteDesde).getTime() > t) return ESTADO_CONTEXTO.PROGRAMADO;
+  if (new Date(contexto.vigenteHasta).getTime() <= t) return ESTADO_CONTEXTO.FINALIZADO;
+  return ESTADO_CONTEXTO.EN_CURSO;
+}
+
 // Acepta lo que puede llegar por el bus: ISO 8601, epoch (segundos o
 // milisegundos, también como logical type de Avro) o Date. Lo demás es null.
 function parseInstante(value) {
@@ -110,6 +133,8 @@ module.exports = {
   RADIO_DEFAULT_METROS,
   radioDefaultMetros,
   puntoDelEvento,
+  ESTADO_CONTEXTO,
+  estadoDelContexto,
   esEstadoCancelado,
   esEstadoSuspendido,
   duracionDefaultMs,
