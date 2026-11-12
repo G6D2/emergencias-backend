@@ -29,6 +29,7 @@ const SEVERITY_BY_TYPE = Object.freeze({
   INFRAESTRUCTURA: 'medium',
   OTRO: 'low',
   PREVENTIVA: 'low',
+  TRANSITO: 'medium',
 });
 
 /**
