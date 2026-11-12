@@ -12,6 +12,7 @@ const { assertBusLocationCryptoAtBoot } = require('./security/bus-location-crypt
 const { startLocationRetentionJob } = require('./security/location-retention');
 const { startCitizenProfileRetentionJob } = require('./security/citizen-profile-retention');
 const { startIncidentDetectionJob } = require('./services/incident-detection-job');
+const { startEmergencyExpirationJob } = require('./services/emergency-expiration-job');
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher, isOutboxPublisherEnabled } = require('./services/outbox-publisher');
@@ -105,6 +106,8 @@ async function start() {
   const listenerHandles = listeners.map((listener) => superviseListener(listener));
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
+  // Las abiertas que nadie tocó en el plazo de retención expiran (y se anonimizan).
+  const expirationJob = startEmergencyExpirationJob(emergencyRepository);
   const citizenPiiRetentionJob = startCitizenProfileRetentionJob(citizenProfileRepository);
   const incidentDetectionJob = startIncidentDetectionJob(emergencyRepository, incidentRepository, { pool });
   // Mantiene despiertos backend y frontend en horario de clase (Render free).
@@ -142,6 +145,7 @@ async function start() {
     shuttingDown = true;
     secureLog('info', `${signal} recibido: apagando`);
     retentionJob.stop();
+    expirationJob.stop();
     citizenPiiRetentionJob.stop();
     incidentDetectionJob.stop();
     keepWarmJob.stop();

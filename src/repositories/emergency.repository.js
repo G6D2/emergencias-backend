@@ -1,5 +1,7 @@
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
-const { assertTransition, isTerminal, TERMINAL_STATUSES } = require('../domain/emergency-status');
+const {
+  assertTransition, isTerminal, expirationTarget, TERMINAL_STATUSES, ACTIVE_STATUSES,
+} = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { resolveBarrio } = require('../domain/barrio');
 const { haversineDistanceMeters } = require('../domain/rule-based-grouper');
@@ -8,6 +10,16 @@ const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
 const { mapOfficer } = require('./officer.repository');
 const { effectivePriority, dispatchPriority } = require('../domain/severity');
+
+// Momento del último cambio de estado de la emergencia `e`: la última entrada
+// del historial, o la creación si nunca cambió.
+const LAST_STATUS_CHANGE_SQL = `GREATEST(
+           e.created_at,
+           COALESCE(
+             (SELECT max(h.created_at) FROM emergency_status_history h WHERE h.emergency_id = e.id),
+             e.created_at
+           )
+         )`;
 
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
@@ -453,39 +465,7 @@ class EmergencyRepository {
 
     const ids = [];
     for (const row of candidates.rows) {
-      let barrio = row.barrio || null;
-      if (!barrio) {
-        let latitude = row.latitude != null ? Number(row.latitude) : null;
-        let longitude = row.longitude != null ? Number(row.longitude) : null;
-        if (row.location_encrypted) {
-          try {
-            const location = this.locationCrypto.decryptLocation(row.location_encrypted);
-            latitude = location.latitude;
-            longitude = location.longitude;
-          } catch (error) {
-            secureLog('warn', 'anonymizeExpiredLocations: ciphertext indescifrable; se anonimiza sin barrio', {
-              emergencyId: row.id,
-              message: error.message,
-            });
-          }
-        }
-        barrio = resolveBarrio({ latitude, longitude });
-      }
-
-      const result = await this.pool.query(
-        `UPDATE emergencies
-         SET location_encrypted = NULL,
-             latitude = NULL,
-             longitude = NULL,
-             location_anonymized_at = now(),
-             barrio = COALESCE(barrio, $2),
-             updated_at = now()
-         WHERE id = $1
-           AND location_anonymized_at IS NULL
-         RETURNING id`,
-        [row.id, barrio]
-      );
-      if (result.rowCount > 0) ids.push(row.id);
+      if (await this.anonymizeLocationRow(this.pool, row)) ids.push(row.id);
     }
 
     if (ids.length > 0) {
@@ -500,6 +480,145 @@ class EmergencyRepository {
       anonymizedCount: ids.length,
       ids,
     };
+  }
+
+  /**
+   * Borra la ubicación de una fila (id, latitude, longitude,
+   * location_encrypted, barrio) con el executor dado: el pool, o el client de
+   * una transacción en curso. Si barrio es null lo deriva de la ubicación antes
+   * de borrarla. Devuelve true si la fila quedó anonimizada en esta llamada.
+   */
+  async anonymizeLocationRow(executor, row) {
+    let barrio = row.barrio || null;
+    if (!barrio) {
+      let latitude = row.latitude != null ? Number(row.latitude) : null;
+      let longitude = row.longitude != null ? Number(row.longitude) : null;
+      if (row.location_encrypted) {
+        try {
+          const location = this.locationCrypto.decryptLocation(row.location_encrypted);
+          latitude = location.latitude;
+          longitude = location.longitude;
+        } catch (error) {
+          secureLog('warn', 'anonymizeExpiredLocations: ciphertext indescifrable; se anonimiza sin barrio', {
+            emergencyId: row.id,
+            message: error.message,
+          });
+        }
+      }
+      barrio = resolveBarrio({ latitude, longitude });
+    }
+
+    const result = await executor.query(
+      `UPDATE emergencies
+       SET location_encrypted = NULL,
+           latitude = NULL,
+           longitude = NULL,
+           location_anonymized_at = now(),
+           barrio = COALESCE(barrio, $2),
+           updated_at = now()
+       WHERE id = $1
+         AND location_anonymized_at IS NULL
+       RETURNING id`,
+      [row.id, barrio]
+    );
+    return result.rowCount > 0;
+  }
+
+  /**
+   * Expira las emergencias abiertas que llevan más de `hours` sin cambiar de
+   * estado: las pasa al estado terminal de expirationTarget() (RESOLVED se
+   * cierra, el resto se cancela) y anonimiza su ubicación en la misma
+   * transacción. Así la regla de retención es una sola: la ubicación se
+   * conserva `hours` desde el último cambio de estado, esté cerrada o no.
+   *
+   * El plazo se mide desde el último registro del historial (o desde la
+   * creación si nunca cambió de estado), no desde updated_at, que también
+   * mueven el job de incidentes y el backfill de barrios.
+   *
+   * Cada emergencia va en su propia transacción: una que falla no frena al
+   * resto. FOR UPDATE SKIP LOCKED y la condición repetida adentro hacen que
+   * dos instancias (o un endpoint en simultáneo) no la expiren dos veces.
+   * El evento del outbox sale sin coordenadas, porque se arma después de
+   * anonimizar; el barrio se conserva.
+   */
+  async expireStaleEmergencies(hours, {
+    limit = 100, actor = null, reason = null, outboxEvent = null,
+  } = {}) {
+    const staleHours = Number(hours);
+    if (!Number.isFinite(staleHours) || staleHours <= 0) {
+      throw new Error('hours must be a positive number');
+    }
+
+    const candidates = await this.pool.query(
+      `SELECT e.id
+       FROM emergencies e
+       WHERE e.status = ANY($2::text[])
+         AND ${LAST_STATUS_CHANGE_SQL} < now() - ($1::double precision * interval '1 hour')
+       ORDER BY e.created_at
+       LIMIT $3`,
+      [staleHours, ACTIVE_STATUSES, limit]
+    );
+
+    const expired = [];
+    const anonymizedIds = [];
+    let failed = 0;
+    for (const { id } of candidates.rows) {
+      try {
+        const result = await this.expireOne(id, staleHours, { actor, reason, outboxEvent });
+        if (!result) continue;
+        expired.push({ id, previousStatus: result.previousStatus, newStatus: result.newStatus });
+        if (result.anonymized) anonymizedIds.push(id);
+      } catch (error) {
+        failed += 1;
+        secureLog('error', 'No se pudo expirar la emergencia', { emergencyId: id, message: error.message });
+      }
+    }
+
+    if (anonymizedIds.length > 0) {
+      await this.unlinkZoneContexts(anonymizedIds);
+      await this.scrubOutboxBusCoordinates(anonymizedIds);
+    }
+
+    return { expiredCount: expired.length, failedCount: failed, expired };
+  }
+
+  // Devuelve null si la emergencia ya no cumple la condición (otro proceso la
+  // cambió de estado o la tiene tomada).
+  async expireOne(id, staleHours, { actor, reason, outboxEvent }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query(
+        `SELECT e.id, e.status, e.latitude, e.longitude, e.location_encrypted, e.barrio,
+                e.location_anonymized_at
+         FROM emergencies e
+         WHERE e.id = $1
+           AND e.status = ANY($3::text[])
+           AND ${LAST_STATUS_CHANGE_SQL} < now() - ($2::double precision * interval '1 hour')
+         FOR UPDATE OF e SKIP LOCKED`,
+        [id, staleHours, ACTIVE_STATUSES]
+      );
+      if (locked.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return null;
+      }
+      const row = locked.rows[0];
+      const hasLocation = row.location_encrypted !== null || row.latitude !== null || row.longitude !== null;
+      const anonymized = hasLocation && row.location_anonymized_at === null
+        ? await this.anonymizeLocationRow(client, row)
+        : false;
+      const newStatus = expirationTarget(row.status);
+      await this.applyStatusUpdate(client, id, {
+        newStatus, actor, reason, outboxEvent, expiration: true,
+      });
+      await client.query('COMMIT');
+      return { previousStatus: row.status, newStatus, anonymized };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -789,11 +908,11 @@ class EmergencyRepository {
   async updateStatus(id, {
     newStatus, actor = null, reason = null, causasRelacionadas = [], descripcionProblema = null,
     outboxEvent = null, requireAssignedOfficerId = null,
-    requireStatus = null, client: externalClient = null,
+    requireStatus = null, expiration = false, client: externalClient = null,
   }) {
     const options = {
       newStatus, actor, reason, causasRelacionadas, descripcionProblema, outboxEvent,
-      requireAssignedOfficerId, requireStatus,
+      requireAssignedOfficerId, requireStatus, expiration,
     };
     if (externalClient) {
       return this.applyStatusUpdate(externalClient, id, options);
@@ -814,7 +933,7 @@ class EmergencyRepository {
 
   async applyStatusUpdate(client, id, {
     newStatus, actor, reason, causasRelacionadas = [], descripcionProblema = null,
-    outboxEvent, requireAssignedOfficerId = null, requireStatus = null,
+    outboxEvent, requireAssignedOfficerId = null, requireStatus = null, expiration = false,
   }) {
     const current = await client.query(
       'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
@@ -828,7 +947,15 @@ class EmergencyRepository {
     if (requireAssignedOfficerId !== null && assignedOfficerId !== requireAssignedOfficerId) {
       throw new NotFoundError(`Emergency with ID ${id} not found`);
     }
-    assertTransition(previousStatus, newStatus);
+    // La expiración no sigue la tabla de transiciones de los endpoints: tiene
+    // la suya (expirationTarget) y solo la usa el job del sistema.
+    if (expiration) {
+      if (expirationTarget(previousStatus) !== newStatus) {
+        throw new ConflictError(`Emergency ${id} is ${previousStatus}: cannot expire to ${newStatus}`);
+      }
+    } else {
+      assertTransition(previousStatus, newStatus);
+    }
     if (requireStatus !== null && previousStatus !== requireStatus) {
       throw new ConflictError(`Emergency ${id} is ${previousStatus}, expected ${requireStatus}`);
     }
