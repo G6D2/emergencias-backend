@@ -697,6 +697,7 @@ src/
 │   ├── business-rule.js
 │   ├── load-rules.js
 │   └── cobertura-preventiva/     # EventoComunitarioPublicado y EventoCancelado de Espacios
+│   ├── reclamo-intervencion/     # ReclamoCreado y ReclamoActualizado de Reclamos (caso ciclovía)
 ├── repositories/
 │   ├── auth-user.repository.js
 │   ├── citizen-profile.repository.js
@@ -792,14 +793,14 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | Campo | Tipo | Fuente / valor hoy |
 |---|---|---|
 | `emergenciaId` | string | `emergencies.id` |
-| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; pendiente sumar `TRANSITO`) |
+| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; `TRANSITO`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
 | `barrio` | string \| null | catálogo oficial CABA (48 barrios), en claro; lo leen Reclamos/Analítica |
 | `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
 | `latitud`, `longitud` | number \| null | en claro, redondeadas a 3 decimales (~100 m); `null` si la emergencia no tiene ubicación. Es lo que leen Movilidad, Residuos, Reclamos, Espacios y Analítica |
 | `ubicacion.latitud`, `ubicacion.longitud` | string \| null | la coordenada exacta, ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null |
-| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA` (y `TRANSITO` cuando entre al catálogo); `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
+| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA`, `TRANSITO`; `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null | `causa_id` / `causa_tipo`. En un alta ciudadana, `null`; la cobertura preventiva manda el `eventoId` de Espacios y `EVENTO_PUBLICO` |
 | `prioridadOriginal` | enum \| null | hoy siempre `null` |
 | `ciudadanoId` | string \| null | `user_id`; `null` en las emergencias externas |
@@ -875,6 +876,8 @@ Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca l
 |---|---|---|
 | `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox. Aparte, sin importar la capacidad, registra el contexto de zona del evento |
 | `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca. Aparte, da de baja el contexto de zona del evento |
+| `ReclamoCreado` (Reclamos, v3) | `EDA_TOPIC_RECLAMO_CREADO` (default `com.citypass.reclamos.ReclamoCreado.v3`) | Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea **una** emergencia `TRANSITO` por `reclamoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = RECLAMO`, `causaId = reclamoId`, prioridad según la del reclamo (default `MEDIA`). Sin coordenadas queda con `requiresManualValidation`. Cualquier otro reclamo, o uno que ya llega en estado final, no hace nada |
+| `ReclamoActualizado` (Reclamos) | `EDA_TOPIC_RECLAMO_ACTUALIZADO` (default `com.citypass.reclamos.ReclamoActualizado`) | Cuando `estadoNuevo` es `RESUELTO`, `RECHAZADO` o `CERRADO`, cancela la intervención de ese `reclamoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:reclamos`, con historial y `EmergenciaActualizada`). Si ya fue despachada, la termina el oficial |
 
 ### Prioridad elevada durante un evento
 

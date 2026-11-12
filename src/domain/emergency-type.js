@@ -13,6 +13,9 @@ const { ValidationError } = require('../errors/app-errors');
 // PREVENTIVA la crea solo el sistema: despliegue preventivo ante un evento
 // público masivo (cobertura preventiva del listener de Espacios). No se puede
 // reportar desde el botón de pánico.
+//
+// TRANSITO: obstrucción de la vía (ej. un auto en la ciclovía). Hoy nace de un
+// reclamo de Reclamos (listener reclamo-intervencion).
 const EMERGENCY_TYPES = Object.freeze([
   'MEDICA',
   'INCENDIO',
@@ -21,6 +24,7 @@ const EMERGENCY_TYPES = Object.freeze([
   'OTRO',
   'PANICO',
   'PREVENTIVA',
+  'TRANSITO',
 ]);
 
 // Alias que manda el frontend hoy (en inglés, minúscula). Se aceptan por

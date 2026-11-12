@@ -14,11 +14,11 @@ const { getBusLocationCrypto } = require('../security/bus-location-crypto');
 const { secureLog } = require('../security/secure-log');
 
 // Tipos que cortan la circulación (decisión Juani 2026-11-05).
-// TRANSITO: pendiente de agregar al catálogo (migration + emergency-type.js).
-// RECLAMO: cuando llegue el listener de ReclamoCreado, usar el afectaCirculacion
-// que manda Reclamos en lugar de derivarlo por categoría.
+// TRANSITO nace de un reclamo de tránsito (listener reclamo-intervencion), que
+// Reclamos siempre publica con afectaCirculacion = true: derivarlo del tipo da
+// el mismo valor.
 const AFECTA_CIRCULACION = new Set([
-  'INCENDIO', 'INFRAESTRUCTURA', 'DISTURBIO_EVENTO_MASIVO', 'PREVENTIVA',
+  'INCENDIO', 'INFRAESTRUCTURA', 'DISTURBIO_EVENTO_MASIVO', 'PREVENTIVA', 'TRANSITO',
 ]);
 
 const SEVERITY_TO_PRIORIDAD = {
