@@ -12,6 +12,7 @@
 
 const { getBusLocationCrypto } = require('../security/bus-location-crypto');
 const { secureLog } = require('../security/secure-log');
+const { COORD_DECIMALS, approximateCoords } = require('../domain/approximate-coords');
 
 // Tipos que cortan la circulación (decisión Juani 2026-11-05).
 // TRANSITO: pendiente de agregar al catálogo (migration + emergency-type.js).
@@ -53,22 +54,6 @@ function toAfectaCirculacion(emergencyType) {
 function toEstado(status) {
   if (!status) return null;
   return STATUS_TO_ESTADO[String(status).toUpperCase()] || null;
-}
-
-const COORD_DECIMALS = 3;
-
-function roundCoord(value) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  const factor = 10 ** COORD_DECIMALS;
-  return Math.round(value * factor) / factor;
-}
-
-// Las dos o ninguna: un par incompleto no ubica nada.
-function approximateCoords(emergency) {
-  const latitud = roundCoord(emergency.latitude);
-  const longitud = roundCoord(emergency.longitude);
-  if (latitud === null || longitud === null) return { latitud: null, longitud: null };
-  return { latitud, longitud };
 }
 
 function encryptBusCoords(emergency, busCrypto) {
