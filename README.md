@@ -820,6 +820,7 @@ Antes era `EmergenciaEstadoActualizado`, y reemplaza también a `EmergenciaCerra
 | `asignadoA` | string \| null | `assigned_officer_id`, solo en `DESPACHADA` (un evento por despacho) |
 | `areaResponsable` | string \| null | hoy siempre `null` |
 | `resolucion` | string \| null | `reason` del cambio: motivo de `discard`, `cancel` o `return`, `Assigned officer <id>` en `assign`; `null` en `validate`, `en-route`, `on-scene`, `resolve` y `close` |
+| `descripcionProblema` | string \| null | Descripción breve ingresada por el oficial al resolver con causa `VIA` (hasta 280 caracteres); se conserva en eventos posteriores, incluido el cierre |
 | `prioridad` | enum \| null | map desde `severity` |
 | `correlationId` | string | `correlation_id` (fallback: `id`) |
 

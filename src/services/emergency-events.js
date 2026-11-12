@@ -132,6 +132,7 @@ function buildEmergencyUpdatedEvent({ emergency, history, actor, reason, eventId
       resolucion: reason ?? null,
       prioridad: toPrioridad(emergency.severity),
       causasRelacionadas: emergency.causasRelacionadas ?? [],
+      descripcionProblema: emergency.descripcionProblema ?? null,
       barrio: emergency.barrio ?? null,
       ubicacion: {
         barrio: emergency.barrio ?? null,

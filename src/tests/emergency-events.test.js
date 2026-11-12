@@ -199,6 +199,7 @@ describe('emergency-events', () => {
       expect(event.data.estadoNuevo).toBe('DESPACHADA');
       expect(event.data.usuarioId).toBe('DISP-Demo001');
       expect(event.data.resolucion).toBe(baseArgs.reason);
+      expect(event.data.descripcionProblema).toBeNull();
       expect(event.data.prioridad).toBe('ALTA');
     });
 
@@ -242,10 +243,15 @@ describe('emergency-events', () => {
       const busCrypto = createBusLocationCrypto({ keys: { test: BUS_TEST_KEY }, activeKeyId: 'test' });
       const resolved = buildEmergencyUpdatedEvent({
         ...baseArgs,
-        emergency: { ...baseArgs.emergency, causasRelacionadas: ['RESIDUOS'] },
+        emergency: {
+          ...baseArgs.emergency,
+          causasRelacionadas: ['RESIDUOS', 'VIA'],
+          descripcionProblema: 'Bache en la calzada',
+        },
         history: { previousStatus: 'ON_SCENE', newStatus: 'RESOLVED' },
       }, { busCrypto });
-      expect(resolved.data.causasRelacionadas).toEqual(['RESIDUOS']);
+      expect(resolved.data.causasRelacionadas).toEqual(['RESIDUOS', 'VIA']);
+      expect(resolved.data.descripcionProblema).toBe('Bache en la calzada');
       expect(resolved.data.ubicacion.barrio).toBeNull();
       expect(busCrypto.decryptCoordinate(resolved.data.ubicacion.latitud, {
         emergencyId: baseArgs.emergency.id,

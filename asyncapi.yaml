@@ -243,6 +243,7 @@ components:
               resolucion: null
               prioridad: CRITICA
               causasRelacionadas: []
+              descripcionProblema: null
               barrio: null
               ubicacion:
                 barrio: null
@@ -426,6 +427,7 @@ components:
         - resolucion
         - prioridad
         - causasRelacionadas
+        - descripcionProblema
         - barrio
         - ubicacion
         - correlationId
@@ -468,6 +470,10 @@ components:
           items:
             type: string
             enum: [VIA, ESPACIO_PUBLICO, RESIDUOS]
+        descripcionProblema:
+          type: [string, 'null']
+          maxLength: 280
+          description: Descripción breve del problema vial. Se completa al resolver si causasRelacionadas incluye VIA y se conserva en actualizaciones posteriores.
         barrio:
           type: [string, 'null']
           description: Barrio del catálogo oficial de CABA (48), en claro.
@@ -486,6 +492,22 @@ components:
               description: Ciphertext AES-256-GCM con la clave de bus. Null sin clave de bus.
         correlationId:
           type: string
+      allOf:
+        - description: Se requiere una descripción no vacía cuando las causas incluyen VIA; en los demás casos debe ser null.
+          if:
+            properties:
+              causasRelacionadas:
+                contains:
+                  const: VIA
+          then:
+            properties:
+              descripcionProblema:
+                type: string
+                minLength: 1
+          else:
+            properties:
+              descripcionProblema:
+                type: 'null'
 
     EmergenciaPriorizadaData:
       type: object

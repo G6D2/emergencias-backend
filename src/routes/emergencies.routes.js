@@ -432,7 +432,9 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     description: |
    *       Requiere grupo `officer`, y que el `sub` del token sea el oficial
    *       asignado a la emergencia. El cierre definitivo (RESOLVED → CLOSED)
-   *       sigue siendo del dispatcher. Publica `EmergenciaActualizada`.
+   *       sigue siendo del dispatcher. Si `causasRelacionadas` incluye `VIA`,
+   *       requiere `descripcionProblema` (máximo 280 caracteres). Publica
+   *       `EmergenciaActualizada`.
    *     security: [{ bearerAuth: [] }]
    *     parameters:
    *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
@@ -449,6 +451,11 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *                   type: string
    *                   enum: [VIA, ESPACIO_PUBLICO, RESIDUOS]
    *                 default: []
+   *               descripcionProblema:
+   *                 type: string
+   *                 maxLength: 280
+   *                 description: Obligatoria si causasRelacionadas incluye VIA; se rechaza si no incluye VIA.
+   *                 example: Bache profundo en la calzada junto a la esquina.
    *     responses:
    *       200: { description: Emergencia en RESOLVED }
    *       400: { description: id inválido }
