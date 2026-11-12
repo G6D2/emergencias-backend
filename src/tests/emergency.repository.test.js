@@ -922,7 +922,7 @@ describe('EmergencyRepository.updateStatus: estado de origen, closed_at y oficia
 
     const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
     expect(update.sql).toMatch(/closed_at = CASE WHEN \$3::boolean THEN now\(\) ELSE closed_at END/);
-    expect(update.params).toEqual([newStatus, 'e-1', true, []]);
+    expect(update.params).toEqual([newStatus, 'e-1', true, [], null]);
   });
 
   it.each([
@@ -936,7 +936,7 @@ describe('EmergencyRepository.updateStatus: estado de origen, closed_at y oficia
     await repo.updateStatus('e-1', { newStatus });
 
     const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
-    expect(update.params).toEqual([newStatus, 'e-1', false, []]);
+    expect(update.params).toEqual([newStatus, 'e-1', false, [], null]);
   });
 
   it('al pasar a VALIDATED limpia assigned_officer_id y libera al oficial en la misma transacción', async () => {

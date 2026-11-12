@@ -110,6 +110,24 @@ channels:
       eventoCancelado:
         $ref: '#/components/messages/EventoCancelado'
 
+  reclamoCreado:
+    address: com.citypass.reclamos.ReclamoCreado.v3
+    title: ReclamoCreado v3 (Reclamos)
+    description: |
+      Topic configurable con `EDA_TOPIC_RECLAMO_CREADO`. La versión vigente del
+      tipo es la 3 y va en su propio tópico (la 1 no trae `objetoAfectado`).
+    messages:
+      reclamoCreado:
+        $ref: '#/components/messages/ReclamoCreado'
+
+  reclamoActualizado:
+    address: com.citypass.reclamos.ReclamoActualizado
+    title: ReclamoActualizado (Reclamos)
+    description: Topic configurable con `EDA_TOPIC_RECLAMO_ACTUALIZADO`.
+    messages:
+      reclamoActualizado:
+        $ref: '#/components/messages/ReclamoActualizado'
+
 operations:
   publicarEmergenciaCreada:
     action: send
@@ -168,6 +186,37 @@ operations:
           const: com.citypass.emergencias.EventoCanceladoListener
     messages:
       - $ref: '#/channels/eventoCancelado/messages/eventoCancelado'
+
+  recibirReclamoCreado:
+    action: receive
+    channel:
+      $ref: '#/channels/reclamoCreado'
+    summary: |
+      Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea una emergencia
+      externa `TRANSITO` (causa `RECLAMO`, `causaId` = `reclamoId`), una sola por
+      reclamo. El resto de los reclamos no hace nada.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.ReclamoCreadoListener
+    messages:
+      - $ref: '#/channels/reclamoCreado/messages/reclamoCreado'
+
+  recibirReclamoActualizado:
+    action: receive
+    channel:
+      $ref: '#/channels/reclamoActualizado'
+    summary: |
+      Cuando el reclamo llega a RESUELTO, RECHAZADO o CERRADO, cancela su
+      intervención si todavía no fue despachada.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.ReclamoActualizadoListener
+    messages:
+      - $ref: '#/channels/reclamoActualizado/messages/reclamoActualizado'
 
 components:
   securitySchemes:
@@ -251,6 +300,7 @@ components:
               resolucion: null
               prioridad: CRITICA
               causasRelacionadas: []
+              descripcionProblema: null
               barrio: null
               latitud: null
               longitud: null
@@ -311,6 +361,34 @@ components:
           data:
             $ref: '#/components/schemas/EventoCanceladoData'
 
+    ReclamoCreado:
+      name: ReclamoCreado
+      title: Reclamo creado
+      contentType: application/json
+      description: Producido por Reclamos. `titulo`, `descripcion` y `direccion` no se publican de vuelta (texto libre).
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/ReclamoCreadoData'
+
+    ReclamoActualizado:
+      name: ReclamoActualizado
+      title: Reclamo actualizado
+      contentType: application/json
+      description: Producido por Reclamos en cada cambio de estado del reclamo.
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/ReclamoActualizadoData'
+
   schemas:
     Metadata:
       type: object
@@ -346,7 +424,7 @@ components:
     Categoria:
       type: string
       description: Catálogo de `src/domain/emergency-type.js`.
-      enum: [MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO, PREVENTIVA]
+      enum: [MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO, PREVENTIVA, TRANSITO]
 
     Timestamp:
       type: string
@@ -444,6 +522,7 @@ components:
         - resolucion
         - prioridad
         - causasRelacionadas
+        - descripcionProblema
         - barrio
         - latitud
         - longitud
@@ -488,6 +567,10 @@ components:
           items:
             type: string
             enum: [VIA, ESPACIO_PUBLICO, RESIDUOS]
+        descripcionProblema:
+          type: [string, 'null']
+          maxLength: 280
+          description: Descripción breve del problema vial. Se completa al resolver si causasRelacionadas incluye VIA y se conserva en actualizaciones posteriores.
         barrio:
           type: [string, 'null']
           description: Barrio del catálogo oficial de CABA (48), en claro.
@@ -512,6 +595,22 @@ components:
               description: Ciphertext AES-256-GCM con la clave de bus. Null sin clave de bus.
         correlationId:
           type: string
+      allOf:
+        - description: Se requiere una descripción no vacía cuando las causas incluyen VIA; en los demás casos debe ser null.
+          if:
+            properties:
+              causasRelacionadas:
+                contains:
+                  const: VIA
+          then:
+            properties:
+              descripcionProblema:
+                type: string
+                minLength: 1
+          else:
+            properties:
+              descripcionProblema:
+                type: 'null'
 
     EmergenciaPriorizadaData:
       type: object
@@ -591,3 +690,58 @@ components:
           type: string
         canceladoEn:
           $ref: '#/components/schemas/Timestamp'
+
+    ReclamoCreadoData:
+      type: object
+      additionalProperties: true
+      description: Solo los campos que lee Emergencias. El schema completo está en `docs/avro/ReclamoCreado.avsc` del repo de Reclamos.
+      required: [reclamoId, categoria]
+      properties:
+        reclamoId:
+          type: string
+          minLength: 1
+        categoria:
+          type: string
+          description: Solo `TRANSITO` dispara una intervención.
+        objetoAfectado:
+          type: [string, 'null']
+          description: Lo elige el vecino; puede venir null. Solo `CICLOVIA` dispara una intervención.
+        prioridad:
+          type: string
+          description: BAJA, MEDIA, ALTA o CRITICA. Define la prioridad de la emergencia.
+        estado:
+          type: string
+        titulo:
+          type: string
+        direccion:
+          type: [string, 'null']
+        barrio:
+          type: [string, 'null']
+        latitud:
+          type: [number, 'null']
+        longitud:
+          type: [number, 'null']
+        afectaCirculacion:
+          type: boolean
+        correlationId:
+          type: [string, 'null']
+        createdAt:
+          type: integer
+          description: Epoch en milisegundos.
+
+    ReclamoActualizadoData:
+      type: object
+      additionalProperties: true
+      required: [reclamoId, estadoNuevo]
+      properties:
+        reclamoId:
+          type: string
+          minLength: 1
+        estadoAnterior:
+          type: string
+        estadoNuevo:
+          type: string
+          description: RECIBIDO, EN_REVISION, ASIGNADO, EN_PROCESO, RESUELTO, RECHAZADO o CERRADO. Los tres últimos cancelan la intervención pendiente.
+        updatedAt:
+          type: integer
+          description: Epoch en milisegundos.

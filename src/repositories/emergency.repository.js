@@ -66,6 +66,7 @@ function mapEmergency(row, locationCrypto) {
     causaTipo: row.causa_tipo ?? null,
     causaId: row.causa_id ?? null,
     causasRelacionadas: row.causas_relacionadas ?? [],
+    descripcionProblema: row.descripcion_problema ?? null,
     // Catálogo oficial CABA en claro; no se borra con la retención de ubicación.
     barrio: row.barrio ?? null,
     createdAt: row.created_at,
@@ -107,7 +108,7 @@ const INCIDENT_SELECT_FIELDS = `
        (SELECT COUNT(DISTINCT em3.user_id)::int FROM emergencies em3 WHERE em3.incident_id = e.incident_id) AS incident_unique_citizens`;
 
 // Contexto de zona que eleva la prioridad de la emergencia (ADR "Elevar
-// temporalmente la prioridad con contextos de zona", tablas de V28 y V29).
+// temporalmente la prioridad con contextos de zona", tablas de V28 y V31).
 //
 // El vínculo emergencia–contexto se escribe una sola vez, al crear la
 // emergencia (ver linkZoneContexts): acá solo se mira si el contexto
@@ -786,11 +787,13 @@ class EmergencyRepository {
    *   en la transacción del caller (la del OutcomeFactory) sin abrir una propia.
    */
   async updateStatus(id, {
-    newStatus, actor = null, reason = null, causasRelacionadas = [], outboxEvent = null, requireAssignedOfficerId = null,
+    newStatus, actor = null, reason = null, causasRelacionadas = [], descripcionProblema = null,
+    outboxEvent = null, requireAssignedOfficerId = null,
     requireStatus = null, client: externalClient = null,
   }) {
     const options = {
-      newStatus, actor, reason, causasRelacionadas, outboxEvent, requireAssignedOfficerId, requireStatus,
+      newStatus, actor, reason, causasRelacionadas, descripcionProblema, outboxEvent,
+      requireAssignedOfficerId, requireStatus,
     };
     if (externalClient) {
       return this.applyStatusUpdate(externalClient, id, options);
@@ -810,7 +813,8 @@ class EmergencyRepository {
   }
 
   async applyStatusUpdate(client, id, {
-    newStatus, actor, reason, causasRelacionadas = [], outboxEvent, requireAssignedOfficerId = null, requireStatus = null,
+    newStatus, actor, reason, causasRelacionadas = [], descripcionProblema = null,
+    outboxEvent, requireAssignedOfficerId = null, requireStatus = null,
   }) {
     const current = await client.query(
       'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
@@ -842,10 +846,14 @@ class EmergencyRepository {
            causas_relacionadas = CASE
              WHEN $1 = 'RESOLVED' THEN $4::TEXT[]
              ELSE causas_relacionadas
+           END,
+           descripcion_problema = CASE
+             WHEN $1 = 'RESOLVED' THEN $5
+             ELSE descripcion_problema
            END
        WHERE id = $2
        RETURNING *`,
-      [newStatus, id, isTerminal(newStatus), causasRelacionadas]
+      [newStatus, id, isTerminal(newStatus), causasRelacionadas, descripcionProblema]
     );
 
     const history = await client.query(

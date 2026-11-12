@@ -1,7 +1,7 @@
 // Contextos de zona (ADR "Elevar temporalmente la prioridad con contextos de
 // zona", migración V28). Un contexto vigente sube un nivel la prioridad de
 // despacho de las emergencias creadas a no más de radio_metros de su punto
-// (V29); el vínculo y el cálculo viven en emergency.repository.js, acá solo
+// (V31); el vínculo y el cálculo viven en emergency.repository.js, acá solo
 // se dan de alta y de baja.
 //
 // Orden de llegada (Kafka reentrega y desordena):

@@ -21,6 +21,8 @@ const { createEventDecoder, registryFromEnv } = require('./listeners/event-decod
 const { EventosProcesadosRepository } = require('./repositories/eventos-procesados.repository');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/cancelar-cobertura.handler');
+const { CREAR_INTERVENCION, createCrearIntervencionHandler } = require('./listeners/reclamo-intervencion/handlers/crear-intervencion.handler');
+const { CERRAR_INTERVENCION, createCerrarIntervencionHandler } = require('./listeners/reclamo-intervencion/handlers/cerrar-intervencion.handler');
 const {
   REGISTRAR_CONTEXTO_ZONA,
   DAR_DE_BAJA_CONTEXTO_ZONA,
@@ -84,6 +86,8 @@ async function start() {
   const outcomeFactory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
   outcomeFactory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository }));
   outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository }));
+  outcomeFactory.register(CREAR_INTERVENCION, createCrearIntervencionHandler({ emergencyRepository }));
+  outcomeFactory.register(CERRAR_INTERVENCION, createCerrarIntervencionHandler({ emergencyRepository }));
   // Contexto de zona: mientras dura el evento, las emergencias que se crean
   // dentro de su radio suben un nivel de prioridad de despacho.
   const contextoZonaRepository = new ContextoZonaRepository(pool);

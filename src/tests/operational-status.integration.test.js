@@ -116,7 +116,7 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     expect(outbox.rows[0].payload.data).toMatchObject({ estadoAnterior: 'DESPACHADA', usuarioId: 'of-001' });
   });
 
-  it('publica causas y coordenadas al resolver y conserva las causas al cerrar', async () => {
+  it('publica causas, descripción VIA y coordenadas al resolver y conserva todo al cerrar', async () => {
     const id = await createDispatched();
     const officerApp = appAs(OFFICER);
 
@@ -124,7 +124,10 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     await request(officerApp).patch(`/api/emergencies/${id}/on-scene`).expect(200);
     await request(officerApp)
       .patch(`/api/emergencies/${id}/resolve`)
-      .send({ causasRelacionadas: ['RESIDUOS'] })
+      .send({
+        causasRelacionadas: ['RESIDUOS', 'VIA'],
+        descripcionProblema: 'Bache profundo en la calzada',
+      })
       .expect(200);
 
     const dispatcherApp = appAs({ sub: 'dispatcher-1', groups: ['dispatcher'] });
@@ -143,7 +146,8 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     expect(events.rows).toHaveLength(2);
     expect(events.rows[0].data).toMatchObject({
       estadoNuevo: 'RESUELTA',
-      causasRelacionadas: ['RESIDUOS'],
+      causasRelacionadas: ['RESIDUOS', 'VIA'],
+      descripcionProblema: 'Bache profundo en la calzada',
       latitud: expect.any(Number),
       longitud: expect.any(Number),
       ubicacion: {
@@ -153,7 +157,8 @@ describe('Estado operativo del oficial (integración contra Postgres real)', () 
     });
     expect(events.rows[1].data).toMatchObject({
       estadoNuevo: 'CERRADA',
-      causasRelacionadas: ['RESIDUOS'],
+      causasRelacionadas: ['RESIDUOS', 'VIA'],
+      descripcionProblema: 'Bache profundo en la calzada',
       ubicacion: {
         latitud: expect.any(String),
         longitud: expect.any(String),

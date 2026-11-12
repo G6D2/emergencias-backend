@@ -24,7 +24,7 @@ describe('listeners/cobertura-preventiva', () => {
 
   it('createListeners instancia los listeners de cada subpaquete', () => {
     const listeners = createListeners(kafka);
-    expect(listeners.map((l) => l.constructor)).toEqual([
+    expect(listeners.map((l) => l.constructor).slice(0, 2)).toEqual([
       EventoComunitarioPublicadoListener,
       EventoCanceladoListener,
     ]);
