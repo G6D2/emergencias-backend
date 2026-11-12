@@ -5,6 +5,7 @@ const { EventListener, createListeners } = require('../../../listeners');
 const {
   EventoComunitarioPublicadoListener,
   EventoCanceladoListener,
+  ActividadCreadaListener,
 } = require('../../../listeners/cobertura-preventiva');
 
 const kafka = { consumer: jest.fn() };
@@ -16,6 +17,7 @@ describe('listeners/cobertura-preventiva', () => {
     jest.clearAllMocks();
     process.env.EDA_TOPIC_EVENTO_PUBLICADO = 'espacios.EventoComunitarioPublicado';
     process.env.EDA_TOPIC_EVENTO_CANCELADO = 'espacios.EventoCancelado';
+    process.env.EDA_TOPIC_ACTIVIDAD_CREADA = 'espacios.ActividadCreada.v2';
   });
 
   afterAll(() => {
@@ -27,6 +29,7 @@ describe('listeners/cobertura-preventiva', () => {
     expect(listeners.map((l) => l.constructor)).toEqual([
       EventoComunitarioPublicadoListener,
       EventoCanceladoListener,
+      ActividadCreadaListener,
     ]);
     listeners.forEach((l) => expect(l).toBeInstanceOf(EventListener));
   });
@@ -72,6 +75,38 @@ describe('listeners/cobertura-preventiva', () => {
       eventId: 'e1',
       outcomes: [],
     });
+  });
+
+  it('ActividadCreadaListener toma su topic del env y carga sus reglas', () => {
+    const path = require('path');
+    const listener = new ActividadCreadaListener(kafka);
+    expect(listener.topic).toBe('espacios.ActividadCreada.v2');
+    expect(listener.rulesDir).toBe(
+      path.join(__dirname, '../../../listeners/cobertura-preventiva', 'actividad-creada', 'rules')
+    );
+    expect(listener.rules()).toHaveLength(1);
+  });
+
+  it('ActividadCreadaListener dispara ProgramarCobertura con el actividadId como eventoId', async () => {
+    const evento = {
+      metadata: { eventId: 'e4' },
+      data: {
+        actividadId: 'act-1',
+        titulo: 'Festival',
+        capacidad: 1200,
+        estado: 'PROGRAMADA',
+        ubicacion: { lat: -34.5994, lng: -58.3988 },
+      },
+    };
+    const outcomes = await new ActividadCreadaListener(kafka).handle(evento);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].type).toBe('ProgramarCobertura');
+    expect(outcomes[0].payload).toMatchObject({ eventoId: 'act-1', latitud: -34.5994, longitud: -58.3988 });
+  });
+
+  it('ActividadCreadaListener no dispara por debajo del umbral de 1.000', async () => {
+    const evento = { metadata: { eventId: 'e5' }, data: { actividadId: 'act-2', capacidad: 999 } };
+    await expect(new ActividadCreadaListener(kafka).handle(evento)).resolves.toEqual([]);
   });
 
   it('options.topic pisa el del env', () => {

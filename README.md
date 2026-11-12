@@ -870,6 +870,7 @@ Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca l
 | Evento | Topic (env) | Qué hace |
 |---|---|---|
 | `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox |
+| `ActividadCreada` (v2) | `EDA_TOPIC_ACTIVIDAD_CREADA` | Si `capacidad` llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 1000) y la actividad no está `CANCELADA`, programa la misma cobertura `PREVENTIVA` con `causaId = actividadId` (coordenadas de `ubicacion.lat/lng`). Espacios publica este evento justo después de `EventoComunitarioPublicado` y el `actividadId` es el mismo `eventoId`, así que el dedup por causa evita una segunda cobertura |
 | `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca |
 
 Cómo lee el bus:
