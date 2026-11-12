@@ -18,6 +18,7 @@ const { assertUuid } = require('../utils/uuid');
 
 const RELATED_CAUSES = new Set(['VIA', 'ESPACIO_PUBLICO', 'RESIDUOS']);
 const MAX_REASON_LENGTH = 280;
+const MAX_PROBLEM_DESCRIPTION_LENGTH = 280;
 
 function normalizeReason(reason) {
   if (reason === undefined || reason === null) return null;
@@ -25,6 +26,14 @@ function normalizeReason(reason) {
     throw new ValidationError('reason must be a string');
   }
   return scrubFreeText(reason, { maxLength: MAX_REASON_LENGTH }) || null;
+}
+
+function normalizeProblemDescription(description) {
+  if (description === undefined || description === null) return null;
+  if (typeof description !== 'string') {
+    throw new ValidationError('descripcionProblema must be a string');
+  }
+  return scrubFreeText(description, { maxLength: MAX_PROBLEM_DESCRIPTION_LENGTH }) || null;
 }
 
 const ISO_DATE_RE = /^(\d{4}-\d{2}-\d{2})(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
@@ -415,7 +424,12 @@ class EmergencyController {
    *   (requireAssignedOfficerId), por si el dispatcher devolvió y reasignó
    *   entre la lectura y el UPDATE.
    */
-  async advanceOperationalStatus(id, newStatus, user, { causasRelacionadas = [] } = {}) {
+  async advanceOperationalStatus(
+    id,
+    newStatus,
+    user,
+    { causasRelacionadas = [], descripcionProblema } = {}
+  ) {
     assertUuid(id);
 
     const actor = user.sub;
@@ -431,10 +445,24 @@ class EmergencyController {
       throw new ValidationError('causasRelacionadas must be an array containing only VIA, ESPACIO_PUBLICO, or RESIDUOS');
     }
 
+    const normalizedProblemDescription = newStatus === 'RESOLVED'
+      ? normalizeProblemDescription(descripcionProblema)
+      : null;
+    if (newStatus === 'RESOLVED') {
+      const causeIsVia = causasRelacionadas.includes('VIA');
+      if (causeIsVia && !normalizedProblemDescription) {
+        throw new ValidationError('descripcionProblema is required when causasRelacionadas includes VIA');
+      }
+      if (!causeIsVia && normalizedProblemDescription) {
+        throw new ValidationError('descripcionProblema is only allowed when causasRelacionadas includes VIA');
+      }
+    }
+
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
       newStatus,
       actor,
       ...(newStatus === 'RESOLVED' ? { causasRelacionadas } : {}),
+      ...(newStatus === 'RESOLVED' ? { descripcionProblema: normalizedProblemDescription } : {}),
       requireAssignedOfficerId: actor,
       outboxEvent: {
         topic: process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado',

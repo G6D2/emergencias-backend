@@ -109,6 +109,13 @@ const options = {
               default: [],
               description: 'Causas declaradas por el oficial al resolver la emergencia.',
             },
+            descripcionProblema: {
+              type: 'string',
+              nullable: true,
+              maxLength: 280,
+              example: 'Bache profundo en la calzada junto a la esquina.',
+              description: 'Descripción breve requerida al resolver con causa VIA; null en los demás casos.',
+            },
             assignedOfficerId: {
               type: 'string',
               nullable: true,

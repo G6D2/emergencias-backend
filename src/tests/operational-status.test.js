@@ -53,7 +53,10 @@ function createMockRepository(initial = {}) {
         ...current,
         status: options.newStatus,
         ...(options.newStatus === 'RESOLVED'
-          ? { causasRelacionadas: options.causasRelacionadas || [] }
+          ? {
+            causasRelacionadas: options.causasRelacionadas || [],
+            descripcionProblema: options.descripcionProblema ?? null,
+          }
           : {}),
       };
       emergencies.set(id, updated);
@@ -145,6 +148,59 @@ describe('PATCH acciones de estado operativo del oficial', () => {
       newStatus: 'RESOLVED',
       causasRelacionadas: ['RESIDUOS'],
     });
+  });
+
+  it('requiere y publica una descripción saneada al resolver con causa VIA', async () => {
+    const repository = createMockRepository({ status: 'ON_SCENE' });
+    const app = buildApp(repository);
+
+    const resolved = await request(app)
+      .patch(`/api/emergencies/${EMERGENCY_ID}/resolve`)
+      .send({
+        causasRelacionadas: ['VIA'],
+        descripcionProblema: 'Bache profundo en la calzada; contacto vecino@example.com',
+      })
+      .expect(200);
+
+    expect(resolved.body.data.descripcionProblema).toBe('Bache profundo en la calzada; contacto [email]');
+    expect(repository.updateCalls[0]).toMatchObject({
+      newStatus: 'RESOLVED',
+      causasRelacionadas: ['VIA'],
+      descripcionProblema: 'Bache profundo en la calzada; contacto [email]',
+    });
+    const { outboxEvent } = repository.updateCalls[0];
+    const event = outboxEvent.payload({
+      emergency: resolved.body.data,
+      history: { previousStatus: 'ON_SCENE', newStatus: 'RESOLVED' },
+    }, 'evt-via');
+    expect(event.data.descripcionProblema).toBe('Bache profundo en la calzada; contacto [email]');
+  });
+
+  it.each([
+    [{ causasRelacionadas: ['VIA'] }],
+    [{ causasRelacionadas: ['VIA'], descripcionProblema: '   ' }],
+  ])('rechaza resolver con VIA sin una descripción no vacía', async (body) => {
+    const repository = createMockRepository({ status: 'ON_SCENE' });
+
+    const response = await request(buildApp(repository))
+      .patch(`/api/emergencies/${EMERGENCY_ID}/resolve`)
+      .send(body)
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
+    expect(repository.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('rechaza una descripción si VIA no está entre las causas', async () => {
+    const repository = createMockRepository({ status: 'ON_SCENE' });
+
+    const response = await request(buildApp(repository))
+      .patch(`/api/emergencies/${EMERGENCY_ID}/resolve`)
+      .send({ causasRelacionadas: ['RESIDUOS'], descripcionProblema: 'Bache' })
+      .expect(400);
+
+    expect(response.body.error).toBe('ValidationError');
+    expect(repository.updateStatus).not.toHaveBeenCalled();
   });
 
   it('rechaza causas desconocidas sin cambiar el estado', async () => {
