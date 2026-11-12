@@ -93,11 +93,12 @@ channels:
         $ref: '#/components/messages/EmergenciaPriorizada'
 
   eventoComunitarioPublicado:
-    address: com.citypass.espacios.EventoComunitarioPublicado
-    title: EventoComunitarioPublicado (Espacios Públicos)
+    address: com.citypass.espacios.ActividadCreada
+    title: ActividadCreada (Espacios Públicos)
     description: |
-      Topic configurable con `EDA_TOPIC_EVENTO_PUBLICADO`. Espacios lo republica
-      cada vez que cambian los inscriptos.
+      Topic configurable con `EDA_TOPIC_EVENTO_PUBLICADO`. Espacios publica las
+      actividades como `ActividadCreada`; el listener también acepta la forma
+      anterior (`EventoComunitarioPublicado`).
     messages:
       eventoComunitarioPublicado:
         $ref: '#/components/messages/EventoComunitarioPublicado'
@@ -641,8 +642,29 @@ components:
     EventoComunitarioPublicadoData:
       type: object
       additionalProperties: true
-      required: [eventoId]
+      description: |
+        Forma actual (`ActividadCreada`): `actividadId`, `ubicacion.lat`/`ubicacion.lng`,
+        `fechaHoraInicio`/`fechaHoraFinalizacion`. El listener la normaliza a los
+        nombres de la forma anterior (`eventoId`, `latitud`/`longitud`, `inicio`/`fin`);
+        si llegan los dos, gana el nombre anterior. Hace falta uno de los dos ids.
+      anyOf:
+        - required: [actividadId]
+        - required: [eventoId]
       properties:
+        actividadId:
+          type: string
+          minLength: 1
+        ubicacion:
+          type: object
+          properties:
+            lat:
+              type: [number, 'null']
+            lng:
+              type: [number, 'null']
+        fechaHoraInicio:
+          description: Inicio de la actividad (epoch ms). Equivale a `inicio`.
+        fechaHoraFinalizacion:
+          description: Fin de la actividad (epoch ms). Equivale a `fin`.
         eventoId:
           type: string
           minLength: 1

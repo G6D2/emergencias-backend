@@ -76,6 +76,74 @@ describe('listeners/cobertura-preventiva', () => {
     });
   });
 
+  describe('ActividadCreada (forma actual de Espacios)', () => {
+    // Mensaje real recibido del gateway.
+    const actividadCreada = (data = {}) => ({
+      data: {
+        correlationId: 'act-f737df56-d0b8-4727-b024-6479f87da978',
+        actividadId: 'f737df56-d0b8-4727-b024-6479f87da978',
+        titulo: 'Prueba hipo',
+        estado: 'PROGRAMADA',
+        capacidad: 100,
+        fechaHoraInicio: 1794690000000,
+        fechaHoraFinalizacion: 1794697200000,
+        ubicacion: { lat: -34.617126, lng: -58.3817043 },
+        direccion: 'Lima 757',
+        espacioNombre: 'Uade',
+        actorSub: 'U000009',
+        categoria: 'Arte',
+        ...data,
+      },
+      metadata: {
+        eventId: 'cb9f8f09-d5c7-490c-b5c7-cf9ad3e64b6d',
+        eventType: 'com.citypass.espacios.ActividadCreada',
+        receivedAt: 1794525836493,
+        source: 'grupo7',
+      },
+    });
+
+    it('registra el contexto de zona con el punto y la ventana de la actividad', async () => {
+      const outcomes = await new EventoComunitarioPublicadoListener(kafka).handle(actividadCreada());
+      expect(outcomes.map((o) => o.type)).toEqual(['RegistrarContextoZona']);
+      const { payload } = outcomes[0];
+      expect(payload).toMatchObject({
+        tipo: 'EVENTO_ESPACIO_PUBLICO',
+        origen: 'espacios',
+        referenciaExterna: 'f737df56-d0b8-4727-b024-6479f87da978',
+        causationId: 'cb9f8f09-d5c7-490c-b5c7-cf9ad3e64b6d',
+        latitud: -34.617126,
+        longitud: -58.3817043,
+        ventanaPorDefecto: false,
+        suspendido: false,
+        descripcion: 'Prueba hipo',
+      });
+      expect(payload.vigenteDesde).toEqual(new Date(1794690000000));
+      expect(payload.vigenteHasta).toEqual(new Date(1794697200000));
+      expect(payload.sourceUpdatedAt).toEqual(new Date(1794525836493));
+    });
+
+    it('con capacidad >= umbral programa la cobertura con el actividadId y la ubicación', async () => {
+      const outcomes = await new EventoComunitarioPublicadoListener(kafka).handle(actividadCreada({ capacidad: 800 }));
+      expect(outcomes.map((o) => o.type)).toEqual(['ProgramarCobertura', 'RegistrarContextoZona']);
+      expect(outcomes[0].payload).toMatchObject({
+        eventoId: 'f737df56-d0b8-4727-b024-6479f87da978',
+        titulo: 'Prueba hipo',
+        latitud: -34.617126,
+        longitud: -58.3817043,
+        direccion: 'Lima 757',
+        capacidad: 800,
+        correlationId: 'act-f737df56-d0b8-4727-b024-6479f87da978',
+      });
+    });
+
+    it('la cancelación acepta actividadId', async () => {
+      const evento = { metadata: { eventId: 'e4' }, data: { actividadId: 'act-1' } };
+      const outcomes = await new EventoCanceladoListener(kafka).handle(evento);
+      expect(outcomes[0]).toEqual({ type: 'CancelarCobertura', payload: { eventoId: 'act-1' } });
+      expect(outcomes[1].payload.referenciaExterna).toBe('act-1');
+    });
+  });
+
   it('options.topic pisa el del env', () => {
     expect(new EventoCanceladoListener(kafka, { topic: 'otro' }).topic).toBe('otro');
   });

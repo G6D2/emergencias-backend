@@ -77,7 +77,7 @@ services:
         value: "false"
       # Listeners de cobertura preventiva (eventos de Espacios).
       - key: EDA_TOPIC_EVENTO_PUBLICADO
-        value: com.citypass.espacios.EventoComunitarioPublicado
+        value: com.citypass.espacios.ActividadCreada
       - key: EDA_TOPIC_EVENTO_CANCELADO
         value: com.citypass.espacios.EventoCancelado
       # Schema registry del gateway (Avro); usa el mismo token que el broker.
