@@ -490,9 +490,10 @@ class EmergencyRepository {
 
     if (ids.length > 0) {
       await this.unlinkZoneContexts(ids);
-      // El outbox conserva payloads PUBLISHED/PENDING más allá de las 72 h;
-      // hay que scrubear coords cifradas del bus para que no queden descifrables
-      // con la clave compartida tras anonimizar at-rest.
+      // El outbox conserva los payloads más allá de las 72 h (PUBLISHED hasta
+      // su purga; SKIPPED, FAILED y PENDING sin plazo). Hay que scrubear ahí las
+      // coords del bus: las cifradas, que si no quedan descifrables con la clave
+      // compartida tras anonimizar at-rest, y las aproximadas en claro.
       await this.scrubOutboxBusCoordinates(ids);
     }
 
@@ -503,8 +504,14 @@ class EmergencyRepository {
   }
 
   /**
-   * Pone en null data.ubicacion.latitud/longitud en outbox_events ligados
-   * a esas emergencias (cualquier status). Conserva barrio.
+   * Pone en null las coordenadas de los payloads de outbox_events ligados a
+   * esas emergencias (cualquier status). Conserva barrio. Son las dos formas
+   * en que emergency-events.js publica la ubicación:
+   * - data.ubicacion.latitud/longitud: la exacta, cifrada (string).
+   * - data.latitud/longitud: la aproximada en claro (número, desde el #92).
+   *   Con create_missing = false: a un payload anterior, que no trae esas
+   *   claves en la raíz, no se le agregan.
+   * El WHERE deja afuera las filas que no tienen nada para limpiar.
    */
   async scrubOutboxBusCoordinates(emergencyIds) {
     if (!Array.isArray(emergencyIds) || emergencyIds.length === 0) return { scrubbedCount: 0 };
@@ -512,13 +519,21 @@ class EmergencyRepository {
     const result = await this.pool.query(
       `UPDATE outbox_events
        SET payload = jsonb_set(
-             jsonb_set(payload, '{data,ubicacion,latitud}', 'null'::jsonb, true),
-             '{data,ubicacion,longitud}', 'null'::jsonb, true
+             jsonb_set(
+               jsonb_set(
+                 jsonb_set(payload, '{data,ubicacion,latitud}', 'null'::jsonb, true),
+                 '{data,ubicacion,longitud}', 'null'::jsonb, true
+               ),
+               '{data,latitud}', 'null'::jsonb, false
+             ),
+             '{data,longitud}', 'null'::jsonb, false
            )
        WHERE payload->'data'->>'emergenciaId' = ANY($1::text[])
          AND (
            jsonb_typeof(payload#>'{data,ubicacion,latitud}') = 'string'
            OR jsonb_typeof(payload#>'{data,ubicacion,longitud}') = 'string'
+           OR jsonb_typeof(payload#>'{data,latitud}') = 'number'
+           OR jsonb_typeof(payload#>'{data,longitud}') = 'number'
          )`,
       [emergencyIds]
     );

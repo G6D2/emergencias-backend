@@ -177,7 +177,7 @@ El mensaje en Kafka **no se borra solo**. Si ustedes persisten barrio y/o coorde
 | Ciphertext del bus | Sigue siendo ubicación si tienen la clave: mismo TTL, o no persistir. |
 | Logs | Nunca coords en claro ni la clave de bus. |
 
-**Qué hace Emergencias (referencia):** anonimiza la ubicación exacta at-rest ~72 h después del cierre y **conserva** el barrio. Al anonimizar, también pone en `null` `ubicacion.latitud`/`longitud` en los payloads del **outbox** de esas emergencias, para que no queden ciphertext descifrables indefinidamente con la clave compartida. Los mensajes **ya consumidos** en su sistema no se reescriben: la retención de lo que ustedes guardaron es responsabilidad de su módulo.
+**Qué hace Emergencias (referencia):** anonimiza la ubicación exacta at-rest ~72 h después del cierre y **conserva** el barrio. Al anonimizar, también pone en `null`, en los payloads del **outbox** de esas emergencias, `ubicacion.latitud`/`longitud` (para que no queden ciphertext descifrables indefinidamente con la clave compartida) y las aproximadas en claro `data.latitud`/`data.longitud`. Los mensajes **ya consumidos** en su sistema no se reescriben: la retención de lo que ustedes guardaron es responsabilidad de su módulo.
 
 ---
 
