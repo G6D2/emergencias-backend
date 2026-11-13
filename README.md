@@ -112,7 +112,7 @@ Pegá el `access_token` en `accessToken`. Para obtenerlo sin IdP usá **POST /au
 
 Los endpoints bajo `/api/*` exigen `Authorization: Bearer <access_token>`.
 
-### Sin IdP (`AUTH_MODE=local`, default; así corre producción)
+### Sin IdP (`AUTH_MODE=local`, default)
 
 El backend emite sus propios JWT, que **respetan el mismo contrato** que CityPass+ (claims, RS256, `verify()`).
 
@@ -155,9 +155,11 @@ Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipá
 
 `AUTH_MODE=local` **no arranca con `NODE_ENV=production`** salvo que esté `ALLOW_LOCAL_AUTH=true` (ver abajo). `AUTH_MODE=hybrid` no tiene esa traba.
 
-### Producción (Render) sin Grupo 2
+### Producción (Render)
 
-Producción corre con `AUTH_MODE=local` y `DEV_LOGIN_STRICT=true`. **No** corre con `NODE_ENV=production`: las respuestas no traen `Strict-Transport-Security` (verificado el 05/11/2026), así que tampoco necesita `ALLOW_LOCAL_AUTH`. La configuración está en [`render.yaml`](render.yaml).
+Producción corre con `AUTH_MODE=hybrid` desde el 12/11/2026 (antes `local`) y `DEV_LOGIN_STRICT=true`: el personal entra por el Login Federado del Grupo 2 y los ciudadanos y los atajos de demo siguen con cuenta local (ver [Login Federado + cuentas locales](#login-federado--cuentas-locales-auth_modehybrid)). **No** corre con `NODE_ENV=production`: las respuestas no traen `Strict-Transport-Security` (verificado el 12/11/2026). La configuración está en [`render.yaml`](render.yaml).
+
+Una sesión local dura lo que el token: `LOCAL_TOKEN_TTL_SECONDS`, 900 s por default. A los 15 minutos el front vuelve a la pantalla de acceso; las sesiones del Login Federado se renuevan solas con su refresh token.
 
 Con `DEV_LOGIN_STRICT=true`, `POST /auth/dev/login` solo emite tokens para estos `sub` (`src/auth/dev-login-policy.js`), con groups fijos que el cliente no puede elegir:
 
@@ -258,8 +260,8 @@ Un grupo que no está en el mapa no otorga nada. `citizen` no está en el defaul
 
 | Variable (hybrid) | Default | Rol |
 |---|---|---|
-| `IDP_ISSUER` | obligatoria | `iss` del Login Federado. El contrato del Grupo 2 dice `https://idp.citypass.local` |
-| `IDP_AUDIENCE` | obligatoria | Audience que tiene que estar en `aud`. Por el contrato, `citypass-emergencias-api` (a confirmar con un token real) |
+| `IDP_ISSUER` | obligatoria | `iss` del Login Federado: `https://idp.citypass.local`, sin barra final (confirmado con un token real el 12/11/2026). Tiene que coincidir exacto: con una barra de más el token se rechaza |
+| `IDP_AUDIENCE` | obligatoria | Audience que tiene que estar en `aud`. `citypass-emergencias-api` (confirmado con un token real el 12/11/2026; llega como string, y también se acepta como lista) |
 | `IDP_JWKS_URI` | obligatoria | `https://api.citypass-login.pp.ua/.well-known/jwks.json`. Solo `https` (`http` únicamente contra localhost) |
 | `IDP_CLOCK_TOLERANCE_SECONDS` | `60` | Tolerancia de reloj para `exp`, en los dos tipos de token |
 | `IDP_REQUIRE_TOKEN_USE` | `false` | `true`: `token_use` obligatorio en tokens federados |
@@ -273,7 +275,7 @@ Un grupo que no está en el mapa no otorga nada. `citizen` no está en el defaul
 
 `LOCAL_TOKEN_TTL_SECONDS` y `LOCAL_JWT_PRIVATE_KEY_PEM` funcionan igual que en `local`. Una variable mal formada (JSON roto, grupo interno que no existe, `IDP_JWKS_URI` sin https, booleano que no es `true`/`false`, issuers iguales) frena el arranque con el error.
 
-**Para prenderlo en Render:**
+**Así está cargado en Render (desde el 12/11/2026):**
 
 ```env
 AUTH_MODE=hybrid
@@ -282,9 +284,9 @@ IDP_AUDIENCE=citypass-emergencias-api
 IDP_JWKS_URI=https://api.citypass-login.pp.ua/.well-known/jwks.json
 ```
 
-`IDP_ISSUER` e `IDP_AUDIENCE` ya existen en Render: hay que revisar que tengan esos valores (o los que muestre un token real). `IDP_JWKS_URI` falta cargarla. `IDP_SUB_ALIASES` se carga cuando se sepa el `sub` de cada oficial. Para volver atrás alcanza con `AUTH_MODE=local`.
+Para volver atrás alcanza con `AUTH_MODE=local`. Para saber desde afuera en qué modo corre, sin credenciales: un JWT con un `iss` cualquiera recibe `401 Unknown token issuer` en `hybrid` y `401 Invalid or expired token` en `local`.
 
-**A confirmar con un token real** (decodificar solo el payload, sin pegar el token entero en ningún lado): que `iss` sea `https://idp.citypass.local`; qué trae `aud` y si es lista o string; si vienen `token_use: "human"` y `ver: 1` (si vienen, prender `IDP_REQUIRE_TOKEN_USE` e `IDP_REQUIRE_TOKEN_VER`); que el usuario esté en `sub`; y cómo se llaman los grupos de dispatchers, oficiales y delegados en el panel. El contrato de referencia es la guía de integración del Grupo 2 (`docs/externo/GRUPO-2-AUTENTICACION.md` del repo `carlos-illobre/citypass-event-gateway`).
+**Confirmado con un token real el 12/11/2026** (se decodificó solo el payload): `iss` = `https://idp.citypass.local`; `aud` = `citypass-emergencias-api` (string); el usuario va en `sub` (por ejemplo `U000014`); vienen `token_use: "human"`, `ver: 1` y `module: "emergencias"`; el token dura 15 minutos. El dispatcher de prueba trae `groups: ["dispatcher"]`, que ya está en el mapa por default, y el delegado `groups: ["delegados"]`. Con eso `GET /api/user` devuelve `authSource: "federated"` y el rol `dispatcher`. **Falta**: usuarios LDAP de oficial (cuando existan, `IDP_GROUP_MAP` si su grupo no se llama `officer` e `IDP_SUB_ALIASES` con su `sub`) y decidir si se prenden `IDP_REQUIRE_TOKEN_USE` e `IDP_REQUIRE_TOKEN_VER`. El contrato de referencia es la guía de integración del Grupo 2 (`docs/externo/GRUPO-2-AUTENTICACION.md` del repo `carlos-illobre/citypass-event-gateway`).
 
 ### Autorización por `groups`
 
@@ -1051,14 +1053,15 @@ Implementado en `main`:
 
 - Botón de pánico y reporte con tipo, dirección cifrada y severidad derivada del tipo.
 - Ciclo de vida completo por API: validar, descartar, asignar, devolver, en camino, en el lugar, resolver, cerrar y cancelar.
-- Grupos `citizen`, `dispatcher` y `officer` con JWT del contrato CityPass+ (emitido por el propio backend, `AUTH_MODE=local`).
+- Grupos `citizen`, `dispatcher` y `officer` con JWT del contrato CityPass+. En producción (`AUTH_MODE=hybrid`, desde el 12/11/2026) el personal entra con el token del Login Federado del Grupo 2 y los ciudadanos con el que emite el propio backend.
 - Detección de incidentes cada 60 s (DBSCAN con fallback a reglas) y prioridad efectiva.
 - Cifrado de ubicación y perfil, retención, logs seguros, rate limiting y auditoría de lectura en `GET /api/panic-button/:id`.
-- Outbox transaccional con los eventos del contrato del #48 y consumo de eventos de Espacios (cobertura preventiva).
+- Outbox transaccional con los eventos del contrato del #48, publicados por el gateway en orden de creación.
+- Consumo de eventos de Espacios (cobertura preventiva y prioridad elevada en un radio de 500 m alrededor del evento) y de Reclamos (un reclamo por ciclovía obstruida crea una intervención).
 
 Lo que hoy no está:
 
 - Publicación al bus: en producción sale por el gateway (`EDA_PUBLISHER_MODE=gateway`) desde el 05/11. El modo `kafka` sigue publicando en los tópicos propios (`emergencias.*`), no en los FQN del gateway.
-- Login federado: `AUTH_MODE=idp` está programado, pero producción usa `AUTH_MODE=local`.
+- Usuarios LDAP de oficial: el Login Federado ya está en uso para el dispatcher, pero los oficiales todavía entran con cuenta local.
 - Tiempo real: el front hace polling, no hay WebSocket ni SSE.
-- `barrio`, `afectaCirculacion`, `latitud`/`longitud` y `prioridadOriginal` salen siempre en `null` en `EmergenciaCreada`.
+- `prioridadOriginal` y `areaResponsable` salen siempre en `null` en los eventos.
