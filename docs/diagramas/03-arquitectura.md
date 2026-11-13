@@ -7,8 +7,7 @@ contenedores) y después abrir el backend en sus componentes internos.
 
 ```mermaid
 flowchart TB
-    ciudadano(["Ciudadano / Dispatcher (browser)"]):::actor
-    oficial(["Oficial (Swagger / Postman)"]):::actor
+    ciudadano(["Ciudadano / Dispatcher / Oficial (browser)"]):::actor
 
     subgraph rfe["Render · Frontend"]
         bff["Next.js 16 (BFF)<br/>/api/auth/*, /api/backend/[...path], /api/geocode"]
@@ -44,7 +43,6 @@ flowchart TB
     backup["Backend backup (otra cuenta Render)<br/>activate-backup.yml, manual"]:::backup
 
     ciudadano -->|HTTPS| bff
-    oficial -->|"HTTPS + Bearer (officer)"| api
     bff -->|"Bearer JWT (cookie httpOnly server-side) + retry 502/503/504"| api
     api -->|"pg pool, DB_POOL_MAX"| neon
     kafka -->|"consume EventoComunitarioPublicado / EventoCancelado"| api
