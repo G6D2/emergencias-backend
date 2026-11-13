@@ -78,6 +78,25 @@ channels:
       emergenciaActualizada:
         $ref: '#/components/messages/EmergenciaActualizada'
 
+  emergenciaVinculadaAContextoZona:
+    address: com.citypass.emergencias.EmergenciaVinculadaAContextoZona
+    title: EmergenciaVinculadaAContextoZona
+    description: |
+      Una emergencia quedó vinculada a un contexto de zona (evento comunitario
+      de Espacios) al crearse; mientras los dos estuvieron vigentes, su
+      prioridad de despacho estuvo un nivel arriba. Un evento por fila de
+      `emergencia_contexto_zona`, encolado en la misma sentencia que la fila.
+      Clave de deduplicación: (`emergenciaId`, `contextoId`). Para contar por
+      evento de Espacios, agrupar por `referenciaExterna`. No lleva
+      coordenadas. Los vínculos de `PANICO` no se publican (pendiente de
+      Security). Solo se encola con `EVENTO_VINCULO_CONTEXTO_ENABLED=true`.
+      Con `EDA_PUBLISHER_MODE=kafka` sale por `TOPIC_EMERGENCIA_VINCULADA_CONTEXTO`
+      (default `emergencias.vinculada-contexto-zona`). Schema:
+      `docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json`.
+    messages:
+      emergenciaVinculadaAContextoZona:
+        $ref: '#/components/messages/EmergenciaVinculadaAContextoZona'
+
   emergenciaPriorizada:
     address: emergencias.priorizada
     title: EmergenciaPriorizada (interno)
@@ -154,6 +173,14 @@ operations:
     summary: Publica un cambio de estado de una emergencia.
     messages:
       - $ref: '#/channels/emergenciaActualizada/messages/emergenciaActualizada'
+
+  publicarEmergenciaVinculadaAContextoZona:
+    action: send
+    channel:
+      $ref: '#/channels/emergenciaVinculadaAContextoZona'
+    summary: Publica el vínculo de una emergencia con un contexto de zona.
+    messages:
+      - $ref: '#/channels/emergenciaVinculadaAContextoZona/messages/emergenciaVinculadaAContextoZona'
 
   publicarEmergenciaPriorizada:
     action: send
@@ -337,6 +364,36 @@ components:
                 latitud: null
                 longitud: null
               correlationId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
+
+    EmergenciaVinculadaAContextoZona:
+      name: EmergenciaVinculadaAContextoZona
+      title: Emergencia vinculada a un contexto de zona
+      contentType: application/json
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/EmergenciaVinculadaAContextoZonaData'
+      examples:
+        - name: vinculada a un evento comunitario
+          payload:
+            metadata:
+              eventId: 0b7e3c55-2f1a-4c9e-9d3b-7a6e5f4c3b21
+              eventType: EmergenciaVinculadaAContextoZona
+              source: com.citypass.emergencias
+            data:
+              emergenciaId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
+              contextoId: 8c2d4e6f-1a3b-4c5d-8e7f-9a0b1c2d3e4f
+              contextoTipo: EVENTO_ESPACIO_PUBLICO
+              contextoOrigen: espacios
+              referenciaExterna: evento-1234
+              radioMetros: 500
+              vinculadaEn: '2026-11-13T18:04:00.000Z'
+              reglaVersion: 1
+              backfill: false
 
     EmergenciaPriorizada:
       name: EmergenciaPriorizada
@@ -679,6 +736,40 @@ components:
             type: string
         algorithmVersion:
           type: [string, 'null']
+
+    EmergenciaVinculadaAContextoZonaData:
+      type: object
+      additionalProperties: false
+      required: [emergenciaId, contextoId, contextoTipo, contextoOrigen, referenciaExterna, radioMetros, vinculadaEn, reglaVersion, backfill]
+      properties:
+        emergenciaId:
+          type: string
+          format: uuid
+        contextoId:
+          type: string
+          format: uuid
+        contextoTipo:
+          type: string
+          enum: [EVENTO_ESPACIO_PUBLICO, ALERTA_CLIMATICA]
+        contextoOrigen:
+          type: string
+          description: Módulo que originó el contexto (hoy, espacios).
+        referenciaExterna:
+          type: string
+          description: Id en el módulo de origen (el eventoId de Espacios). Clave para agrupar por evento.
+        radioMetros:
+          type: integer
+          minimum: 1
+        vinculadaEn:
+          type: string
+          format: date-time
+        reglaVersion:
+          type: integer
+          minimum: 1
+          description: Sube si cambia la forma de decidir el vínculo.
+        backfill:
+          type: boolean
+          description: true si salió de la carga inicial y no del alta de la emergencia.
 
     EventoComunitarioPublicadoData:
       type: object

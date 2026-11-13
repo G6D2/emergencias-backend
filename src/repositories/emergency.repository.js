@@ -8,6 +8,12 @@ const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
 const { mapOfficer } = require('./officer.repository');
 const { effectivePriority, dispatchPriority } = require('../domain/severity');
+const {
+  buildEmergencyLinkedToZoneContextEvent,
+  shouldPublishZoneContextLink,
+  zoneContextLinkTopic,
+  ZONE_CONTEXT_LINK_EVENT_TYPE,
+} = require('../services/emergency-events');
 
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
@@ -222,6 +228,8 @@ class EmergencyRepository {
   constructor(pool, options = {}) {
     this.pool = pool;
     this.locationCrypto = options.locationCrypto || createLocationCrypto();
+    // Inyectable para tests (EVENTO_VINCULO_CONTEXTO_ENABLED y topics).
+    this.env = options.env || process.env;
   }
 
   // source/causa vienen de las emergencias que crea el listener de eventos
@@ -310,28 +318,130 @@ class EmergencyRepository {
     if (emergencyType === 'PREVENTIVA') return [];
 
     const enCurso = await executor.query(
-      `SELECT c.id, c.latitud, c.longitud, c.radio_metros
+      `SELECT c.id, c.latitud, c.longitud, c.radio_metros, c.tipo, c.origen, c.referencia_externa
        FROM contexto_zona c
        WHERE ${ZONE_CONTEXT_EN_CURSO_SQL}
          AND c.latitud IS NOT NULL
          AND c.longitud IS NOT NULL
          AND c.radio_metros IS NOT NULL`
     );
-    const contextoIds = enCurso.rows
-      .filter((c) => haversineDistanceMeters(
-        { latitude, longitude },
-        { latitude: Number(c.latitud), longitude: Number(c.longitud) }
-      ) <= Number(c.radio_metros))
-      .map((c) => c.id);
+    const alcanzan = enCurso.rows.filter((c) => haversineDistanceMeters(
+      { latitude, longitude },
+      { latitude: Number(c.latitud), longitude: Number(c.longitud) }
+    ) <= Number(c.radio_metros));
+    const contextoIds = alcanzan.map((c) => c.id);
     if (contextoIds.length === 0) return [];
 
+    if (!shouldPublishZoneContextLink(emergencyType, this.env)) {
+      await executor.query(
+        `INSERT INTO emergencia_contexto_zona (emergency_id, contexto_id)
+         SELECT $1, unnest($2::uuid[])
+         ON CONFLICT DO NOTHING`,
+        [id, contextoIds]
+      );
+      return contextoIds;
+    }
+
+    // Con el evento de vínculo encendido, la fila y su evento del outbox se
+    // escriben en UNA sentencia: si el vínculo existe, el evento existe, aunque
+    // el executor sea el pool y no una transacción. Solo se encola evento para
+    // los vínculos que se insertaron de verdad (ON CONFLICT DO NOTHING no
+    // devuelve fila), así que un reintento no duplica.
+    const vinculadaEn = new Date();
+    const events = alcanzan.map((c) => buildEmergencyLinkedToZoneContextEvent({
+      emergencyId: id,
+      correlationId: emergency.correlationId,
+      contexto: {
+        id: c.id,
+        tipo: c.tipo,
+        origen: c.origen,
+        referenciaExterna: c.referencia_externa,
+        radioMetros: c.radio_metros,
+      },
+      vinculadaEn,
+      eventId: randomUUID(),
+    }));
     await executor.query(
-      `INSERT INTO emergencia_contexto_zona (emergency_id, contexto_id)
-       SELECT $1, unnest($2::uuid[])
-       ON CONFLICT DO NOTHING`,
-      [id, contextoIds]
+      `WITH nuevos AS (
+         INSERT INTO emergencia_contexto_zona (emergency_id, contexto_id, created_at)
+         SELECT $1, unnest($2::uuid[]), $3
+         ON CONFLICT DO NOTHING
+         RETURNING contexto_id
+       )
+       INSERT INTO outbox_events (id, topic, payload)
+       SELECT ev.id, $4, ev.payload
+       FROM unnest($5::uuid[], $6::uuid[], $7::jsonb[]) AS ev(contexto_id, id, payload)
+       JOIN nuevos ON nuevos.contexto_id = ev.contexto_id`,
+      [
+        id,
+        contextoIds,
+        vinculadaEn,
+        zoneContextLinkTopic(this.env),
+        events.map((event) => event.data.contextoId),
+        events.map((event) => event.eventId),
+        events.map((event) => JSON.stringify(event)),
+      ]
     );
     return contextoIds;
+  }
+
+  // Backfill del evento de vínculo (ADR "Publicar el vínculo de una emergencia
+  // con un contexto de zona", punto 6): encola, con backfill: true, los
+  // vínculos que siguen en la base y todavía no tienen evento en el outbox.
+  // Idempotente: una segunda corrida no encuentra nada. Solo recupera lo que
+  // la retención no borró (unlinkZoneContexts al anonimizar).
+  async enqueueMissingZoneContextLinkEvents() {
+    const candidates = await this.pool.query(
+      `SELECT ecz.emergency_id, ecz.contexto_id, ecz.created_at,
+              e.correlation_id, e.emergency_type,
+              c.tipo, c.origen, c.referencia_externa, c.radio_metros
+       FROM emergencia_contexto_zona ecz
+       JOIN emergencies e ON e.id = ecz.emergency_id
+       JOIN contexto_zona c ON c.id = ecz.contexto_id
+       WHERE NOT EXISTS (
+         SELECT 1 FROM outbox_events o
+         WHERE o.payload->>'type' = $1
+           AND o.payload->'data'->>'emergenciaId' = ecz.emergency_id::text
+           AND o.payload->'data'->>'contextoId' = ecz.contexto_id::text
+       )
+       ORDER BY ecz.created_at`,
+      [ZONE_CONTEXT_LINK_EVENT_TYPE]
+    );
+
+    const events = candidates.rows
+      .filter((row) => shouldPublishZoneContextLink(row.emergency_type, this.env))
+      .map((row) => buildEmergencyLinkedToZoneContextEvent({
+        emergencyId: row.emergency_id,
+        correlationId: row.correlation_id,
+        contexto: {
+          id: row.contexto_id,
+          tipo: row.tipo,
+          origen: row.origen,
+          referenciaExterna: row.referencia_externa,
+          radioMetros: row.radio_metros,
+        },
+        vinculadaEn: row.created_at,
+        backfill: true,
+        eventId: randomUUID(),
+      }));
+    if (events.length === 0) {
+      return { enqueuedCount: 0, skippedCount: candidates.rows.length };
+    }
+
+    await this.pool.query(
+      `INSERT INTO outbox_events (id, topic, payload)
+       SELECT ev.id, $1, ev.payload
+       FROM unnest($2::uuid[], $3::jsonb[]) AS ev(id, payload)`,
+      [
+        zoneContextLinkTopic(this.env),
+        events.map((event) => event.eventId),
+        events.map((event) => JSON.stringify(event)),
+      ]
+    );
+    return {
+      enqueuedCount: events.length,
+      skippedCount: candidates.rows.length - events.length,
+    };
   }
 
   async insertOutboxEvent(client, { topic, payload }, entity) {
@@ -550,10 +660,18 @@ class EmergencyRepository {
   // El vínculo con un contexto de zona dice que la emergencia estuvo a pocos
   // cientos de metros de un punto conocido: se borra junto con la ubicación.
   // A esa altura la emergencia ya está cerrada y el vínculo no eleva nada.
+  // También se borran sus eventos de vínculo que sigan en el outbox (cualquier
+  // estado); lo que ya salió al bus queda bajo la retención del Grupo 1.
   async unlinkZoneContexts(emergencyIds) {
     await this.pool.query(
       'DELETE FROM emergencia_contexto_zona WHERE emergency_id = ANY($1::uuid[])',
       [emergencyIds]
+    );
+    await this.pool.query(
+      `DELETE FROM outbox_events
+       WHERE payload->>'type' = $2
+         AND payload->'data'->>'emergenciaId' = ANY($1::text[])`,
+      [emergencyIds, ZONE_CONTEXT_LINK_EVENT_TYPE]
     );
   }
 
