@@ -1,17 +1,46 @@
-# Guía para recalcular la prioridad elevada por eventos públicos (CityPass+)
+# Guía de la prioridad elevada por eventos públicos (CityPass+)
 
-Documento **autocontenido** para equipos que consumen `EmergenciaCreada` y `EmergenciaActualizada` del bus (Analítica, Reclamos, Movilidad, etc.). No hace falta clonar el repo de Emergencias para usarlo.
+Documento **autocontenido** para equipos que consumen eventos de Emergencias del bus (Analítica, Reclamos, Movilidad, etc.). No hace falta clonar el repo de Emergencias para usarlo.
 
 ---
 
-## 1. Qué hace Emergencias y qué no publica
+## 1. Qué hace Emergencias y qué publica
 
 Mientras dura un evento comunitario de Espacios Públicos, Emergencias atiende con **un nivel más de prioridad** las emergencias que se crean cerca del evento (a no más de 500 m). Es una regla interna de despacho:
 
-- **No cambia lo que se publica.** `data.prioridad` de `EmergenciaCreada` y `EmergenciaActualizada` es siempre la prioridad original de la emergencia, haya o no un evento en curso.
-- **No hay un evento por cada suba ni por cada baja.** La suba no se guarda: se calcula al leer y desaparece sola cuando el evento termina o se cancela.
+- **`data.prioridad` no cambia.** En `EmergenciaCreada` y `EmergenciaActualizada` es siempre la prioridad original de la emergencia, haya o no un evento en curso.
+- **El vínculo sí se publica**, como evento propio: `EmergenciaVinculadaAContextoZona` (ver sección 1.1). Es la forma recomendada de saber qué emergencias se elevaron y por qué evento.
+- **No hay un evento por cada suba ni por cada baja.** La suba se calcula al leer y desaparece sola cuando el evento termina o se cancela.
 
-Quien necesite saber con qué prioridad se atendió una emergencia puede recalcularlo con los eventos que ya están en el bus.
+### 1.1 Recomendado: `EmergenciaVinculadaAContextoZona`
+
+Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios). Es el mismo dato que usa el tablero del dispatcher, encolado en la misma sentencia que lo guarda: no hace falta recalcular nada ni medir distancias.
+
+| Campo | Para qué |
+|---|---|
+| `emergenciaId` | La emergencia (cruza con `EmergenciaCreada`) |
+| `contextoId` | El contexto en Emergencias |
+| `contextoTipo` | `EVENTO_ESPACIO_PUBLICO` o `ALERTA_CLIMATICA` |
+| `contextoOrigen` | Módulo de origen (`espacios`) |
+| `referenciaExterna` | El `eventoId` de Espacios. **Agrupar por este campo** para contar por evento |
+| `radioMetros` | Radio con el que se decidió |
+| `vinculadaEn` | Cuándo se vinculó (al crearse la emergencia) |
+| `reglaVersion` | Versión de la regla. Si sube, cambió la forma de decidir el vínculo |
+| `backfill` | `true` si salió de la carga inicial y no del alta |
+
+Reglas para no contar mal:
+
+- **Deduplicar por `(emergenciaId, contextoId)`.** El bus es *at-least-once*: el mismo vínculo puede llegar dos veces.
+- **Significado:** la emergencia quedó vinculada al evento al crearse y, mientras los dos estuvieron vigentes, su prioridad de despacho estuvo un nivel arriba. Una emergencia vinculada estuvo elevada.
+- **`PANICO` no se publica** mientras Security no defina su precisión en el bus. El conteo por evento no incluye botones de pánico.
+- **Historia:** el evento existe desde su activación. Al activarlo se cargaron (`backfill: true`) los vínculos que seguían en la base: emergencias abiertas o cerradas hace menos de 72 h. Lo anterior no se puede recuperar.
+- **Sin coordenadas.** El evento no lleva ubicación; si hace falta, sale de `EmergenciaCreada`.
+
+Schema: [`docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json`](contratos/emergencia-vinculada-a-contexto-zona.schema.json).
+
+### 1.2 Alternativa: recalcular
+
+El resto de esta guía explica cómo **recalcular** el vínculo y la suba con los eventos que ya están en el bus. Sirve para quien no pueda consumir `EmergenciaVinculadaAContextoZona` o necesite el estado de la suba en un instante dado. Tiene los límites de la sección 6: puede diferir de lo que hizo Emergencias.
 
 ---
 

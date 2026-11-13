@@ -16,7 +16,15 @@ const TIMEOUT_MS = 15_000;
 // Solo salen al bus los tipos del contrato (issue #48 de demo-repository).
 // EmergenciaPriorizada es interna (orden de despacho): no se registra en el
 // catálogo y el outbox la marca SKIPPED sin llamar al gateway.
-const PUBLISHED_TYPES = new Set(['EmergenciaCreada', 'EmergenciaActualizada']);
+// EmergenciaVinculadaAContextoZona solo se encola con
+// EVENTO_VINCULO_CONTEXTO_ENABLED=true, que se enciende recién cuando el tipo
+// está registrado en el catálogo (si no, el gateway responde 404 y la fila
+// queda FAILED).
+const PUBLISHED_TYPES = new Set([
+  'EmergenciaCreada',
+  'EmergenciaActualizada',
+  'EmergenciaVinculadaAContextoZona',
+]);
 
 class PermanentError extends Error {
   constructor(message) {

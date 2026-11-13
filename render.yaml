@@ -118,6 +118,12 @@ services:
       # emergencias.priorizada).
       - key: TOPIC_PANIC_BUTTON
         value: emergencias.boton-panico
+      # EmergenciaVinculadaAContextoZona (ADR "Publicar el vínculo de una
+      # emergencia con un contexto de zona"). Apagado hasta que el tipo esté
+      # registrado en el catálogo del gateway; al pasarlo a true, correr una vez
+      # `npm run backfill:vinculos-contexto` (Shell de Render).
+      - key: EVENTO_VINCULO_CONTEXTO_ENABLED
+        value: "false"
 
       # Clave AES-256-GCM de ubicaciones (openssl rand -base64 32). Sin esto el
       # servicio no arranca. Para rotar: ver README (Seguridad de datos).

@@ -200,6 +200,22 @@ describe('GatewayPublisher (issue #74)', () => {
     });
   });
 
+  describe('publishEvent — EmergenciaVinculadaAContextoZona', () => {
+    it('sale al gateway con su propio fqn', async () => {
+      const calls = [];
+      const pub = new GatewayPublisher(createAuthClient(), { baseUrl: BASE_URL, fetch: mockFetch({ status: 202, calls }) });
+      const data = { emergenciaId: 'em-1', contextoId: 'ctx-1' };
+
+      await pub.publishEvent('emergencias.vinculada-contexto-zona', { type: 'EmergenciaVinculadaAContextoZona', data });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toBe(
+        `${BASE_URL}/api/v1/event-types/${encodeURIComponent('com.citypass.emergencias.EmergenciaVinculadaAContextoZona')}/events`
+      );
+      expect(JSON.parse(calls[0].init.body)).toEqual(data);
+    });
+  });
+
   describe('publishEvent — tipos fuera del contrato', () => {
     it('EmergenciaPriorizada no llama al gateway y devuelve { skipped: true }', async () => {
       const calls = [];
