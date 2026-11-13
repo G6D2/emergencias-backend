@@ -11,7 +11,13 @@
 //   - 429 -> error con `retryAfterMs` (outbox respeta el backoff del gateway)
 //   - 5xx y otros -> transient (outbox reintenta con backoff exponencial)
 
-const TIMEOUT_MS = 15_000;
+// El gateway genera un eventId nuevo en cada POST y no acepta Idempotency-Key:
+// si cortamos una request que el gateway igual termina publicando, el outbox
+// la reintenta y el evento sale duplicado con otro eventId. Con 15 s pasó en
+// prod (13/11): el gateway tardó ~30 s en confirmar. 45 s cubre esa latencia y
+// queda por debajo del minuto tras el cual claimBatch reclama una fila en
+// PROCESSING (si se pasara, otra instancia podría publicarla en paralelo).
+const TIMEOUT_MS = 45_000;
 
 // Solo salen al bus los tipos del contrato (issue #48 de demo-repository).
 // EmergenciaPriorizada es interna (orden de despacho): no se registra en el
@@ -120,4 +126,4 @@ async function safeText(response) {
   try { return await response.text(); } catch (_) { return ''; }
 }
 
-module.exports = { GatewayPublisher, PermanentError, PUBLISHED_TYPES };
+module.exports = { GatewayPublisher, PermanentError, PUBLISHED_TYPES, TIMEOUT_MS };

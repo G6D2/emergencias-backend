@@ -1,4 +1,4 @@
-const { GatewayPublisher, PermanentError } = require('../services/gateway-publisher');
+const { GatewayPublisher, PermanentError, TIMEOUT_MS } = require('../services/gateway-publisher');
 
 function createAuthClient(tokens = ['tok-1', 'tok-2']) {
   let idx = 0;
@@ -245,6 +245,21 @@ describe('GatewayPublisher (issue #74)', () => {
       const pub = new GatewayPublisher(createAuthClient(), { fetch: async () => {} });
       pub.baseUrl = null;
       await expect(pub.publishEvent(TOPIC, PAYLOAD)).rejects.toThrow(/EDA_API_URL no configurado/);
+    });
+
+    it('el timeout por defecto cubre la latencia del gateway y no alcanza el reclamo de PROCESSING (1 min)', () => {
+      const pub = new GatewayPublisher(createAuthClient(), { baseUrl: BASE_URL, fetch: async () => {} });
+      expect(pub.timeoutMs).toBe(TIMEOUT_MS);
+      expect(TIMEOUT_MS).toBeGreaterThanOrEqual(30_000);
+      expect(TIMEOUT_MS).toBeLessThan(60_000);
+    });
+
+    it('aborta la request cuando el gateway no responde dentro del timeout', async () => {
+      const fetch = (url, init) => new Promise((resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+      const pub = new GatewayPublisher(createAuthClient(), { baseUrl: BASE_URL, fetch, timeoutMs: 20 });
+      await expect(pub.publishEvent(TOPIC, PAYLOAD)).rejects.toThrow(/aborted/);
     });
   });
 });
