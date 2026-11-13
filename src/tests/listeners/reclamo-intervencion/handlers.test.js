@@ -101,6 +101,58 @@ describe('createCrearIntervencionHandler', () => {
     expect(emergencyRepository.create).not.toHaveBeenCalled();
   });
 
+  describe('dos eventos del mismo reclamo en paralelo (índice único de V29)', () => {
+    const duplicada = () => Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505', constraint: 'uq_emergencies_reclamo_causa',
+    });
+
+    it('si el INSERT choca con el índice único, deshace solo eso y devuelve la que ganó', async () => {
+      const queries = [];
+      const tx = { query: jest.fn(async (sql) => { queries.push(sql); }) };
+      const emergencyRepository = {
+        findByCausa: jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 'em-ganadora', status: 'PENDING' }]),
+        create: jest.fn().mockRejectedValue(duplicada()),
+      };
+      const handler = createCrearIntervencionHandler({ emergencyRepository });
+
+      await expect(handler(tx, PAYLOAD)).resolves.toEqual({ emergencyId: 'em-ganadora', created: false });
+
+      expect(queries[0]).toMatch(/^SAVEPOINT /);
+      expect(queries[1]).toMatch(/^ROLLBACK TO SAVEPOINT /);
+      expect(queries).toHaveLength(2);
+    });
+
+    it('si después del choque todavía no se ve la otra, falla como transitorio para que se reintente', async () => {
+      const emergencyRepository = {
+        findByCausa: jest.fn().mockResolvedValue([]),
+        create: jest.fn().mockRejectedValue(duplicada()),
+      };
+      const handler = createCrearIntervencionHandler({ emergencyRepository });
+
+      await expect(handler({ query: jest.fn() }, PAYLOAD)).rejects.toMatchObject({ code: '23505', transient: true });
+    });
+
+    it('otro error de base no se traga ni se marca transitorio', async () => {
+      const otro = Object.assign(new Error('check violation'), { code: '23514', constraint: 'emergencies_severity_check' });
+      const tx = { query: jest.fn() };
+      const emergencyRepository = { findByCausa: jest.fn().mockResolvedValue([]), create: jest.fn().mockRejectedValue(otro) };
+      const handler = createCrearIntervencionHandler({ emergencyRepository });
+
+      await expect(handler(tx, PAYLOAD)).rejects.toBe(otro);
+      expect(otro.transient).toBeUndefined();
+      expect(tx.query).toHaveBeenCalledTimes(1); // solo el SAVEPOINT
+    });
+
+    it('sin choque libera el savepoint', async () => {
+      const queries = [];
+      const tx = { query: jest.fn(async (sql) => { queries.push(sql); }) };
+      const handler = createCrearIntervencionHandler({ emergencyRepository: buildRepository() });
+
+      await expect(handler(tx, PAYLOAD)).resolves.toMatchObject({ created: true });
+      expect(queries.map((q) => q.split(' ')[0])).toEqual(['SAVEPOINT', 'RELEASE']);
+    });
+  });
+
   it('sin coordenadas queda para validación manual', async () => {
     const emergencyRepository = buildRepository();
     const handler = createCrearIntervencionHandler({ emergencyRepository });

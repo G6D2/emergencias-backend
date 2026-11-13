@@ -9,6 +9,9 @@
 //   Analítica; ninguno descifra. Ubica la cuadra, no el domicilio.
 // - data.ubicacion.latitud / longitud: la coordenada exacta, cifrada con
 //   BUS_LOCATION_ENCRYPTION_KEY (para quien tenga la clave).
+// La retención pone las cuatro en null en los payloads guardados en el outbox
+// (EmergencyRepository.scrubOutboxBusCoordinates): un campo de ubicación nuevo
+// en estos eventos tiene que sumarse ahí.
 
 const { getBusLocationCrypto } = require('../security/bus-location-crypto');
 const { secureLog } = require('../security/secure-log');
