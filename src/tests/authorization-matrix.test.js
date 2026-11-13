@@ -29,7 +29,7 @@ const ENDPOINTS = [
   ['GET', '/api/user', ANY_AUTHENTICATED],
   ['POST', '/api/panic-button', ['citizen'], { location: { latitude: -34.6, longitude: -58.4 } }],
   ['GET', '/api/panic-button/:id', ['citizen', 'dispatcher']],
-  ['GET', '/api/emergencies', ['citizen', 'dispatcher']],
+  ['GET', '/api/emergencies', ['citizen', 'dispatcher', 'officer']],
   ['GET', '/api/emergencies/:id', ['citizen', 'dispatcher']],
   ['PATCH', '/api/emergencies/:id/validate', ['dispatcher']],
   ['PATCH', '/api/emergencies/:id/discard', ['dispatcher'], { reason: 'duplicada' }],
