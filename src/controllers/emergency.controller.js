@@ -62,17 +62,21 @@ class EmergencyController {
   }
 
   /**
-   * Lista paginada de emergencias. Endpoint dispatcher-only (ver requireDispatcher en la ruta).
+   * Lista paginada de emergencias (citizen, dispatcher u officer; ver la ruta).
    * @param {object} query
    */
   async listEmergencies(query, user = null) {
-    // Un citizen solo ve lo suyo: se ignora cualquier userId del query y se
-    // usa el sub del token. Dispatcher (y futuros roles operativos) ven todo.
-    const restrictToOwn = Boolean(user) && !userHasGroup(user, GROUPS.DISPATCHER);
-    const userId = restrictToOwn ? user.sub : undefined;
-    // El repository calcula incident/effectivePriority igual para todos (un
-    // solo JOIN); para un citizen se recortan acá (withoutOperationalFields).
+    // Dispatcher ve todo. Un officer solo ve lo que tiene asignado: el
+    // assignedOfficerId sale del sub del token (mismo id que compara
+    // canAdvanceEmergencyStatus). Un citizen solo ve lo suyo: se ignora
+    // cualquier userId del query y se usa el sub del token.
     const isDispatcher = userHasGroup(user, GROUPS.DISPATCHER);
+    const isOfficerOnly = Boolean(user) && !isDispatcher && userHasGroup(user, GROUPS.OFFICER);
+    const restrictToOwn = Boolean(user) && !isDispatcher && !isOfficerOnly;
+    const userId = restrictToOwn ? user.sub : undefined;
+    const assignedOfficerId = isOfficerOnly ? user.sub : query.assignedOfficerId;
+    // El repository calcula incident/effectivePriority igual para todos (un
+    // solo JOIN); para officer y citizen se recortan acá (withoutOperationalFields).
     if (query.severity && !isValidSeverity(query.severity)) {
       throw new ValidationError('severity must be one of: low, medium, high, critical');
     }
@@ -97,7 +101,7 @@ class EmergencyController {
       severity: query.severity || query.priority,
       from,
       to,
-      assignedOfficerId: query.assignedOfficerId,
+      assignedOfficerId,
       // Acepta canónico o alias del front (medical → MEDICA); inválido → 400.
       // `type` se mantiene por compatibilidad con clientes existentes.
       emergencyType: assertEmergencyType(query.emergencyType || query.type),
