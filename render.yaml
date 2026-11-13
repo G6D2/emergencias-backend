@@ -93,9 +93,12 @@ services:
         value: com.citypass.espacios.EventoComunitarioPublicado
       - key: EDA_TOPIC_EVENTO_CANCELADO
         value: com.citypass.espacios.EventoCancelado
-      # Listeners de Reclamos (caso ciclovía): usan el default del código
-      # (com.citypass.reclamos.ReclamoCreado.v3 y ...ReclamoActualizado). Se
-      # pisan con EDA_TOPIC_RECLAMO_CREADO / EDA_TOPIC_RECLAMO_ACTUALIZADO.
+      # Listeners del caso ciclovía: usan el default del código
+      # (com.citypass.movilidad.EmergenciaSolicitada,
+      # com.citypass.reclamos.ReclamoCreado.v3 y ...ReclamoActualizado). Se
+      # pisan con EDA_TOPIC_EMERGENCIA_SOLICITADA / EDA_TOPIC_RECLAMO_CREADO /
+      # EDA_TOPIC_RECLAMO_ACTUALIZADO. Quién crea la intervención lo decide
+      # RECLAMO_INTERVENCION_DISPARADOR: movilidad (default), reclamo o ambos.
       # Piso de consumo: un grupo sin offset lee desde el principio y saltea lo
       # anterior a esta fecha. Tiene que quedar cargada siempre.
       - key: EDA_CONSUMER_SINCE
