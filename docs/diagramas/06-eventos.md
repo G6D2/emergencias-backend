@@ -31,7 +31,7 @@ flowchart LR
     consumers["Reclamos · Espacios · Movilidad<br/>Residuos · Analítica"]
 
     espacios["Espacios Públicos<br/>EventoComunitarioPublicado<br/>EventoCancelado"]
-    listeners["src/listeners/cobertura-preventiva<br/>KAFKA_CONSUMER_ENABLED=true"]
+    listeners["src/listeners<br/>cobertura-preventiva y reclamo-intervencion<br/>KAFKA_CONSUMER_ENABLED=true"]
 
     t1 --> e1
     t2 --> e2
