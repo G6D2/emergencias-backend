@@ -110,6 +110,16 @@ channels:
       eventoCancelado:
         $ref: '#/components/messages/EventoCancelado'
 
+  emergenciaSolicitada:
+    address: com.citypass.movilidad.EmergenciaSolicitada
+    title: EmergenciaSolicitada (Movilidad)
+    description: |
+      Topic configurable con `EDA_TOPIC_EMERGENCIA_SOLICITADA`. Movilidad lo
+      publica cuando evalúa un reclamo de ciclovía de prioridad ALTA o CRITICA.
+    messages:
+      emergenciaSolicitada:
+        $ref: '#/components/messages/EmergenciaSolicitada'
+
   reclamoCreado:
     address: com.citypass.reclamos.ReclamoCreado.v3
     title: ReclamoCreado v3 (Reclamos)
@@ -187,14 +197,32 @@ operations:
     messages:
       - $ref: '#/channels/eventoCancelado/messages/eventoCancelado'
 
+  recibirEmergenciaSolicitada:
+    action: receive
+    channel:
+      $ref: '#/channels/emergenciaSolicitada'
+    summary: |
+      Disparador del caso "reclamo por ciclovía" (Reclamos → Movilidad →
+      Emergencias): crea una emergencia externa `TRANSITO` (causa `RECLAMO`,
+      `causaId` = `reclamoId`), una sola por reclamo, con la prioridad pedida.
+      No aplica con `RECLAMO_INTERVENCION_DISPARADOR=reclamo`.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.EmergenciaSolicitadaListener
+    messages:
+      - $ref: '#/channels/emergenciaSolicitada/messages/emergenciaSolicitada'
+
   recibirReclamoCreado:
     action: receive
     channel:
       $ref: '#/channels/reclamoCreado'
     summary: |
-      Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea una emergencia
-      externa `TRANSITO` (causa `RECLAMO`, `causaId` = `reclamoId`), una sola por
-      reclamo. El resto de los reclamos no hace nada.
+      Plan B del caso: solo con `RECLAMO_INTERVENCION_DISPARADOR` en `reclamo` o
+      `ambos`. Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea una
+      emergencia externa `TRANSITO` (causa `RECLAMO`, `causaId` = `reclamoId`),
+      una sola por reclamo. Con el default (`movilidad`) se consume y no hace nada.
     bindings:
       kafka:
         groupId:
@@ -360,6 +388,20 @@ components:
             $ref: '#/components/schemas/Metadata'
           data:
             $ref: '#/components/schemas/EventoCanceladoData'
+
+    EmergenciaSolicitada:
+      name: EmergenciaSolicitada
+      title: Emergencia solicitada por Movilidad
+      contentType: application/json
+      description: Producido por Movilidad. `descripcion` y `direccion` no se publican de vuelta (texto libre).
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/EmergenciaSolicitadaData'
 
     ReclamoCreado:
       name: ReclamoCreado
@@ -743,5 +785,37 @@ components:
           type: string
           description: RECIBIDO, EN_REVISION, ASIGNADO, EN_PROCESO, RESUELTO, RECHAZADO o CERRADO. Los tres últimos cancelan la intervención pendiente.
         updatedAt:
+          type: integer
+          description: Epoch en milisegundos.
+
+    EmergenciaSolicitadaData:
+      type: object
+      additionalProperties: true
+      description: Solo los campos que lee Emergencias. El schema completo es `EmergenciaSolicitada.json` del repo de Movilidad.
+      required: [reclamoId]
+      properties:
+        reclamoId:
+          type: string
+          minLength: 1
+          description: Reclamo que originó el pedido. Es la causa de la emergencia.
+        correlationId:
+          type: [string, 'null']
+        origen:
+          type: string
+        tipoEmergencia:
+          type: string
+          examples: [OBSTRUCCION_CICLOVIA_CRITICA]
+        prioridad:
+          type: string
+          description: ALTA o CRITICA. Define la prioridad de la emergencia; otro valor cae a MEDIA.
+        descripcion:
+          type: string
+        direccion:
+          type: [string, 'null']
+        latitud:
+          type: [number, 'null']
+        longitud:
+          type: [number, 'null']
+        solicitadoAt:
           type: integer
           description: Epoch en milisegundos.

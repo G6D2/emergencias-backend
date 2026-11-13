@@ -697,7 +697,7 @@ src/
 │   ├── business-rule.js
 │   ├── load-rules.js
 │   └── cobertura-preventiva/     # EventoComunitarioPublicado y EventoCancelado de Espacios
-│   ├── reclamo-intervencion/     # ReclamoCreado y ReclamoActualizado de Reclamos (caso ciclovía)
+│   ├── reclamo-intervencion/     # Caso ciclovía: EmergenciaSolicitada de Movilidad, ReclamoCreado y ReclamoActualizado de Reclamos
 ├── repositories/
 │   ├── auth-user.repository.js
 │   ├── citizen-profile.repository.js
@@ -877,8 +877,11 @@ Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca l
 |---|---|---|
 | `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox. Aparte, sin importar la capacidad, registra el contexto de zona del evento |
 | `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca. Aparte, da de baja el contexto de zona del evento |
-| `ReclamoCreado` (Reclamos, v3) | `EDA_TOPIC_RECLAMO_CREADO` (default `com.citypass.reclamos.ReclamoCreado.v3`) | Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea **una** emergencia `TRANSITO` por `reclamoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = RECLAMO`, `causaId = reclamoId`, prioridad según la del reclamo (default `MEDIA`). Sin coordenadas queda con `requiresManualValidation`. Cualquier otro reclamo, o uno que ya llega en estado final, no hace nada |
+| `EmergenciaSolicitada` (Movilidad) | `EDA_TOPIC_EMERGENCIA_SOLICITADA` (default `com.citypass.movilidad.EmergenciaSolicitada`) | **Disparador del caso de la ciclovía** (Reclamos → Movilidad → Emergencias). Movilidad evalúa el reclamo y, si es de ciclovía con prioridad `ALTA` o `CRITICA`, pide la emergencia. Crea **una** emergencia `TRANSITO` por `reclamoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = RECLAMO`, `causaId = reclamoId`, con la prioridad pedida. Sin coordenadas queda con `requiresManualValidation`. No aplica con `RECLAMO_INTERVENCION_DISPARADOR=reclamo` |
+| `ReclamoCreado` (Reclamos, v3) | `EDA_TOPIC_RECLAMO_CREADO` (default `com.citypass.reclamos.ReclamoCreado.v3`) | **Plan B del caso de la ciclovía.** Solo con `RECLAMO_INTERVENCION_DISPARADOR` en `reclamo` o `ambos`: con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea la misma emergencia `TRANSITO` por `reclamoId`, con la prioridad del reclamo (default `MEDIA`). Con el default (`movilidad`) se consume y no hace nada |
 | `ReclamoActualizado` (Reclamos) | `EDA_TOPIC_RECLAMO_ACTUALIZADO` (default `com.citypass.reclamos.ReclamoActualizado`) | Cuando `estadoNuevo` es `RESUELTO`, `RECHAZADO` o `CERRADO`, cancela la intervención de ese `reclamoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:reclamos`, con historial y `EmergenciaActualizada`). Si ya fue despachada, la termina el oficial |
+
+**Quién crea la intervención del reclamo de ciclovía** lo decide `RECLAMO_INTERVENCION_DISPARADOR`: `movilidad` (default: solo la `EmergenciaSolicitada`), `reclamo` (solo el `ReclamoCreado` directo) o `ambos` (el primero que llegue; el otro la encuentra creada). Nunca hay más de una por reclamo: lo garantiza el índice único de V29, también si los dos listeners procesan el mismo reclamo a la vez. Un valor que no existe frena el arranque. Si Movilidad no está publicando, el plan B es cargar `ambos`, sin tocar código.
 
 ### Prioridad elevada durante un evento
 

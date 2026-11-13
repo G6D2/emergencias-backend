@@ -53,7 +53,7 @@ describe('asyncapi.yaml', () => {
     expect(send).toEqual(expect.arrayContaining(['publicarEmergenciaCreada', 'publicarEmergenciaActualizada']));
     expect(receive).toEqual(expect.arrayContaining([
       'recibirEventoComunitarioPublicado', 'recibirEventoCancelado',
-      'recibirReclamoCreado', 'recibirReclamoActualizado',
+      'recibirReclamoCreado', 'recibirReclamoActualizado', 'recibirEmergenciaSolicitada',
     ]));
   });
 
