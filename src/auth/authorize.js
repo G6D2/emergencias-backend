@@ -90,6 +90,11 @@ const requireCitizenOrDispatcher = createRequireGroups(
   GROUPS.CITIZEN,
   GROUPS.DISPATCHER
 );
+const requireCitizenDispatcherOrOfficer = createRequireGroups(
+  GROUPS.CITIZEN,
+  GROUPS.DISPATCHER,
+  GROUPS.OFFICER
+);
 
 module.exports = {
   createRequireGroups,
@@ -102,4 +107,5 @@ module.exports = {
   requireDispatcher,
   requireOfficer,
   requireCitizenOrDispatcher,
+  requireCitizenDispatcherOrOfficer,
 };

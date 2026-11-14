@@ -13,6 +13,13 @@ const { EventoCanceladoListener } = require('../../listeners/cobertura-preventiv
 const { ActividadCreadaListener } = require('../../listeners/cobertura-preventiva/actividad-creada/actividad-creada.listener');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/cancelar-cobertura.handler');
+const {
+  REGISTRAR_CONTEXTO_ZONA,
+  DAR_DE_BAJA_CONTEXTO_ZONA,
+  createRegistrarContextoZonaHandler,
+  createDarDeBajaContextoZonaHandler,
+} = require('../../listeners/cobertura-preventiva/handlers/contexto-zona.handler');
+const { ContextoZonaRepository } = require('../../repositories/contexto-zona.repository');
 const { createLocationCrypto } = require('../../security/location-crypto');
 
 const CREATED_TOPIC = 'test.actividad.creada';
@@ -38,6 +45,9 @@ beforeAll(() => {
   const factory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
   factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
   factory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository, topic: UPDATED_TOPIC }));
+  const contextoZonaRepository = new ContextoZonaRepository(pool);
+  factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
+  factory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
 
   publicado = new EventoComunitarioPublicadoListener(fakeKafka(), { factory });
   cancelado = new EventoCanceladoListener(fakeKafka(), { factory });
@@ -50,6 +60,7 @@ afterAll(async () => {
 
 afterEach(async () => {
   await pool.query('DELETE FROM eventos_procesados');
+  await pool.query('DELETE FROM contexto_zona');
   await pool.query(
     "DELETE FROM emergency_status_history WHERE emergency_id IN (SELECT id FROM emergencies WHERE source = 'EXTERNAL')"
   );

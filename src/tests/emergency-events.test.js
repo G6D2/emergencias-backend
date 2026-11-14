@@ -63,8 +63,9 @@ describe('emergency-events', () => {
       expect(event.data.ubicacion.barrio).toBeNull();
       expect(event.data.ubicacion.latitud).toBeNull();
       expect(event.data.ubicacion.longitud).toBeNull();
-      expect(event.data.latitud).toBeUndefined();
-      expect(event.data.longitud).toBeUndefined();
+      // Sin ubicación, las coordenadas en claro van en null (no se omiten).
+      expect(event.data.latitud).toBeNull();
+      expect(event.data.longitud).toBeNull();
       // Null hasta que se consuman eventos de otros modulos (#77/#79/#80).
       expect(event.data.causaId).toBeNull();
       expect(event.data.causaTipo).toBeNull();
@@ -93,7 +94,7 @@ describe('emergency-events', () => {
       });
     });
 
-    it('cifra coords solo en ubicacion (sin campos planos); AAD ata emergenciaId+campo', () => {
+    it('cifra las coords exactas en ubicacion y publica las aproximadas en la raíz; AAD ata emergenciaId+campo', () => {
       const busCrypto = createBusLocationCrypto({
         keys: { bus1: BUS_TEST_KEY },
         activeKeyId: 'bus1',
@@ -102,16 +103,17 @@ describe('emergency-events', () => {
         {
           ...baseEmergency,
           barrio: 'PALERMO',
-          latitude: -34.5735,
-          longitude: -58.4233,
+          latitude: -34.57352,
+          longitude: -58.42337,
         },
         'evt-coords',
         { busCrypto }
       );
 
       expect(event.data.barrio).toBe('PALERMO');
-      expect(event.data.latitud).toBeUndefined();
-      expect(event.data.longitud).toBeUndefined();
+      // En claro, a 3 decimales (~100 m): es lo que leen los otros módulos.
+      expect(event.data.latitud).toBe(-34.574);
+      expect(event.data.longitud).toBe(-58.423);
       expect(event.data.ubicacion.barrio).toBe('PALERMO');
       expect(typeof event.data.ubicacion.latitud).toBe('string');
       expect(typeof event.data.ubicacion.longitud).toBe('string');
@@ -199,6 +201,7 @@ describe('emergency-events', () => {
       expect(event.data.estadoNuevo).toBe('DESPACHADA');
       expect(event.data.usuarioId).toBe('DISP-Demo001');
       expect(event.data.resolucion).toBe(baseArgs.reason);
+      expect(event.data.descripcionProblema).toBeNull();
       expect(event.data.prioridad).toBe('ALTA');
     });
 
@@ -242,10 +245,15 @@ describe('emergency-events', () => {
       const busCrypto = createBusLocationCrypto({ keys: { test: BUS_TEST_KEY }, activeKeyId: 'test' });
       const resolved = buildEmergencyUpdatedEvent({
         ...baseArgs,
-        emergency: { ...baseArgs.emergency, causasRelacionadas: ['RESIDUOS'] },
+        emergency: {
+          ...baseArgs.emergency,
+          causasRelacionadas: ['RESIDUOS', 'VIA'],
+          descripcionProblema: 'Bache en la calzada',
+        },
         history: { previousStatus: 'ON_SCENE', newStatus: 'RESOLVED' },
       }, { busCrypto });
-      expect(resolved.data.causasRelacionadas).toEqual(['RESIDUOS']);
+      expect(resolved.data.causasRelacionadas).toEqual(['RESIDUOS', 'VIA']);
+      expect(resolved.data.descripcionProblema).toBe('Bache en la calzada');
       expect(resolved.data.ubicacion.barrio).toBeNull();
       expect(busCrypto.decryptCoordinate(resolved.data.ubicacion.latitud, {
         emergencyId: baseArgs.emergency.id,
@@ -255,8 +263,27 @@ describe('emergency-events', () => {
         emergencyId: baseArgs.emergency.id,
         field: 'longitud',
       })).toBeCloseTo(-58.3816);
-      expect(resolved.data.latitud).toBeUndefined();
-      expect(resolved.data.longitud).toBeUndefined();
+      // Sin clave de bus las exactas van null, pero las aproximadas se publican igual.
+      expect(event.data.latitud).toBe(-34.604);
+      expect(event.data.longitud).toBe(-58.382);
+      expect(resolved.data.latitud).toBe(-34.604);
+      expect(resolved.data.longitud).toBe(-58.382);
+    });
+
+    it('las coordenadas en claro van las dos o ninguna, y sin clave de bus igual se publican', () => {
+      const withCoords = (latitude, longitude) => buildEmergencyCreatedEvent(
+        { ...baseArgs.emergency, latitude, longitude }, 'evt-approx', { busCrypto: null }
+      ).data;
+
+      expect(withCoords(-34.60374, -58.38157)).toMatchObject({
+        latitud: -34.604,
+        longitud: -58.382,
+        ubicacion: { latitud: null, longitud: null },
+      });
+      expect(withCoords(-34.6037, null)).toMatchObject({ latitud: null, longitud: null });
+      expect(withCoords(undefined, -58.3816)).toMatchObject({ latitud: null, longitud: null });
+      expect(withCoords('-34.6037', '-58.3816')).toMatchObject({ latitud: null, longitud: null });
+      expect(withCoords(Number.NaN, -58.3816)).toMatchObject({ latitud: null, longitud: null });
     });
 
     it('no publica los nombres viejos', () => {

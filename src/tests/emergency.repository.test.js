@@ -329,6 +329,81 @@ describe('EmergencyRepository lecturas', () => {
     expect(detail.effectivePriority).toBe(detail.severity);
   });
 
+  it('findDetailById sube un nivel la prioridad de despacho si hay un contexto de zona vigente', async () => {
+    const vigenteDesde = new Date('2026-11-21T18:00:00Z');
+    const vigenteHasta = new Date('2026-11-21T23:00:00Z');
+    const calls = [];
+    let call = 0;
+    const pool = createPool({
+      query: async (sql) => {
+        calls.push(sql);
+        call += 1;
+        if (call > 1) return { rows: [] };
+        return {
+          rows: [{
+            id: 'e-3',
+            severity: 'medium',
+            barrio: 'PALERMO',
+            contexto_tipo: 'EVENTO_ESPACIO_PUBLICO',
+            contexto_latitud: -34.5711,
+            contexto_longitud: -58.4167,
+            contexto_radio_metros: 500,
+            contexto_origen: 'espacios',
+            contexto_referencia_externa: 'ev-1',
+            contexto_descripcion: undefined,
+            contexto_vigente_desde: vigenteDesde,
+            contexto_vigente_hasta: vigenteHasta,
+          }],
+        };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const detail = await repo.findDetailById('e-3');
+
+    expect(detail.effectivePriority).toBe('medium');
+    expect(detail.dispatchPriority).toBe('high');
+    expect(detail.priorityContext).toEqual({
+      tipo: 'EVENTO_ESPACIO_PUBLICO',
+      latitud: -34.5711,
+      longitud: -58.4167,
+      radioMetros: 500,
+      origen: 'espacios',
+      referenciaExterna: 'ev-1',
+      descripcion: null,
+      vigenteDesde,
+      vigenteHasta,
+    });
+    // El contexto sale del vínculo escrito al crear la emergencia y tiene que
+    // seguir en curso; sin PREVENTIVA ni terminales. No se mide distancia acá.
+    expect(calls[0]).toMatch(/FROM emergencia_contexto_zona ecz/);
+    expect(calls[0]).toMatch(/JOIN contexto_zona c ON c\.id = ecz\.contexto_id/);
+    expect(calls[0]).toMatch(/ecz\.emergency_id = e\.id/);
+    expect(calls[0]).not.toMatch(/barrio/);
+    expect(calls[0]).toMatch(/c\.dado_de_baja_en IS NULL/);
+    expect(calls[0]).toMatch(/c\.suspendido_en IS NULL/);
+    expect(calls[0]).toMatch(/c\.vigente_desde <= now\(\)/);
+    expect(calls[0]).toMatch(/c\.vigente_hasta > now\(\)/);
+    expect(calls[0]).toMatch(/IS DISTINCT FROM 'PREVENTIVA'/);
+    expect(calls[0]).toMatch(/e\.status NOT IN \('CLOSED', 'CANCELLED', 'DISCARDED'\)/);
+  });
+
+  it('sin contexto de zona la prioridad de despacho es la efectiva', async () => {
+    let call = 0;
+    const pool = createPool({
+      query: async () => {
+        call += 1;
+        return call === 1 ? { rows: [{ id: 'e-4', severity: 'high' }] } : { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const detail = await repo.findDetailById('e-4');
+
+    expect(detail.dispatchPriority).toBe('high');
+    expect(detail.priorityContext).toBeNull();
+  });
+
   it('findDetailById devuelve incident con sus campos y effectivePriority combinada (LEFT JOIN a incidents)', async () => {
     let call = 0;
     const pool = createPool({
@@ -430,6 +505,57 @@ describe('EmergencyRepository.backfillBarrios', () => {
   });
 });
 
+describe('EmergencyRepository.linkZoneContexts', () => {
+  // Rosedal y un punto a ~330 m; el Obelisco queda a más de 4 km.
+  const ROSEDAL = { latitud: -34.5711, longitud: -58.4167 };
+  const CERCA = { latitude: -34.5740, longitude: -58.4160 };
+  const LEJOS = { latitude: -34.6037, longitude: -58.3816 };
+
+  function executorCon(contextos) {
+    return { query: jest.fn().mockResolvedValueOnce({ rows: contextos }).mockResolvedValue({ rows: [] }) };
+  }
+
+  it('vincula solo los contextos en curso que alcanzan a la emergencia y guarda nada más que ids', async () => {
+    const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+    const executor = executorCon([
+      { id: 'ctx-cerca', ...ROSEDAL, radio_metros: 500 },
+      { id: 'ctx-radio-chico', ...ROSEDAL, radio_metros: 100 },
+      { id: 'ctx-lejos', latitud: LEJOS.latitude, longitud: LEJOS.longitude, radio_metros: 500 },
+    ]);
+
+    const ids = await repo.linkZoneContexts(executor, { id: 'e-1', ...CERCA, emergencyType: 'MEDICA' });
+
+    expect(ids).toEqual(['ctx-cerca']);
+    const [selectSql] = executor.query.mock.calls[0];
+    expect(selectSql).toMatch(/c\.dado_de_baja_en IS NULL/);
+    expect(selectSql).toMatch(/c\.suspendido_en IS NULL/);
+    expect(selectSql).toMatch(/c\.vigente_desde <= now\(\)/);
+    expect(selectSql).toMatch(/c\.vigente_hasta > now\(\)/);
+    // La coordenada de la emergencia no viaja a la base: se compara en memoria.
+    expect(executor.query.mock.calls[0][1]).toBeUndefined();
+    const [insertSql, insertValues] = executor.query.mock.calls[1];
+    expect(insertSql).toMatch(/INSERT INTO emergencia_contexto_zona \(emergency_id, contexto_id\)/);
+    expect(insertValues).toEqual(['e-1', ['ctx-cerca']]);
+  });
+
+  it('sin contextos que la alcancen no escribe nada', async () => {
+    const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+    const executor = executorCon([{ id: 'ctx-1', ...ROSEDAL, radio_metros: 500 }]);
+
+    await expect(repo.linkZoneContexts(executor, { id: 'e-2', ...LEJOS, emergencyType: 'MEDICA' })).resolves.toEqual([]);
+    expect(executor.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('no consulta nada para una emergencia sin ubicación ni para una PREVENTIVA', async () => {
+    const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+    const executor = executorCon([{ id: 'ctx-1', ...ROSEDAL, radio_metros: 500 }]);
+
+    await expect(repo.linkZoneContexts(executor, { id: 'e-3', latitude: null, longitude: null })).resolves.toEqual([]);
+    await expect(repo.linkZoneContexts(executor, { id: 'e-4', ...CERCA, emergencyType: 'PREVENTIVA' })).resolves.toEqual([]);
+    expect(executor.query).not.toHaveBeenCalled();
+  });
+});
+
 describe('EmergencyRepository.anonymizeExpiredLocations', () => {
   it('rechaza retentionHours no positivo', async () => {
     const pool = createPool();
@@ -481,6 +607,41 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
     });
     const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
     await expect(repo.anonymizeExpiredLocations(72)).resolves.toEqual({ anonymizedCount: 0, ids: [] });
+  });
+});
+
+describe('EmergencyRepository.scrubOutboxBusCoordinates', () => {
+  it('sin ids no consulta la base', async () => {
+    const pool = createPool();
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    await expect(repo.scrubOutboxBusCoordinates([])).resolves.toEqual({ scrubbedCount: 0 });
+    await expect(repo.scrubOutboxBusCoordinates(null)).resolves.toEqual({ scrubbedCount: 0 });
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  // El efecto sobre el JSON se prueba contra Postgres real en
+  // emergency.repository.integration.test.js; acá, la forma de la consulta.
+  it('limpia las coordenadas cifradas de ubicacion y las aproximadas en claro de la raíz', async () => {
+    const pool = createPool({ query: async () => ({ rowCount: 3, rows: [] }) });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await expect(repo.scrubOutboxBusCoordinates(['e-1', 'e-2'])).resolves.toEqual({ scrubbedCount: 3 });
+
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(params).toEqual([['e-1', 'e-2']]);
+    expect(sql).toMatch(/UPDATE outbox_events/);
+    expect(sql).toContain("'{data,ubicacion,latitud}', 'null'::jsonb, true");
+    expect(sql).toContain("'{data,ubicacion,longitud}', 'null'::jsonb, true");
+    // Raíz con create_missing = false: no agrega las claves a payloads viejos.
+    expect(sql).toContain("'{data,latitud}', 'null'::jsonb, false");
+    expect(sql).toContain("'{data,longitud}', 'null'::jsonb, false");
+    // Solo filas de esas emergencias que tengan algo para limpiar.
+    expect(sql).toContain("payload->'data'->>'emergenciaId' = ANY($1::text[])");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,ubicacion,latitud}') = 'string'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,ubicacion,longitud}') = 'string'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,latitud}') = 'number'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,longitud}') = 'number'");
   });
 });
 
@@ -558,6 +719,8 @@ describe('EmergencyRepository.findPage', () => {
     expect(selectCall.sql).toMatch(/CASE e.severity/);
     expect(selectCall.sql).toMatch(/CASE i.priority/);
     expect(selectCall.sql).toMatch(/GREATEST\(/);
+    // Prioridad de despacho: +1 con contexto de zona vigente, tope 4.
+    expect(selectCall.sql).toMatch(/LEAST\(GREATEST\(.*\) \+ CASE WHEN cz\.tipo IS NULL THEN 0 ELSE 1 END, 4\)/);
     expect(selectCall.sql).toMatch(/LEFT JOIN incidents i ON i.id = e.incident_id/);
     // sin incidente: incident null y effectivePriority = la propia severity
     expect(result.emergencies[0].incident).toBeNull();
@@ -794,7 +957,7 @@ describe('EmergencyRepository.updateStatus: estado de origen, closed_at y oficia
 
     const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
     expect(update.sql).toMatch(/closed_at = CASE WHEN \$3::boolean THEN now\(\) ELSE closed_at END/);
-    expect(update.params).toEqual([newStatus, 'e-1', true, []]);
+    expect(update.params).toEqual([newStatus, 'e-1', true, [], null]);
   });
 
   it.each([
@@ -808,7 +971,7 @@ describe('EmergencyRepository.updateStatus: estado de origen, closed_at y oficia
     await repo.updateStatus('e-1', { newStatus });
 
     const update = client.calls.find((c) => c.sql.startsWith('UPDATE emergencies'));
-    expect(update.params).toEqual([newStatus, 'e-1', false, []]);
+    expect(update.params).toEqual([newStatus, 'e-1', false, [], null]);
   });
 
   it('al pasar a VALIDATED limpia assigned_officer_id y libera al oficial en la misma transacción', async () => {
@@ -912,7 +1075,7 @@ describe('EmergencyRepository dirección legible persistida junto con la ubicaci
     return createPool({
       // Simula el INSERT ... RETURNING *: devuelve la fila con el
       // location_encrypted real que armó encryptLocation.
-      query: async (sql, params) => ({ rows: [{ id: params[0], location_encrypted: params[3] }] }),
+      query: async (sql, params = []) => ({ rows: [{ id: params[0], location_encrypted: params[3] }] }),
     });
   }
 

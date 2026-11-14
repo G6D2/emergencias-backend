@@ -10,6 +10,7 @@
     "migrate:info": "node scripts/migrate.js info",
     "security:anonymize-locations": "node scripts/anonymize-locations.js",
     "security:backfill-barrios": "node scripts/backfill-barrios.js",
+    "backfill:vinculos-contexto": "node scripts/backfill-vinculos-contexto.js",
     "seed": "node scripts/seed.js",
     "test": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js --runInBand",

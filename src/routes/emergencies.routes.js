@@ -6,6 +6,7 @@ const {
   requireDispatcher,
   requireOfficer,
   requireCitizenOrDispatcher,
+  requireCitizenDispatcherOrOfficer,
 } = require('../auth/authorize');
 
 function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
@@ -19,8 +20,10 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     tags: [Emergencies]
    *     summary: Lista emergencias paginadas
    *     description: |
-   *       Requiere grupo `citizen` o `dispatcher`. Dispatcher ve todas; citizen solo las propias
-   *       (se fuerza el filtro por el sub del JWT) y sin `incident` ni `effectivePriority`.
+   *       Requiere grupo `citizen`, `dispatcher` u `officer`. Dispatcher ve todas; officer solo las
+   *       que tiene asignadas (se fuerza `assignedOfficerId` = sub del JWT); citizen solo las propias
+   *       (se fuerza el filtro por el sub del JWT). Officer y citizen las reciben sin `incident` ni
+   *       `effectivePriority`.
    *       Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
    *       Un filtro inválido responde 400 (no una lista vacía ni un 500).
    *     security:
@@ -98,9 +101,10 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *       403:
    *         description: Grupo insuficiente
    */
-  // Dispatcher: todas. Citizen: solo las propias (el filtro por user_id se
-  // fuerza en el controller a partir del sub del JWT, no del query string).
-  router.get('/', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
+  // Dispatcher: todas. Officer: solo las asignadas a él. Citizen: solo las
+  // propias. Los filtros de officer/citizen se fuerzan en el controller a
+  // partir del sub del JWT, no del query string.
+  router.get('/', authenticate, requireCitizenDispatcherOrOfficer, asyncHandler(async (req, res) => {
     const result = await controller.listEmergencies(req.query, req.user);
     res.json(result);
   }));
@@ -432,7 +436,9 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     description: |
    *       Requiere grupo `officer`, y que el `sub` del token sea el oficial
    *       asignado a la emergencia. El cierre definitivo (RESOLVED → CLOSED)
-   *       sigue siendo del dispatcher. Publica `EmergenciaActualizada`.
+   *       sigue siendo del dispatcher. Si `causasRelacionadas` incluye `VIA`,
+   *       requiere `descripcionProblema` (máximo 280 caracteres). Publica
+   *       `EmergenciaActualizada`.
    *     security: [{ bearerAuth: [] }]
    *     parameters:
    *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
@@ -449,6 +455,11 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *                   type: string
    *                   enum: [VIA, ESPACIO_PUBLICO, RESIDUOS]
    *                 default: []
+   *               descripcionProblema:
+   *                 type: string
+   *                 maxLength: 280
+   *                 description: Obligatoria si causasRelacionadas incluye VIA; se rechaza si no incluye VIA.
+   *                 example: Bache profundo en la calzada junto a la esquina.
    *     responses:
    *       200: { description: Emergencia en RESOLVED }
    *       400: { description: id inválido }

@@ -9,9 +9,10 @@ Documento **autocontenido** para equipos que consumen `EmergenciaCreada` y `Emer
 | Dato | Dónde viene | Forma |
 |------|-------------|--------|
 | Barrio | `data.barrio` **y** `data.ubicacion.barrio` (mismo valor) | Texto en claro (catálogo oficial CABA, 48 barrios) |
-| Latitud / longitud | **Solo** `data.ubicacion.latitud` y `data.ubicacion.longitud`, en ambos eventos | String base64 cifrado (AES-256-GCM) |
+| Latitud / longitud aproximadas | `data.latitud` y `data.longitud`, en ambos eventos | Número en claro, 3 decimales (~100 m) |
+| Latitud / longitud exactas | `data.ubicacion.latitud` y `data.ubicacion.longitud`, en ambos eventos | String base64 cifrado (AES-256-GCM) |
 
-No hay `latitud` / `longitud` en la raíz de `data`.
+Desde el 12/11/2026, `data.latitud` y `data.longitud` van además **en la raíz, como número en claro redondeado a 3 decimales (~100 m)**. Si solo necesitás ubicar la emergencia en el mapa o calcular un radio, usá esas y no hace falta descifrar nada. La coordenada exacta sigue cifrada en `data.ubicacion`. Las dos de la raíz son `null` cuando la emergencia no tiene ubicación.
 
 Para desencriptar las coords necesitás la clave **`BUS_LOCATION_ENCRYPTION_KEY`**, distinta de la clave con la que Emergencias cifra en su base de datos. Esa clave de bus se reparte por canal seguro (no viaja en el mensaje).
 
@@ -176,14 +177,14 @@ El mensaje en Kafka **no se borra solo**. Si ustedes persisten barrio y/o coorde
 | Ciphertext del bus | Sigue siendo ubicación si tienen la clave: mismo TTL, o no persistir. |
 | Logs | Nunca coords en claro ni la clave de bus. |
 
-**Qué hace Emergencias (referencia):** anonimiza la ubicación exacta at-rest ~72 h después del cierre y **conserva** el barrio. Al anonimizar, también pone en `null` `ubicacion.latitud`/`longitud` en los payloads del **outbox** de esas emergencias, para que no queden ciphertext descifrables indefinidamente con la clave compartida. Los mensajes **ya consumidos** en su sistema no se reescriben: la retención de lo que ustedes guardaron es responsabilidad de su módulo.
+**Qué hace Emergencias (referencia):** anonimiza la ubicación exacta at-rest ~72 h después del cierre y **conserva** el barrio. Al anonimizar, también pone en `null`, en los payloads del **outbox** de esas emergencias, `ubicacion.latitud`/`longitud` (para que no queden ciphertext descifrables indefinidamente con la clave compartida) y las aproximadas en claro `data.latitud`/`data.longitud`. Los mensajes **ya consumidos** en su sistema no se reescriben: la retención de lo que ustedes guardaron es responsabilidad de su módulo.
 
 ---
 
 ## 8. Checklist rápido
 
 1. Pedir `BUS_LOCATION_ENCRYPTION_KEY` por canal seguro.  
-2. Leer `data.barrio` / `data.ubicacion` (coords solo anidadas).  
+2. Leer `data.barrio`, `data.latitud` / `data.longitud` (aproximadas, en claro) y, si hace falta la exacta, `data.ubicacion` (cifrada).  
 3. Si lat/lng son `null` → no hay punto exacto.  
 4. Descifrar con AAD `emergenciaId|latitud` / `|longitud`.  
 5. Preferir barrio cuando baste.  

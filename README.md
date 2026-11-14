@@ -112,7 +112,7 @@ Pegá el `access_token` en `accessToken`. Para obtenerlo sin IdP usá **POST /au
 
 Los endpoints bajo `/api/*` exigen `Authorization: Bearer <access_token>`.
 
-### Sin IdP (`AUTH_MODE=local`, default; así corre producción)
+### Sin IdP (`AUTH_MODE=local`, default)
 
 El backend emite sus propios JWT, que **respetan el mismo contrato** que CityPass+ (claims, RS256, `verify()`).
 
@@ -155,9 +155,11 @@ Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipá
 
 `AUTH_MODE=local` **no arranca con `NODE_ENV=production`** salvo que esté `ALLOW_LOCAL_AUTH=true` (ver abajo). `AUTH_MODE=hybrid` no tiene esa traba.
 
-### Producción (Render) sin Grupo 2
+### Producción (Render)
 
-Producción corre con `AUTH_MODE=local` y `DEV_LOGIN_STRICT=true`. **No** corre con `NODE_ENV=production`: las respuestas no traen `Strict-Transport-Security` (verificado el 05/11/2026), así que tampoco necesita `ALLOW_LOCAL_AUTH`. La configuración está en [`render.yaml`](render.yaml).
+Producción corre con `AUTH_MODE=hybrid` desde el 12/11/2026 (antes `local`) y `DEV_LOGIN_STRICT=true`: el personal entra por el Login Federado del Grupo 2 y los ciudadanos y los atajos de demo siguen con cuenta local (ver [Login Federado + cuentas locales](#login-federado--cuentas-locales-auth_modehybrid)). **No** corre con `NODE_ENV=production`: las respuestas no traen `Strict-Transport-Security` (verificado el 12/11/2026). La configuración está en [`render.yaml`](render.yaml).
+
+Una sesión local dura lo que el token: `LOCAL_TOKEN_TTL_SECONDS`, 900 s por default. A los 15 minutos el front vuelve a la pantalla de acceso; las sesiones del Login Federado se renuevan solas con su refresh token.
 
 Con `DEV_LOGIN_STRICT=true`, `POST /auth/dev/login` solo emite tokens para estos `sub` (`src/auth/dev-login-policy.js`), con groups fijos que el cliente no puede elegir:
 
@@ -258,8 +260,8 @@ Un grupo que no está en el mapa no otorga nada. `citizen` no está en el defaul
 
 | Variable (hybrid) | Default | Rol |
 |---|---|---|
-| `IDP_ISSUER` | obligatoria | `iss` del Login Federado. El contrato del Grupo 2 dice `https://idp.citypass.local` |
-| `IDP_AUDIENCE` | obligatoria | Audience que tiene que estar en `aud`. Por el contrato, `citypass-emergencias-api` (a confirmar con un token real) |
+| `IDP_ISSUER` | obligatoria | `iss` del Login Federado: `https://idp.citypass.local`, sin barra final (confirmado con un token real el 12/11/2026). Tiene que coincidir exacto: con una barra de más el token se rechaza |
+| `IDP_AUDIENCE` | obligatoria | Audience que tiene que estar en `aud`. `citypass-emergencias-api` (confirmado con un token real el 12/11/2026; llega como string, y también se acepta como lista) |
 | `IDP_JWKS_URI` | obligatoria | `https://api.citypass-login.pp.ua/.well-known/jwks.json`. Solo `https` (`http` únicamente contra localhost) |
 | `IDP_CLOCK_TOLERANCE_SECONDS` | `60` | Tolerancia de reloj para `exp`, en los dos tipos de token |
 | `IDP_REQUIRE_TOKEN_USE` | `false` | `true`: `token_use` obligatorio en tokens federados |
@@ -273,7 +275,7 @@ Un grupo que no está en el mapa no otorga nada. `citizen` no está en el defaul
 
 `LOCAL_TOKEN_TTL_SECONDS` y `LOCAL_JWT_PRIVATE_KEY_PEM` funcionan igual que en `local`. Una variable mal formada (JSON roto, grupo interno que no existe, `IDP_JWKS_URI` sin https, booleano que no es `true`/`false`, issuers iguales) frena el arranque con el error.
 
-**Para prenderlo en Render:**
+**Así está cargado en Render (desde el 12/11/2026):**
 
 ```env
 AUTH_MODE=hybrid
@@ -282,9 +284,9 @@ IDP_AUDIENCE=citypass-emergencias-api
 IDP_JWKS_URI=https://api.citypass-login.pp.ua/.well-known/jwks.json
 ```
 
-`IDP_ISSUER` e `IDP_AUDIENCE` ya existen en Render: hay que revisar que tengan esos valores (o los que muestre un token real). `IDP_JWKS_URI` falta cargarla. `IDP_SUB_ALIASES` se carga cuando se sepa el `sub` de cada oficial. Para volver atrás alcanza con `AUTH_MODE=local`.
+Para volver atrás alcanza con `AUTH_MODE=local`. Para saber desde afuera en qué modo corre, sin credenciales: un JWT con un `iss` cualquiera recibe `401 Unknown token issuer` en `hybrid` y `401 Invalid or expired token` en `local`.
 
-**A confirmar con un token real** (decodificar solo el payload, sin pegar el token entero en ningún lado): que `iss` sea `https://idp.citypass.local`; qué trae `aud` y si es lista o string; si vienen `token_use: "human"` y `ver: 1` (si vienen, prender `IDP_REQUIRE_TOKEN_USE` e `IDP_REQUIRE_TOKEN_VER`); que el usuario esté en `sub`; y cómo se llaman los grupos de dispatchers, oficiales y delegados en el panel. El contrato de referencia es la guía de integración del Grupo 2 (`docs/externo/GRUPO-2-AUTENTICACION.md` del repo `carlos-illobre/citypass-event-gateway`).
+**Confirmado con un token real el 12/11/2026** (se decodificó solo el payload): `iss` = `https://idp.citypass.local`; `aud` = `citypass-emergencias-api` (string); el usuario va en `sub` (por ejemplo `U000014`); vienen `token_use: "human"`, `ver: 1` y `module: "emergencias"`; el token dura 15 minutos. El dispatcher de prueba trae `groups: ["dispatcher"]`, que ya está en el mapa por default, y el delegado `groups: ["delegados"]`. Con eso `GET /api/user` devuelve `authSource: "federated"` y el rol `dispatcher`. **Falta**: usuarios LDAP de oficial (cuando existan, `IDP_GROUP_MAP` si su grupo no se llama `officer` e `IDP_SUB_ALIASES` con su `sub`) y decidir si se prenden `IDP_REQUIRE_TOKEN_USE` e `IDP_REQUIRE_TOKEN_VER`. El contrato de referencia es la guía de integración del Grupo 2 (`docs/externo/GRUPO-2-AUTENTICACION.md` del repo `carlos-illobre/citypass-event-gateway`).
 
 ### Autorización por `groups`
 
@@ -311,7 +313,7 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 | `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT; en `hybrid`, además `authSource` y, si el token es federado, `idpSub` e `idpGroups` |
 | `POST /api/panic-button` | `citizen` | 5 req/min por IP; `emergencyType=PREVENTIVA` → 400 |
 | `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena); deja registro de auditoría |
-| `GET /api/emergencies` | `citizen` o `dispatcher` | citizen: solo propias y sin `incident`/`effectivePriority` |
+| `GET /api/emergencies` | `citizen`, `dispatcher` u `officer` | citizen: solo propias; officer: solo las asignadas a él (`assignedOfficerId` = `sub`). Los dos sin `incident`/`effectivePriority` |
 | `GET /api/emergencies/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena) |
 | `PATCH /api/emergencies/:id/validate` | `dispatcher` | `PENDING` → `VALIDATED` |
 | `PATCH /api/emergencies/:id/discard` | `dispatcher` | `PENDING` → `DISCARDED`; `reason` obligatorio |
@@ -377,7 +379,7 @@ En `EmergenciaCreada`, las coordenadas exactas van **solo** en `data.ubicacion.*
 Guía **autocontenida** para mandar a otros equipos (sin depender del repo): **[docs/bus-ubicacion-para-consumidores.md](docs/bus-ubicacion-para-consumidores.md)**.
 
 ### Retención / minimización
-Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`. El **barrio** se conserva (y se deriva antes de borrar si faltaba). Al anonimizar también se ponen en `null` `ubicacion.latitud`/`longitud` en los payloads del outbox de esas emergencias.
+Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`. El **barrio** se conserva (y se deriva antes de borrar si faltaba). Al anonimizar también se ponen en `null`, en los payloads del outbox de esas emergencias, las coordenadas cifradas (`data.ubicacion.latitud`/`longitud`) y las aproximadas en claro de la raíz (`data.latitud`/`longitud`), y se borran sus vínculos con contextos de zona junto con los `EmergenciaVinculadaAContextoZona` que sigan en el outbox. Los eventos ya entregados al bus no se pueden borrar.
 
 Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
@@ -544,7 +546,7 @@ Detalle de una emergencia. Delega en el mismo método que `GET /api/emergencies/
 
 ### GET `/api/emergencies`
 
-Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad efectiva. Citizen solo ve las propias y sin `incident`/`effectivePriority`.
+Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad de despacho (`dispatchPriority`: la efectiva más un nivel si hay un [contexto de zona](#prioridad-elevada-durante-un-evento) vigente en el barrio). Citizen solo ve las propias; officer solo las asignadas a él (el `assignedOfficerId` sale del `sub`, el del query se ignora). Los dos sin `incident`/`effectivePriority`/`dispatchPriority`/`priorityContext`.
 
 ### GET `/api/emergencies/:id`
 
@@ -678,7 +680,8 @@ src/
 ├── domain/
 │   ├── emergency-status.js       # Máquina de estados (transiciones válidas)
 │   ├── emergency-type.js         # Catálogo cerrado de emergencyType (incluye PREVENTIVA)
-│   ├── severity.js               # severityForType + effectivePriority
+│   ├── severity.js               # severityForType + effectivePriority + dispatchPriority
+│   ├── contexto-zona.js          # tipos, punto, radio y ventana de los contextos de zona
 │   ├── incident-detector.js      # Arma incidentes a partir de los grupos
 │   ├── incident-detection-strategy.js  # DBSCAN primaria, reglas como fallback
 │   ├── dbscan-grouper.js
@@ -696,6 +699,7 @@ src/
 │   ├── business-rule.js
 │   ├── load-rules.js
 │   └── cobertura-preventiva/     # EventoComunitarioPublicado y EventoCancelado de Espacios
+│   ├── reclamo-intervencion/     # Caso ciclovía: EmergenciaSolicitada de Movilidad, ReclamoCreado y ReclamoActualizado de Reclamos
 ├── repositories/
 │   ├── auth-user.repository.js
 │   ├── citizen-profile.repository.js
@@ -766,6 +770,7 @@ Tópicos actuales (los propios del módulo, no los FQN del gateway):
 | `EmergenciaCreada` | `TOPIC_PANIC_BUTTON` → `emergencias.boton-panico` | Alta por `POST /api/panic-button`, y alta de una cobertura preventiva por el listener |
 | `EmergenciaActualizada` | `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO` → `emergencias.estado-actualizado` | Cada cambio de estado (`validate`, `discard`, `assign`, `return`, `en-route`, `on-scene`, `resolve`, `close`, `cancel`) y la cancelación de una cobertura preventiva. El cierre viaja acá con `estadoNuevo = CERRADA`: no hay `EmergenciaCerrada` |
 | `EmergenciaPriorizada` | `TOPIC_EMERGENCIA_PRIORIZADA` → `emergencias.priorizada` | Job de detección de incidentes (cada 60 s), solo si cambió la prioridad del incidente; uno por emergencia miembro |
+| `EmergenciaVinculadaAContextoZona` | `TOPIC_EMERGENCIA_VINCULADA_CONTEXTO` → `emergencias.vinculada-contexto-zona` | Solo con `EVENTO_VINCULO_CONTEXTO_ENABLED=true`. Uno por vínculo de una emergencia con un contexto de zona, en la misma sentencia que la fila de `emergencia_contexto_zona`. Los de `PANICO` no se publican. Ver [Prioridad elevada durante un evento](#prioridad-elevada-durante-un-evento) |
 
 Sobre de todos los eventos: `{ type, eventId, correlationId, data }`. `eventId` lo genera `insertOutboxEvent`; `correlationId` va en la raíz y también dentro de `data`. Se publica con `key: null`, así que no hay orden garantizado entre eventos de una misma emergencia (ver [`docs/diagramas/06-eventos.md`](docs/diagramas/06-eventos.md)).
 
@@ -791,13 +796,14 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | Campo | Tipo | Fuente / valor hoy |
 |---|---|---|
 | `emergenciaId` | string | `emergencies.id` |
-| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; pendiente sumar `TRANSITO`) |
+| `categoria` | string | `emergency_type` (catálogo: `MEDICA`, `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `OTRO`, `PANICO`, `PREVENTIVA`; `TRANSITO`) |
 | `prioridad` | `BAJA` \| `MEDIA` \| `ALTA` \| `CRITICA` | map desde `severity` (`low → BAJA`, `medium → MEDIA`, `high → ALTA`, `critical → CRITICA`) |
 | `estado` | string | map desde `status` (ver tabla de estados) |
 | `barrio` | string \| null | catálogo oficial CABA (48 barrios), en claro; lo leen Reclamos/Analítica |
 | `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
-| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null. **No** hay lat/lng en la raíz de `data` |
-| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA` (y `TRANSITO` cuando entre al catálogo); `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
+| `latitud`, `longitud` | number \| null | en claro, redondeadas a 3 decimales (~100 m); `null` si la emergencia no tiene ubicación. Es lo que leen Movilidad, Residuos, Reclamos, Espacios y Analítica |
+| `ubicacion.latitud`, `ubicacion.longitud` | string \| null | la coordenada exacta, ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null |
+| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA`, `TRANSITO`; `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null | `causa_id` / `causa_tipo`. En un alta ciudadana, `null`; la cobertura preventiva manda el `eventoId` de Espacios y `EVENTO_PUBLICO` |
 | `prioridadOriginal` | enum \| null | hoy siempre `null` |
 | `ciudadanoId` | string \| null | `user_id`; `null` en las emergencias externas |
@@ -820,7 +826,10 @@ Antes era `EmergenciaEstadoActualizado`, y reemplaza también a `EmergenciaCerra
 | `asignadoA` | string \| null | `assigned_officer_id`, solo en `DESPACHADA` (un evento por despacho) |
 | `areaResponsable` | string \| null | hoy siempre `null` |
 | `resolucion` | string \| null | `reason` del cambio: motivo de `discard`, `cancel` o `return`, `Assigned officer <id>` en `assign`; `null` en `validate`, `en-route`, `on-scene`, `resolve` y `close` |
+| `descripcionProblema` | string \| null | Descripción breve ingresada por el oficial al resolver con causa `VIA` (hasta 280 caracteres); se conserva en eventos posteriores, incluido el cierre |
 | `prioridad` | enum \| null | map desde `severity` |
+| `causasRelacionadas` | string[] | `VIA`, `ESPACIO_PUBLICO`, `RESIDUOS`; las carga el oficial al resolver. `[]` si no hay |
+| `barrio`, `latitud`, `longitud`, `ubicacion` | igual que en `EmergenciaCreada` | barrio en claro, coordenadas aproximadas en claro y exactas cifradas |
 | `correlationId` | string | `correlation_id` (fallback: `id`) |
 
 #### `EmergenciaPriorizada`
@@ -859,19 +868,38 @@ No forma parte del contrato del #48: conserva los nombres en inglés y la priori
 
 ### JSON Schema
 
-Los dos eventos están en [`docs/contratos/emergencia-creada.schema.json`](docs/contratos/emergencia-creada.schema.json) y [`docs/contratos/emergencia-actualizada.schema.json`](docs/contratos/emergencia-actualizada.schema.json) (draft-07, todos los campos `required`, `additionalProperties: false`). `src/tests/outbox-contract.integration.test.js` los valida con `ajv` contra las filas reales que deja en `outbox_events` el ciclo completo por HTTP: si cambia un campo en `emergency-events.js` sin tocar el schema, o al revés, el CI falla.
+Los dos eventos están en [`docs/contratos/emergencia-creada.schema.json`](docs/contratos/emergencia-creada.schema.json) y [`docs/contratos/emergencia-actualizada.schema.json`](docs/contratos/emergencia-actualizada.schema.json); `EmergenciaVinculadaAContextoZona`, en [`docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json`](docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json), validado por `src/tests/zone-context-link-event*.test.js` (draft-07, todos los campos `required`, `additionalProperties: false`). `src/tests/outbox-contract.integration.test.js` los valida con `ajv` contra las filas reales que deja en `outbox_events` el ciclo completo por HTTP: si cambia un campo en `emergency-events.js` sin tocar el schema, o al revés, el CI falla.
 
 ---
 
 ## Consumo de eventos externos
 
-Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca los listeners de `src/listeners/` dentro del mismo proceso web. Hoy hay un caso, la **cobertura preventiva**, que escucha dos eventos de Espacios Públicos:
+Con `KAFKA_CONSUMER_ENABLED=true` (así corre producción), el backend arranca los listeners de `src/listeners/` dentro del mismo proceso web. Los dos eventos de Espacios Públicos que escucha disparan dos cosas: la **cobertura preventiva** y el **contexto de zona** que eleva la prioridad en el barrio mientras dura el evento (ver [Prioridad elevada durante un evento](#prioridad-elevada-durante-un-evento)):
 
 | Evento | Topic (env) | Qué hace |
 |---|---|---|
-| `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox |
-| `ActividadCreada` (v2) | `EDA_TOPIC_ACTIVIDAD_CREADA` | Si `capacidad` llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 1000) y la actividad no está `CANCELADA`, programa la misma cobertura `PREVENTIVA` con `causaId = actividadId` (coordenadas de `ubicacion.lat/lng`). Espacios publica este evento justo después de `EventoComunitarioPublicado` y el `actividadId` es el mismo `eventoId`, así que el dedup por causa evita una segunda cobertura |
-| `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca |
+| `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` | Si `capacidad` (o `cupoMaximo`) llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea **una** emergencia `PREVENTIVA` por `eventoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = EVENTO_PUBLICO`, `causaId = eventoId`, severidad `low`, estado `PENDING`. Sin coordenadas queda con `requiresManualValidation = true`. Publica `EmergenciaCreada` por el outbox. Aparte, sin importar la capacidad, registra el contexto de zona del evento |
+| `ActividadCreada` (v2) | `EDA_TOPIC_ACTIVIDAD_CREADA` | Si `capacidad` llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 1000) y la actividad no está `CANCELADA`, programa la misma cobertura `PREVENTIVA` con `causaId = actividadId` (coordenadas de `ubicacion.lat/lng`). Espacios publica este evento justo después de `EventoComunitarioPublicado` y el `actividadId` es el mismo `eventoId`, así que el dedup por causa evita una segunda cobertura. Con el umbral sin fijar, `EventoComunitarioPublicado` usa 500 y `ActividadCreada` 1000: fijarlo en 1000 en producción |
+| `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` | Cancela la cobertura de ese `eventoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:espacios`, con historial y `EmergenciaActualizada`). Si ya fue despachada, no la toca. Aparte, da de baja el contexto de zona del evento |
+| `EmergenciaSolicitada` (Movilidad) | `EDA_TOPIC_EMERGENCIA_SOLICITADA` (default `com.citypass.movilidad.EmergenciaSolicitada`) | **Disparador del caso de la ciclovía** (Reclamos → Movilidad → Emergencias). Movilidad evalúa el reclamo y, si es de ciclovía con prioridad `ALTA` o `CRITICA`, pide la emergencia. Crea **una** emergencia `TRANSITO` por `reclamoId`: `source = EXTERNAL`, sin ciudadano, `causaTipo = RECLAMO`, `causaId = reclamoId`, con la prioridad pedida. Sin coordenadas queda con `requiresManualValidation`. No aplica con `RECLAMO_INTERVENCION_DISPARADOR=reclamo` |
+| `ReclamoCreado` (Reclamos, v3) | `EDA_TOPIC_RECLAMO_CREADO` (default `com.citypass.reclamos.ReclamoCreado.v3`) | **Plan B del caso de la ciclovía.** Solo con `RECLAMO_INTERVENCION_DISPARADOR` en `reclamo` o `ambos`: con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea la misma emergencia `TRANSITO` por `reclamoId`, con la prioridad del reclamo (default `MEDIA`). Con el default (`movilidad`) se consume y no hace nada |
+| `ReclamoActualizado` (Reclamos) | `EDA_TOPIC_RECLAMO_ACTUALIZADO` (default `com.citypass.reclamos.ReclamoActualizado`) | Cuando `estadoNuevo` es `RESUELTO`, `RECHAZADO` o `CERRADO`, cancela la intervención de ese `reclamoId` si sigue en `PENDING` o `VALIDATED` (actor `eda:reclamos`, con historial y `EmergenciaActualizada`). Si ya fue despachada, la termina el oficial |
+
+**Quién crea la intervención del reclamo de ciclovía** lo decide `RECLAMO_INTERVENCION_DISPARADOR`: `movilidad` (default: solo la `EmergenciaSolicitada`), `reclamo` (solo el `ReclamoCreado` directo) o `ambos` (el primero que llegue; el otro la encuentra creada). Nunca hay más de una por reclamo: lo garantiza el índice único de V29, también si los dos listeners procesan el mismo reclamo a la vez. Un valor que no existe frena el arranque. Si Movilidad no está publicando, el plan B es cargar `ambos`, sin tocar código.
+
+### Prioridad elevada durante un evento
+
+Mientras dura un evento comunitario, las emergencias que se crean a no más de un radio fijo de su ubicación suben **un nivel** de prioridad de despacho (tope `critical`). Parte del ADR *Elevar temporalmente la prioridad con contextos de zona*, con una diferencia: la zona es un punto con radio, no un barrio (el barrio afectaba toda la zona en vez de los alrededores del evento).
+
+- **Alta.** Cada `EventoComunitarioPublicado` deja (o actualiza) una fila en `contexto_zona` (V28 y V31), una por `eventoId`: el punto es `latitud`/`longitud` del evento, el radio es `CONTEXTO_ZONA_RADIO_DEFAULT_METROS` (default 500; Espacios no lo informa) y la ventana es `inicio`–`fin` del evento (también `fechaInicio`–`fechaFin`). Sin inicio, arranca al recibir el evento; sin fin, dura `CONTEXTO_ZONA_DURACION_DEFAULT_HORAS` (default 6). Una republicación sin ninguna de las dos fechas conserva la ventana guardada. Un evento sin coordenadas numéricas no genera contexto: el texto `barrio` o `zona` no alcanza. Cada contexto guarda el radio con el que se registró, así que cambiar la variable vale para los eventos nuevos o republicados.
+- **Suspensión.** Espacios puede suspender un evento y reanudarlo; las dos cosas llegan como `EventoComunitarioPublicado` con el estado nuevo. Con `estado = SUSPENDED` el contexto queda suspendido (`suspendido_en`) y no eleva nada. La siguiente publicación con otro estado lo reactiva, con las fechas que traiga.
+- **Baja.** `EventoCancelado` (o un `EventoComunitarioPublicado` con `estado = CANCELLED`) marca `dado_de_baja_en`. Es definitiva: una republicación posterior no revive el contexto, y una cancelación que llega antes que la publicación deja la marca para que la publicación tardía se ignore.
+- **Vínculo.** La distancia se mide una sola vez, al crear la emergencia, en la aplicación y con la coordenada que llega en el pedido (antes de cifrarla). Si queda dentro del radio de un evento en curso, se guarda el vínculo en `emergencia_contexto_zona` (V31): solo los dos ids, ninguna coordenada ni distancia. La ubicación de la emergencia sigue cifrada y no se descifra para esto. El vínculo se borra cuando la retención anonimiza la ubicación.
+- **Cálculo.** No se escribe nada en `emergencies`. `GET /api/emergencies` y el detalle devuelven al dispatcher `dispatchPriority` (= `effectivePriority` más un nivel si la emergencia está vinculada a un contexto que sigue en curso en el momento de la lectura) y `priorityContext` con el motivo (`tipo`, `latitud`, `longitud`, `radioMetros`, `referenciaExterna`, `descripcion`, `vigenteDesde`, `vigenteHasta`), o `null`. `sortBy=priority` ordena por `dispatchPriority` en SQL. Cuando el evento termina, se suspende o se cancela, la siguiente lectura ya no trae el contexto y la prioridad vuelve sola, sin job.
+- **Alcance.** Solo suben las emergencias creadas mientras el evento está en curso: una que ya existía cuando el evento empieza (o cuando llega su publicación) no sube, y si el evento cambia de lugar los vínculos ya escritos no se recalculan. Varios eventos que alcanzan a la misma emergencia suben un solo nivel. No sube en las `PREVENTIVA` (la cobertura del propio evento) ni en emergencias en estado terminal. El ciudadano no recibe estos campos.
+- **Hacia afuera.** `EmergenciaCreada` y `EmergenciaActualizada` siguen publicando la prioridad original. El vínculo sale como evento propio, `EmergenciaVinculadaAContextoZona` (ADR "Publicar el vínculo de una emergencia con un contexto de zona"): uno por fila de `emergencia_contexto_zona`, encolado en la misma sentencia que la fila, con `referenciaExterna` (el `eventoId` de Espacios) para agrupar por evento y `(emergenciaId, contextoId)` como clave de deduplicación. No lleva coordenadas, y los vínculos de `PANICO` no se publican hasta que Security decida su precisión. Guía para otros equipos en **[docs/prioridad-por-contexto-para-consumidores.md](docs/prioridad-por-contexto-para-consumidores.md)**.
+- **Activación.** El evento se encola solo con `EVENTO_VINCULO_CONTEXTO_ENABLED=true`, que se enciende cuando el tipo está registrado en el catálogo del gateway (si no, el gateway responde 404 y la fila queda `FAILED`). Al encenderlo, `npm run backfill:vinculos-contexto` encola una vez, con `backfill: true`, los vínculos que ya existían. Es idempotente y solo recupera lo que la retención no borró: emergencias abiertas o cerradas hace menos de `LOCATION_RETENTION_HOURS`.
+- **Falta** (del ADR): alta y baja manual desde el tablero, alertas climáticas, el evento `EmergenciaPriorizada` y la prioridad manual por encima del cálculo.
 
 Cómo lee el bus:
 
@@ -1028,14 +1056,15 @@ Implementado en `main`:
 
 - Botón de pánico y reporte con tipo, dirección cifrada y severidad derivada del tipo.
 - Ciclo de vida completo por API: validar, descartar, asignar, devolver, en camino, en el lugar, resolver, cerrar y cancelar.
-- Grupos `citizen`, `dispatcher` y `officer` con JWT del contrato CityPass+ (emitido por el propio backend, `AUTH_MODE=local`).
+- Grupos `citizen`, `dispatcher` y `officer` con JWT del contrato CityPass+. En producción (`AUTH_MODE=hybrid`, desde el 12/11/2026) el personal entra con el token del Login Federado del Grupo 2 y los ciudadanos con el que emite el propio backend.
 - Detección de incidentes cada 60 s (DBSCAN con fallback a reglas) y prioridad efectiva.
 - Cifrado de ubicación y perfil, retención, logs seguros, rate limiting y auditoría de lectura en `GET /api/panic-button/:id`.
-- Outbox transaccional con los eventos del contrato del #48 y consumo de eventos de Espacios (cobertura preventiva).
+- Outbox transaccional con los eventos del contrato del #48, publicados por el gateway en orden de creación.
+- Consumo de eventos de Espacios (cobertura preventiva y prioridad elevada en un radio de 500 m alrededor del evento) y de Reclamos (un reclamo por ciclovía obstruida crea una intervención).
 
 Lo que hoy no está:
 
 - Publicación al bus: en producción sale por el gateway (`EDA_PUBLISHER_MODE=gateway`) desde el 05/11. El modo `kafka` sigue publicando en los tópicos propios (`emergencias.*`), no en los FQN del gateway.
-- Login federado: `AUTH_MODE=idp` está programado, pero producción usa `AUTH_MODE=local`.
+- Usuarios LDAP de oficial: el Login Federado ya está en uso para el dispatcher, pero los oficiales todavía entran con cuenta local.
 - Tiempo real: el front hace polling, no hay WebSocket ni SSE.
-- `barrio`, `afectaCirculacion`, `latitud`/`longitud` y `prioridadOriginal` salen siempre en `null` en `EmergenciaCreada`.
+- `prioridadOriginal` y `areaResponsable` salen siempre en `null` en los eventos.

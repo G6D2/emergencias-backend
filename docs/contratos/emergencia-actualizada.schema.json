@@ -29,7 +29,10 @@
         "resolucion",
         "prioridad",
         "causasRelacionadas",
+        "descripcionProblema",
         "barrio",
+        "latitud",
+        "longitud",
         "ubicacion",
         "correlationId"
       ],
@@ -66,7 +69,20 @@
           "items": { "type": "string", "enum": ["VIA", "ESPACIO_PUBLICO", "RESIDUOS"] },
           "default": []
         },
+        "descripcionProblema": {
+          "description": "Descripción breve del problema vial. Se completa al resolver si causasRelacionadas incluye VIA y se conserva en actualizaciones posteriores.",
+          "type": ["string", "null"],
+          "maxLength": 280
+        },
         "barrio": { "type": ["string", "null"] },
+        "latitud": {
+          "description": "Latitud en claro, redondeada a 3 decimales (~100 m). null si la emergencia no tiene ubicación. La exacta va cifrada en ubicacion.latitud.",
+          "type": ["number", "null"]
+        },
+        "longitud": {
+          "description": "Igual que latitud.",
+          "type": ["number", "null"]
+        },
         "ubicacion": {
           "type": "object",
           "additionalProperties": false,
@@ -102,6 +118,27 @@
             "properties": {
               "asignadoA": { "type": "null" },
               "areaResponsable": { "type": "null" }
+            }
+          }
+        },
+        {
+          "description": "descripcionProblema es obligatoria cuando causasRelacionadas incluye VIA; en los demás casos va null.",
+          "if": {
+            "properties": {
+              "causasRelacionadas": {
+                "type": "array",
+                "contains": { "const": "VIA" }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "descripcionProblema": { "type": "string", "minLength": 1 }
+            }
+          },
+          "else": {
+            "properties": {
+              "descripcionProblema": { "type": "null" }
             }
           }
         }

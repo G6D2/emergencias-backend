@@ -52,9 +52,11 @@ describe('asyncapi.yaml', () => {
     const send = document.operations().filterBySend().map((op) => op.id());
     const receive = document.operations().filterByReceive().map((op) => op.id());
     expect(send).toEqual(expect.arrayContaining(['publicarEmergenciaCreada', 'publicarEmergenciaActualizada']));
-    expect(receive).toEqual(
-      expect.arrayContaining(['recibirEventoComunitarioPublicado', 'recibirEventoCancelado', 'recibirActividadCreada'])
-    );
+    expect(receive).toEqual(expect.arrayContaining([
+      'recibirEventoComunitarioPublicado', 'recibirEventoCancelado',
+      'recibirReclamoCreado', 'recibirReclamoActualizado', 'recibirEmergenciaSolicitada',
+      'recibirActividadCreada',
+    ]));
   });
 
   it('los enums del spec coinciden con el código', () => {

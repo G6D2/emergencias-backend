@@ -2,11 +2,18 @@ const { NotFoundError, ConflictError } = require('../errors/app-errors');
 const { assertTransition, isTerminal, TERMINAL_STATUSES } = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { resolveBarrio } = require('../domain/barrio');
+const { haversineDistanceMeters } = require('../domain/rule-based-grouper');
 const { createLocationCrypto } = require('../security/location-crypto');
 const { randomUUID } = require('crypto');
 const { secureLog } = require('../security/secure-log');
 const { mapOfficer } = require('./officer.repository');
-const { effectivePriority } = require('../domain/severity');
+const { effectivePriority, dispatchPriority } = require('../domain/severity');
+const {
+  buildEmergencyLinkedToZoneContextEvent,
+  shouldPublishZoneContextLink,
+  zoneContextLinkTopic,
+  ZONE_CONTEXT_LINK_EVENT_TYPE,
+} = require('../services/emergency-events');
 
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
@@ -65,6 +72,7 @@ function mapEmergency(row, locationCrypto) {
     causaTipo: row.causa_tipo ?? null,
     causaId: row.causa_id ?? null,
     causasRelacionadas: row.causas_relacionadas ?? [],
+    descripcionProblema: row.descripcion_problema ?? null,
     // Catálogo oficial CABA en claro; no se borra con la retención de ubicación.
     barrio: row.barrio ?? null,
     createdAt: row.created_at,
@@ -105,16 +113,78 @@ const INCIDENT_SELECT_FIELDS = `
        (SELECT COUNT(*)::int FROM emergencies em2 WHERE em2.incident_id = e.incident_id) AS incident_report_count,
        (SELECT COUNT(DISTINCT em3.user_id)::int FROM emergencies em3 WHERE em3.incident_id = e.incident_id) AS incident_unique_citizens`;
 
+// Contexto de zona que eleva la prioridad de la emergencia (ADR "Elevar
+// temporalmente la prioridad con contextos de zona", tablas de V28 y V31).
+//
+// El vínculo emergencia–contexto se escribe una sola vez, al crear la
+// emergencia (ver linkZoneContexts): acá solo se mira si el contexto
+// vinculado sigue en curso. Mientras lo está, la prioridad de despacho sube
+// un nivel; al vencer, suspenderse o darse de baja, la próxima lectura ya no
+// lo trae y la prioridad vuelve sola.
+//
+// - Se evalúa contra now(): nada se guarda en emergencies.
+// - Varios contextos vinculados suben un solo nivel (LIMIT 1; se muestra el
+//   que vence último).
+// - No aplica a emergencias terminales ni a las PREVENTIVA: la cobertura del
+//   propio evento no es un llamado.
+const ZONE_CONTEXT_EN_CURSO_SQL = `c.dado_de_baja_en IS NULL
+           AND c.suspendido_en IS NULL
+           AND c.vigente_desde <= now()
+           AND c.vigente_hasta > now()`;
+const ZONE_CONTEXT_JOIN_SQL = `LEFT JOIN LATERAL (
+         SELECT c.tipo, c.latitud, c.longitud, c.radio_metros, c.origen, c.referencia_externa,
+                c.descripcion, c.vigente_desde, c.vigente_hasta
+         FROM emergencia_contexto_zona ecz
+         JOIN contexto_zona c ON c.id = ecz.contexto_id
+         WHERE ecz.emergency_id = e.id
+           AND ${ZONE_CONTEXT_EN_CURSO_SQL}
+           AND e.emergency_type IS DISTINCT FROM 'PREVENTIVA'
+           AND e.status NOT IN (${TERMINAL_STATUSES.map((status) => `'${status}'`).join(', ')})
+         ORDER BY c.vigente_hasta DESC
+         LIMIT 1
+       ) cz ON true`;
+const ZONE_CONTEXT_SELECT_FIELDS = `
+       cz.tipo AS contexto_tipo,
+       cz.latitud AS contexto_latitud,
+       cz.longitud AS contexto_longitud,
+       cz.radio_metros AS contexto_radio_metros,
+       cz.origen AS contexto_origen,
+       cz.referencia_externa AS contexto_referencia_externa,
+       cz.descripcion AS contexto_descripcion,
+       cz.vigente_desde AS contexto_vigente_desde,
+       cz.vigente_hasta AS contexto_vigente_hasta`;
+
+function mapZoneContext(row) {
+  if (!row.contexto_tipo) return null;
+  return {
+    tipo: row.contexto_tipo,
+    latitud: row.contexto_latitud,
+    longitud: row.contexto_longitud,
+    radioMetros: row.contexto_radio_metros,
+    origen: row.contexto_origen,
+    referenciaExterna: row.contexto_referencia_externa,
+    descripcion: row.contexto_descripcion ?? null,
+    vigenteDesde: row.contexto_vigente_desde,
+    vigenteHasta: row.contexto_vigente_hasta,
+  };
+}
+
 // mapEmergency + incident: null|{...} + effectivePriority (máximo entre
-// severity individual y incident.priority, ver src/domain/severity.js).
+// severity individual y incident.priority, ver src/domain/severity.js) +
+// dispatchPriority (un nivel más si hay un contexto de zona vigente) y
+// priorityContext: null|{...} con el motivo de la suba.
 function mapEmergencyWithIncident(row, locationCrypto) {
   const emergency = mapEmergency(row, locationCrypto);
   if (!emergency) return null;
   const incident = mapIncidentSummary(row);
+  const priorityContext = mapZoneContext(row);
+  const priority = effectivePriority(emergency.severity, incident ? incident.priority : null);
   return {
     ...emergency,
     incident,
-    effectivePriority: effectivePriority(emergency.severity, incident ? incident.priority : null),
+    effectivePriority: priority,
+    dispatchPriority: dispatchPriority(priority, Boolean(priorityContext)),
+    priorityContext,
   };
 }
 
@@ -158,6 +228,8 @@ class EmergencyRepository {
   constructor(pool, options = {}) {
     this.pool = pool;
     this.locationCrypto = options.locationCrypto || createLocationCrypto();
+    // Inyectable para tests (EVENTO_VINCULO_CONTEXTO_ENABLED y topics).
+    this.env = options.env || process.env;
   }
 
   // source/causa vienen de las emergencias que crea el listener de eventos
@@ -203,13 +275,16 @@ class EmergencyRepository {
     if (externalClient) {
       const result = await externalClient.query(INSERT_SQL, insertValues);
       const emergency = mapEmergency(result.rows[0], this.locationCrypto);
+      await this.linkZoneContexts(externalClient, emergency);
       if (outboxEvent) await this.insertOutboxEvent(externalClient, outboxEvent, emergency);
       return emergency;
     }
 
     if (!outboxEvent) {
       const result = await this.pool.query(INSERT_SQL, insertValues);
-      return mapEmergency(result.rows[0], this.locationCrypto);
+      const emergency = mapEmergency(result.rows[0], this.locationCrypto);
+      await this.linkZoneContexts(this.pool, emergency);
+      return emergency;
     }
 
     const client = await this.pool.connect();
@@ -217,6 +292,7 @@ class EmergencyRepository {
       await client.query('BEGIN');
       const result = await client.query(INSERT_SQL, insertValues);
       const emergency = mapEmergency(result.rows[0], this.locationCrypto);
+      await this.linkZoneContexts(client, emergency);
       await this.insertOutboxEvent(client, outboxEvent, emergency);
       await client.query('COMMIT');
       return emergency;
@@ -226,6 +302,146 @@ class EmergencyRepository {
     } finally {
       client.release();
     }
+  }
+
+  // Vincula la emergencia recién creada con los contextos de zona en curso
+  // que la alcanzan (a no más de radio_metros de su punto). Es el único
+  // momento en que se mide la distancia: la coordenada está en memoria y no
+  // hace falta guardarla en claro ni descifrar nada después. Solo se guardan
+  // los ids.
+  //
+  // Consecuencia: una emergencia creada antes de que empiece el evento (o
+  // antes de que llegue su publicación) no sube de prioridad.
+  async linkZoneContexts(executor, emergency) {
+    const { id, latitude, longitude, emergencyType } = emergency;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
+    if (emergencyType === 'PREVENTIVA') return [];
+
+    const enCurso = await executor.query(
+      `SELECT c.id, c.latitud, c.longitud, c.radio_metros, c.tipo, c.origen, c.referencia_externa
+       FROM contexto_zona c
+       WHERE ${ZONE_CONTEXT_EN_CURSO_SQL}
+         AND c.latitud IS NOT NULL
+         AND c.longitud IS NOT NULL
+         AND c.radio_metros IS NOT NULL`
+    );
+    const alcanzan = enCurso.rows.filter((c) => haversineDistanceMeters(
+      { latitude, longitude },
+      { latitude: Number(c.latitud), longitude: Number(c.longitud) }
+    ) <= Number(c.radio_metros));
+    const contextoIds = alcanzan.map((c) => c.id);
+    if (contextoIds.length === 0) return [];
+
+    if (!shouldPublishZoneContextLink(emergencyType, this.env)) {
+      await executor.query(
+        `INSERT INTO emergencia_contexto_zona (emergency_id, contexto_id)
+         SELECT $1, unnest($2::uuid[])
+         ON CONFLICT DO NOTHING`,
+        [id, contextoIds]
+      );
+      return contextoIds;
+    }
+
+    // Con el evento de vínculo encendido, la fila y su evento del outbox se
+    // escriben en UNA sentencia: si el vínculo existe, el evento existe, aunque
+    // el executor sea el pool y no una transacción. Solo se encola evento para
+    // los vínculos que se insertaron de verdad (ON CONFLICT DO NOTHING no
+    // devuelve fila), así que un reintento no duplica.
+    const vinculadaEn = new Date();
+    const events = alcanzan.map((c) => buildEmergencyLinkedToZoneContextEvent({
+      emergencyId: id,
+      correlationId: emergency.correlationId,
+      contexto: {
+        id: c.id,
+        tipo: c.tipo,
+        origen: c.origen,
+        referenciaExterna: c.referencia_externa,
+        radioMetros: c.radio_metros,
+      },
+      vinculadaEn,
+      eventId: randomUUID(),
+    }));
+    await executor.query(
+      `WITH nuevos AS (
+         INSERT INTO emergencia_contexto_zona (emergency_id, contexto_id, created_at)
+         SELECT $1, unnest($2::uuid[]), $3
+         ON CONFLICT DO NOTHING
+         RETURNING contexto_id
+       )
+       INSERT INTO outbox_events (id, topic, payload)
+       SELECT ev.id, $4, ev.payload
+       FROM unnest($5::uuid[], $6::uuid[], $7::jsonb[]) AS ev(contexto_id, id, payload)
+       JOIN nuevos ON nuevos.contexto_id = ev.contexto_id`,
+      [
+        id,
+        contextoIds,
+        vinculadaEn,
+        zoneContextLinkTopic(this.env),
+        events.map((event) => event.data.contextoId),
+        events.map((event) => event.eventId),
+        events.map((event) => JSON.stringify(event)),
+      ]
+    );
+    return contextoIds;
+  }
+
+  // Backfill del evento de vínculo (ADR "Publicar el vínculo de una emergencia
+  // con un contexto de zona", punto 6): encola, con backfill: true, los
+  // vínculos que siguen en la base y todavía no tienen evento en el outbox.
+  // Idempotente: una segunda corrida no encuentra nada. Solo recupera lo que
+  // la retención no borró (unlinkZoneContexts al anonimizar).
+  async enqueueMissingZoneContextLinkEvents() {
+    const candidates = await this.pool.query(
+      `SELECT ecz.emergency_id, ecz.contexto_id, ecz.created_at,
+              e.correlation_id, e.emergency_type,
+              c.tipo, c.origen, c.referencia_externa, c.radio_metros
+       FROM emergencia_contexto_zona ecz
+       JOIN emergencies e ON e.id = ecz.emergency_id
+       JOIN contexto_zona c ON c.id = ecz.contexto_id
+       WHERE NOT EXISTS (
+         SELECT 1 FROM outbox_events o
+         WHERE o.payload->>'type' = $1
+           AND o.payload->'data'->>'emergenciaId' = ecz.emergency_id::text
+           AND o.payload->'data'->>'contextoId' = ecz.contexto_id::text
+       )
+       ORDER BY ecz.created_at`,
+      [ZONE_CONTEXT_LINK_EVENT_TYPE]
+    );
+
+    const events = candidates.rows
+      .filter((row) => shouldPublishZoneContextLink(row.emergency_type, this.env))
+      .map((row) => buildEmergencyLinkedToZoneContextEvent({
+        emergencyId: row.emergency_id,
+        correlationId: row.correlation_id,
+        contexto: {
+          id: row.contexto_id,
+          tipo: row.tipo,
+          origen: row.origen,
+          referenciaExterna: row.referencia_externa,
+          radioMetros: row.radio_metros,
+        },
+        vinculadaEn: row.created_at,
+        backfill: true,
+        eventId: randomUUID(),
+      }));
+    if (events.length === 0) {
+      return { enqueuedCount: 0, skippedCount: candidates.rows.length };
+    }
+
+    await this.pool.query(
+      `INSERT INTO outbox_events (id, topic, payload)
+       SELECT ev.id, $1, ev.payload
+       FROM unnest($2::uuid[], $3::jsonb[]) AS ev(id, payload)`,
+      [
+        zoneContextLinkTopic(this.env),
+        events.map((event) => event.eventId),
+        events.map((event) => JSON.stringify(event)),
+      ]
+    );
+    return {
+      enqueuedCount: events.length,
+      skippedCount: candidates.rows.length - events.length,
+    };
   }
 
   async insertOutboxEvent(client, { topic, payload }, entity) {
@@ -278,10 +494,11 @@ class EmergencyRepository {
    */
   async findDetailById(id) {
     const result = await this.pool.query(
-      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}
+      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}, ${ZONE_CONTEXT_SELECT_FIELDS}
        FROM emergencies e
        LEFT JOIN officers o ON o.id = e.assigned_officer_id
        ${INCIDENT_JOIN_SQL}
+       ${ZONE_CONTEXT_JOIN_SQL}
        WHERE e.id = $1`,
       [id]
     );
@@ -382,9 +599,11 @@ class EmergencyRepository {
     }
 
     if (ids.length > 0) {
-      // El outbox conserva payloads PUBLISHED/PENDING más allá de las 72 h;
-      // hay que scrubear coords cifradas del bus para que no queden descifrables
-      // con la clave compartida tras anonimizar at-rest.
+      await this.unlinkZoneContexts(ids);
+      // El outbox conserva los payloads más allá de las 72 h (PUBLISHED hasta
+      // su purga; SKIPPED, FAILED y PENDING sin plazo). Hay que scrubear ahí las
+      // coords del bus: las cifradas, que si no quedan descifrables con la clave
+      // compartida tras anonimizar at-rest, y las aproximadas en claro.
       await this.scrubOutboxBusCoordinates(ids);
     }
 
@@ -395,8 +614,14 @@ class EmergencyRepository {
   }
 
   /**
-   * Pone en null data.ubicacion.latitud/longitud en outbox_events ligados
-   * a esas emergencias (cualquier status). Conserva barrio.
+   * Pone en null las coordenadas de los payloads de outbox_events ligados a
+   * esas emergencias (cualquier status). Conserva barrio. Son las dos formas
+   * en que emergency-events.js publica la ubicación:
+   * - data.ubicacion.latitud/longitud: la exacta, cifrada (string).
+   * - data.latitud/longitud: la aproximada en claro (número, desde el #92).
+   *   Con create_missing = false: a un payload anterior, que no trae esas
+   *   claves en la raíz, no se le agregan.
+   * El WHERE deja afuera las filas que no tienen nada para limpiar.
    */
   async scrubOutboxBusCoordinates(emergencyIds) {
     if (!Array.isArray(emergencyIds) || emergencyIds.length === 0) return { scrubbedCount: 0 };
@@ -404,13 +629,21 @@ class EmergencyRepository {
     const result = await this.pool.query(
       `UPDATE outbox_events
        SET payload = jsonb_set(
-             jsonb_set(payload, '{data,ubicacion,latitud}', 'null'::jsonb, true),
-             '{data,ubicacion,longitud}', 'null'::jsonb, true
+             jsonb_set(
+               jsonb_set(
+                 jsonb_set(payload, '{data,ubicacion,latitud}', 'null'::jsonb, true),
+                 '{data,ubicacion,longitud}', 'null'::jsonb, true
+               ),
+               '{data,latitud}', 'null'::jsonb, false
+             ),
+             '{data,longitud}', 'null'::jsonb, false
            )
        WHERE payload->'data'->>'emergenciaId' = ANY($1::text[])
          AND (
            jsonb_typeof(payload#>'{data,ubicacion,latitud}') = 'string'
            OR jsonb_typeof(payload#>'{data,ubicacion,longitud}') = 'string'
+           OR jsonb_typeof(payload#>'{data,latitud}') = 'number'
+           OR jsonb_typeof(payload#>'{data,longitud}') = 'number'
          )`,
       [emergencyIds]
     );
@@ -422,6 +655,24 @@ class EmergencyRepository {
       });
     }
     return { scrubbedCount: result.rowCount };
+  }
+
+  // El vínculo con un contexto de zona dice que la emergencia estuvo a pocos
+  // cientos de metros de un punto conocido: se borra junto con la ubicación.
+  // A esa altura la emergencia ya está cerrada y el vínculo no eleva nada.
+  // También se borran sus eventos de vínculo que sigan en el outbox (cualquier
+  // estado); lo que ya salió al bus queda bajo la retención del Grupo 1.
+  async unlinkZoneContexts(emergencyIds) {
+    await this.pool.query(
+      'DELETE FROM emergencia_contexto_zona WHERE emergency_id = ANY($1::uuid[])',
+      [emergencyIds]
+    );
+    await this.pool.query(
+      `DELETE FROM outbox_events
+       WHERE payload->>'type' = $2
+         AND payload->'data'->>'emergenciaId' = ANY($1::text[])`,
+      [emergencyIds, ZONE_CONTEXT_LINK_EVENT_TYPE]
+    );
   }
 
   // Anonimiza las filas cuyo ciphertext no se puede descifrar con el keyring
@@ -464,6 +715,7 @@ class EmergencyRepository {
 
     const ids = result.rows.map((row) => row.id);
     if (ids.length > 0) {
+      await this.unlinkZoneContexts(ids);
       await this.scrubOutboxBusCoordinates(ids);
     }
 
@@ -572,8 +824,12 @@ class EmergencyRepository {
     // más urgentes primero — mismo sentido que created_at DESC = más
     // reciente primero.
     const priorityRank = (column) => `CASE ${column} WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
+    //
+    // Prioridad de despacho: a ese rank se le suma 1 (tope 4) si hay un
+    // contexto de zona en curso vinculado (cz, ver ZONE_CONTEXT_JOIN_SQL).
+    // Va en el ORDER BY y no en JS para que el orden valga entre páginas.
     const sortExpression = sortBy === 'priority'
-      ? `GREATEST(${priorityRank('e.severity')}, ${priorityRank('i.priority')})`
+      ? `LEAST(GREATEST(${priorityRank('e.severity')}, ${priorityRank('i.priority')}) + CASE WHEN cz.tipo IS NULL THEN 0 ELSE 1 END, 4)`
       : 'e.created_at';
 
     const countResult = await this.pool.query(
@@ -582,10 +838,11 @@ class EmergencyRepository {
     );
     values.push(limit, offset);
     const result = await this.pool.query(
-      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}
+      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}, ${ZONE_CONTEXT_SELECT_FIELDS}
        FROM emergencies e
        LEFT JOIN officers o ON o.id = e.assigned_officer_id
        ${INCIDENT_JOIN_SQL}
+       ${ZONE_CONTEXT_JOIN_SQL}
        ${where}
        ORDER BY ${sortExpression} ${direction}, e.created_at ASC
        LIMIT $${values.length - 1} OFFSET $${values.length}`,
@@ -663,11 +920,13 @@ class EmergencyRepository {
    *   en la transacción del caller (la del OutcomeFactory) sin abrir una propia.
    */
   async updateStatus(id, {
-    newStatus, actor = null, reason = null, causasRelacionadas = [], outboxEvent = null, requireAssignedOfficerId = null,
+    newStatus, actor = null, reason = null, causasRelacionadas = [], descripcionProblema = null,
+    outboxEvent = null, requireAssignedOfficerId = null,
     requireStatus = null, client: externalClient = null,
   }) {
     const options = {
-      newStatus, actor, reason, causasRelacionadas, outboxEvent, requireAssignedOfficerId, requireStatus,
+      newStatus, actor, reason, causasRelacionadas, descripcionProblema, outboxEvent,
+      requireAssignedOfficerId, requireStatus,
     };
     if (externalClient) {
       return this.applyStatusUpdate(externalClient, id, options);
@@ -687,7 +946,8 @@ class EmergencyRepository {
   }
 
   async applyStatusUpdate(client, id, {
-    newStatus, actor, reason, causasRelacionadas = [], outboxEvent, requireAssignedOfficerId = null, requireStatus = null,
+    newStatus, actor, reason, causasRelacionadas = [], descripcionProblema = null,
+    outboxEvent, requireAssignedOfficerId = null, requireStatus = null,
   }) {
     const current = await client.query(
       'SELECT status, assigned_officer_id FROM emergencies WHERE id = $1 FOR UPDATE',
@@ -719,10 +979,14 @@ class EmergencyRepository {
            causas_relacionadas = CASE
              WHEN $1 = 'RESOLVED' THEN $4::TEXT[]
              ELSE causas_relacionadas
+           END,
+           descripcion_problema = CASE
+             WHEN $1 = 'RESOLVED' THEN $5
+             ELSE descripcion_problema
            END
        WHERE id = $2
        RETURNING *`,
-      [newStatus, id, isTerminal(newStatus), causasRelacionadas]
+      [newStatus, id, isTerminal(newStatus), causasRelacionadas, descripcionProblema]
     );
 
     const history = await client.query(

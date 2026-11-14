@@ -16,6 +16,7 @@ describe('emergency-type domain', () => {
       'OTRO',
       'PANICO',
       'PREVENTIVA',
+      'TRANSITO',
     ]);
     expect(Object.isFrozen(EMERGENCY_TYPES)).toBe(true);
     expect(() => EMERGENCY_TYPES.push('HACK')).toThrow();

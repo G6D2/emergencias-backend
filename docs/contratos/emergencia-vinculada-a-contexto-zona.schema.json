@@ -1,0 +1,79 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/G6D2/emergencias-backend/blob/main/docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json",
+  "title": "com.citypass.emergencias.EmergenciaVinculadaAContextoZona",
+  "description": "Evento que se encola en outbox_events.payload por cada fila de emergencia_contexto_zona: la emergencia quedó vinculada a un contexto de zona (p. ej. un evento comunitario de Espacios) al crearse y, mientras los dos estuvieron vigentes, su prioridad de despacho estuvo un nivel arriba. Lo arma buildEmergencyLinkedToZoneContextEvent en src/services/emergency-events.js. Clave de deduplicación: (data.emergenciaId, data.contextoId). No lleva coordenadas. Ver ADR 'Publicar el vínculo de una emergencia con un contexto de zona'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "eventId", "correlationId", "data"],
+  "properties": {
+    "type": { "const": "EmergenciaVinculadaAContextoZona" },
+    "eventId": {
+      "description": "Id del evento. Es la PK de la fila en outbox_events.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "correlationId": {
+      "description": "El de la emergencia (en las altas propias, su id).",
+      "type": "string",
+      "minLength": 1
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "emergenciaId",
+        "contextoId",
+        "contextoTipo",
+        "contextoOrigen",
+        "referenciaExterna",
+        "radioMetros",
+        "vinculadaEn",
+        "reglaVersion",
+        "backfill"
+      ],
+      "properties": {
+        "emergenciaId": { "type": "string", "format": "uuid" },
+        "contextoId": {
+          "description": "Id del contexto de zona en Emergencias.",
+          "type": "string",
+          "format": "uuid"
+        },
+        "contextoTipo": {
+          "type": "string",
+          "enum": ["EVENTO_ESPACIO_PUBLICO", "ALERTA_CLIMATICA"]
+        },
+        "contextoOrigen": {
+          "description": "Módulo que originó el contexto (hoy, espacios).",
+          "type": "string",
+          "minLength": 1
+        },
+        "referenciaExterna": {
+          "description": "Id del objeto en el módulo de origen: el eventoId de Espacios. Es la clave para agrupar por evento.",
+          "type": "string",
+          "minLength": 1
+        },
+        "radioMetros": {
+          "description": "Radio con el que se decidió el vínculo.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "vinculadaEn": {
+          "description": "Cuándo se creó el vínculo (created_at de emergencia_contexto_zona). ISO-8601 en UTC.",
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "reglaVersion": {
+          "description": "Versión de la regla de vinculación. Sube si cambia la forma de decidir el vínculo.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "backfill": {
+          "description": "true si el evento salió de la carga inicial (npm run backfill:vinculos-contexto) y no del alta de la emergencia.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

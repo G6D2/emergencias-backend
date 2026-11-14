@@ -109,6 +109,13 @@ const options = {
               default: [],
               description: 'Causas declaradas por el oficial al resolver la emergencia.',
             },
+            descripcionProblema: {
+              type: 'string',
+              nullable: true,
+              maxLength: 280,
+              example: 'Bache profundo en la calzada junto a la esquina.',
+              description: 'Descripción breve requerida al resolver con causa VIA; null en los demás casos.',
+            },
             assignedOfficerId: {
               type: 'string',
               nullable: true,
@@ -180,6 +187,33 @@ const options = {
               example: 'critical',
               description: 'Máximo entre severity y incident.priority (nunca menor a severity). '
                 + 'Misma visibilidad que incident.',
+            },
+            dispatchPriority: {
+              type: 'string',
+              enum: ['low', 'medium', 'high', 'critical'],
+              example: 'critical',
+              description: 'Prioridad de despacho: effectivePriority más un nivel (tope critical) si '
+                + 'la emergencia se creó dentro del radio de un contexto de zona que sigue en curso, por '
+                + 'ejemplo un evento en un espacio público. Se calcula al leer: cuando el contexto vence o se da '
+                + 'de baja vuelve a ser igual a effectivePriority. No sube en emergencias PREVENTIVA ni '
+                + 'en estados terminales. sortBy=priority ordena por este valor. Solo para el dispatcher.',
+            },
+            priorityContext: {
+              type: 'object',
+              nullable: true,
+              description: 'Contexto de zona que eleva dispatchPriority, o null si no hay ninguno '
+                + 'vigente. Solo para el dispatcher.',
+              properties: {
+                tipo: { type: 'string', enum: ['EVENTO_ESPACIO_PUBLICO', 'ALERTA_CLIMATICA'] },
+                latitud: { type: 'number', example: -34.5711, description: 'Punto del contexto (ubicación del evento).' },
+                longitud: { type: 'number', example: -58.4167 },
+                radioMetros: { type: 'integer', example: 500, description: 'Radio de la zona alrededor del punto.' },
+                origen: { type: 'string', example: 'espacios' },
+                referenciaExterna: { type: 'string', description: 'Id del objeto en el módulo de origen (eventoId).' },
+                descripcion: { type: 'string', nullable: true, example: 'Recital en el Rosedal' },
+                vigenteDesde: { type: 'string', format: 'date-time' },
+                vigenteHasta: { type: 'string', format: 'date-time' },
+              },
             },
           },
         },
