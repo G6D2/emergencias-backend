@@ -158,8 +158,8 @@ channels:
         $ref: '#/components/messages/ReclamoActualizado'
 
   actividadCreada:
-    address: com.citypass.espacios.ActividadCreada.v2
-    title: ActividadCreada v2 (Espacios Públicos)
+    address: com.citypass.espacios.ActividadCreada.v3
+    title: ActividadCreada v3 (Espacios Públicos)
     description: |
       Topic configurable con `EDA_TOPIC_ACTIVIDAD_CREADA`. Espacios lo publica
       una vez, justo después de `EventoComunitarioPublicado`. El `actividadId`
@@ -866,6 +866,13 @@ components:
           description: Mismo valor que el `eventoId` de `EventoComunitarioPublicado`.
         titulo:
           type: string
+        organizadorTipo:
+          type: string
+          enum: [CIUDAD, CIUDADANO]
+          description: |
+            Obligatorio desde la v3. CIUDAD: lo creó un administrador municipal;
+            CIUDADANO: lo creó un ciudadano. Hoy siempre llega CIUDAD. La regla de
+            cobertura no lo usa.
         capacidad:
           type: integer
           description: Personas esperadas (no hay campo de asistentes).

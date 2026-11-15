@@ -17,7 +17,7 @@ describe('listeners/cobertura-preventiva', () => {
     jest.clearAllMocks();
     process.env.EDA_TOPIC_EVENTO_PUBLICADO = 'espacios.EventoComunitarioPublicado';
     process.env.EDA_TOPIC_EVENTO_CANCELADO = 'espacios.EventoCancelado';
-    process.env.EDA_TOPIC_ACTIVIDAD_CREADA = 'espacios.ActividadCreada.v2';
+    process.env.EDA_TOPIC_ACTIVIDAD_CREADA = 'espacios.ActividadCreada.v3';
   });
 
   afterAll(() => {
@@ -82,7 +82,7 @@ describe('listeners/cobertura-preventiva', () => {
   it('ActividadCreadaListener toma su topic del env y carga sus reglas', () => {
     const path = require('path');
     const listener = new ActividadCreadaListener(kafka);
-    expect(listener.topic).toBe('espacios.ActividadCreada.v2');
+    expect(listener.topic).toBe('espacios.ActividadCreada.v3');
     expect(listener.rulesDir).toBe(
       path.join(__dirname, '../../../listeners/cobertura-preventiva', 'actividad-creada', 'rules')
     );

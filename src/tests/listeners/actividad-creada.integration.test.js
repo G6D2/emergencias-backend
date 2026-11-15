@@ -1,4 +1,4 @@
-// Integracion de ActividadCreada.v2 (Espacios) con la cobertura preventiva.
+// Integracion de ActividadCreada.v3 (Espacios) con la cobertura preventiva.
 // Kafka no corre: se llama a EventListener.onMessage() con el mensaje serializado.
 // El DB es real (global-setup.js). Verifica que, como Espacios publica
 // EventoComunitarioPublicado y despues ActividadCreada con el mismo id, haya
@@ -96,7 +96,7 @@ async function coberturas() {
   return rows;
 }
 
-describe('ActividadCreada.v2 → cobertura preventiva (integration)', () => {
+describe('ActividadCreada.v3 → cobertura preventiva (integration)', () => {
   it('crea la cobertura PREVENTIVA con causa = actividadId', async () => {
     await actividad.onMessage(buildMessage(ACTIVIDAD));
 

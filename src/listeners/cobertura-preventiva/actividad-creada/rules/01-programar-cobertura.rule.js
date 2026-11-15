@@ -11,7 +11,7 @@ const ESTADOS_SIN_COBERTURA = new Set(['CANCELADA', 'CANCELLED']);
 // default historico es 500, asi que en produccion conviene fijarla en 1000
 // para que las dos reglas coincidan.
 //
-// Payload de Espacios (ActividadCreada.v2): actividadId (= eventoId),
+// Payload de Espacios (ActividadCreada.v3): actividadId (= eventoId),
 // titulo, capacidad (entero, no hay asistentes), ubicacion { lat, lng },
 // direccion, estado (PROGRAMADA), correlationId (act-<id>),
 // fechaHoraInicio / fechaHoraFinalizacion (epoch millis).
