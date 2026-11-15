@@ -93,6 +93,14 @@ services:
         value: com.citypass.espacios.EventoComunitarioPublicado
       - key: EDA_TOPIC_EVENTO_CANCELADO
         value: com.citypass.espacios.EventoCancelado
+      # Cobertura preventiva desde ActividadCreada (Espacios la pasó a v3 el
+      # 14/11/2026; v1 y v2 ya no reciben eventos). El umbral lo leen las dos
+      # reglas de cobertura (default 1000 en ActividadCreada y 500 en
+      # EventoComunitarioPublicado): fijarlo en 1000 las alinea.
+      - key: EDA_TOPIC_ACTIVIDAD_CREADA
+        value: com.citypass.espacios.ActividadCreada.v3
+      - key: UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA
+        value: "1000"
       # Listeners del caso ciclovía: usan el default del código
       # (com.citypass.movilidad.EmergenciaSolicitada,
       # com.citypass.reclamos.ReclamoCreado.v3 y ...ReclamoActualizado). Se
