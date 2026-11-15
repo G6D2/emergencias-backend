@@ -54,8 +54,8 @@ services:
       - key: IDP_CLOCK_TOLERANCE_SECONDS
         sync: false
       # El grupo LDAP del dispatcher (`dispatcher`) ya está en el mapa por
-      # default: no hizo falta IDP_GROUP_MAP. Todavía no hay usuarios LDAP de
-      # oficial; cuando existan: IDP_GROUP_MAP si el grupo tiene otro nombre e
+      # default: no hizo falta IDP_GROUP_MAP. El grupo LDAP de los oficiales
+      # (`poli`) también está en el default. Cada oficial LDAP necesita
       # IDP_SUB_ALIASES para llevar su sub al id del catálogo de oficiales.
       # - key: IDP_SUB_ALIASES
       #   value: '{"<sub-federado>":"of-001"}'
