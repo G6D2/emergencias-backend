@@ -12,6 +12,9 @@ info:
       (`OutboxPublisher`).
     - **Consume** `EventoComunitarioPublicado` y `EventoCancelado` de Espacios
       Públicos (cobertura preventiva, `src/listeners/cobertura-preventiva`).
+    - **Consume** `EmergenciaBicicleta` de Movilidad (asistencia durante un viaje,
+      `src/listeners/movilidad-bicicleta`), sin reemplazar `EmergenciaSolicitada`
+      (intervención por obstrucción de ciclovía).
 
     Sobre el bus los eventos viajan con el envelope `{ metadata, data }` que arma
     el gateway del Grupo 1 (Avro en formato Confluent, schema en
@@ -138,6 +141,18 @@ channels:
     messages:
       emergenciaSolicitada:
         $ref: '#/components/messages/EmergenciaSolicitada'
+
+  emergenciaBicicleta:
+    address: com.citypass.movilidad.EmergenciaBicicleta
+    title: EmergenciaBicicleta (Movilidad)
+    description: |
+      Pedido de asistencia durante un viaje en bicicleta pública. Se deduplica
+      por `data.emergenciaId`, que también se conserva como `correlationId` en
+      los eventos de Emergencias. `EmergenciaSolicitada` sigue siendo el flujo
+      independiente para obstrucciones de ciclovía.
+    messages:
+      emergenciaBicicleta:
+        $ref: '#/channels/emergenciaBicicleta/messages/emergenciaBicicleta'
 
   reclamoCreado:
     address: com.citypass.reclamos.ReclamoCreado.v3
@@ -268,6 +283,22 @@ operations:
           const: com.citypass.emergencias.EmergenciaSolicitadaListener
     messages:
       - $ref: '#/channels/emergenciaSolicitada/messages/emergenciaSolicitada'
+
+  recibirEmergenciaBicicleta:
+    action: receive
+    channel:
+      $ref: '#/channels/emergenciaBicicleta'
+    summary: |
+      Crea una emergencia externa `MEDICA` en `PENDING`, con prioridad derivada
+      de P1-P4. Una sola por `data.emergenciaId`, que vuelve como `correlationId`
+      en `EmergenciaCreada` y cada `EmergenciaActualizada`.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.EmergenciaBicicletaListener
+    messages:
+      - $ref: '#/channels/emergenciaBicicleta/messages/emergenciaBicicleta'
 
   recibirReclamoCreado:
     action: receive
@@ -487,6 +518,53 @@ components:
             $ref: '#/components/schemas/Metadata'
           data:
             $ref: '#/components/schemas/EmergenciaSolicitadaData'
+
+    EmergenciaBicicleta:
+      name: EmergenciaBicicleta
+      title: Emergencia de bicicleta pública
+      contentType: application/json
+      description: Producido por Movilidad; los datos personales del usuario no se persisten.
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/EmergenciaBicicletaData'
+      examples:
+        - name: pedidoDeAsistencia
+          payload:
+            metadata:
+              eventId: 3c5a5f2d-7642-4939-ae7e-17b6e2973a65
+              eventType: com.citypass.movilidad.EmergenciaBicicleta
+              source: com.citypass.movilidad
+            data:
+              emergenciaId: EMG-20261115-12345
+              actorSub: usuario-demo
+              reportadaEn: 1763218800000
+              ubicacion:
+                latitud: -34.6037
+                longitud: -58.3816
+                precisionMetros: 12.5
+              triage:
+                respondido: true
+                puedeMoverse: false
+                estaSangrando: true
+                vehiculoInvolucrado: true
+                prioridadSugerida: P1
+              viaje:
+                viajeId: 101
+                iniciadoEn: 1763217900000
+                estacionOrigenId: 7
+                estacionOrigenNombre: Estación Ejemplo
+                bicicletaId: 55
+                bicicletaCodigo: BIKE-0055
+              usuario:
+                usuarioId: 42
+                nombre: Usuario
+                apellido: Demo
+                email: demo@example.invalid
 
     ReclamoCreado:
       name: ReclamoCreado
@@ -997,3 +1075,84 @@ components:
         solicitadoAt:
           type: integer
           description: Epoch en milisegundos.
+
+    EmergenciaBicicletaData:
+      type: object
+      additionalProperties: false
+      required: [emergenciaId, reportadaEn, ubicacion, triage, viaje, usuario]
+      properties:
+        emergenciaId:
+          type: string
+          minLength: 1
+          description: ID externo que se usa para deduplicar y como correlationId de Emergencias.
+        actorSub:
+          type: [string, 'null']
+          description: No se persiste ni se usa como ciudadano interno.
+        reportadaEn:
+          type: integer
+          description: Epoch en milisegundos.
+        ubicacion:
+          type: object
+          additionalProperties: false
+          required: [latitud, longitud]
+          properties:
+            latitud:
+              type: number
+              minimum: -90
+              maximum: 90
+            longitud:
+              type: number
+              minimum: -180
+              maximum: 180
+            precisionMetros:
+              type: [number, 'null']
+              minimum: 0
+        triage:
+          type: object
+          additionalProperties: false
+          required: [respondido, prioridadSugerida]
+          properties:
+            respondido:
+              type: boolean
+            puedeMoverse:
+              type: [boolean, 'null']
+            estaSangrando:
+              type: [boolean, 'null']
+            vehiculoInvolucrado:
+              type: [boolean, 'null']
+            prioridadSugerida:
+              type: string
+              enum: [P1, P2, P3, P4]
+        viaje:
+          type: object
+          additionalProperties: false
+          required: [viajeId, iniciadoEn, estacionOrigenId, estacionOrigenNombre, bicicletaId, bicicletaCodigo]
+          properties:
+            viajeId:
+              type: integer
+            iniciadoEn:
+              type: integer
+              description: Epoch en milisegundos.
+            estacionOrigenId:
+              type: integer
+            estacionOrigenNombre:
+              type: string
+            bicicletaId:
+              type: integer
+            bicicletaCodigo:
+              type: string
+        usuario:
+          type: object
+          additionalProperties: false
+          description: Se recibe según el schema de Movilidad, pero sus datos personales no se persisten.
+          required: [usuarioId, nombre, apellido, email]
+          properties:
+            usuarioId:
+              type: integer
+            nombre:
+              type: string
+            apellido:
+              type: string
+            email:
+              type: string
+              format: email

@@ -44,6 +44,12 @@ listeners/
    (outbox e historial incluidos), nunca con SQL directo sobre `emergencies`.
    Los handlers se registran en `src/index.js`.
 
+`EmergenciaBicicleta` de Movilidad tiene un listener independiente de
+`EmergenciaSolicitada`: crea una emergencia médica por `data.emergenciaId`,
+deduplica además por la causa única `MOVILIDAD_BICICLETA`, y conserva ese ID
+externo como `correlationId`. Los campos personales de `data.usuario` y
+`actorSub` no se persisten.
+
 ## Errores
 
 `error-classifier.js` decide:
