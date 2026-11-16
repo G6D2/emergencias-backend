@@ -15,22 +15,4 @@ const GROUPS = {
   DELEGATE: 'delegado',
 };
 
-/**
- * Mapa grupo → permisos del módulo. Grupo desconocido no otorga nada.
- */
-const GROUP_PERMISSIONS = {
-  [GROUPS.CITIZEN]: [
-    'panic-button:create',
-    'emergency:read-own',
-    'emergency:cancel-own',
-  ],
-  [GROUPS.DISPATCHER]: [
-    'emergency:read-all',
-  ],
-  [GROUPS.OFFICER]: [
-    'emergency:update-status-assigned',
-  ],
-  [GROUPS.DELEGATE]: [],
-};
-
-module.exports = { GROUPS, GROUP_PERMISSIONS };
+module.exports = { GROUPS };

@@ -17,7 +17,7 @@ const { resolveCorsOrigins } = require('./security/cors');
 const { kafkaHealth } = require('./services/kafka.service');
 
 /**
- * @param {object} kafkaService
+ * @param {object} kafkaService - solo para GET /health (kafkaHealth)
  * @param {object} emergencyRepository
  * @param {{
  *   authenticate?: import('express').RequestHandler,
@@ -83,11 +83,8 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   });
 
   app.use('/api/user', createUserRoutes(authenticate));
-  app.use('/api/panic-button', createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate));
-  app.use(
-    '/api/emergencies',
-    createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate)
-  );
+  app.use('/api/panic-button', createPanicButtonRoutes(emergencyRepository, authenticate));
+  app.use('/api/emergencies', createEmergenciesRoutes(emergencyRepository, authenticate));
   app.use('/api/outbox-events', createOutboxRoutes(emergencyRepository, authenticate));
   if (officerRepository) {
     app.use('/api/officers', createOfficerRoutes(officerRepository, authenticate));

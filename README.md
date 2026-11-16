@@ -676,7 +676,7 @@ src/
 │   ├── dev-login-policy.js       # Allowlist de /auth/dev/login (DEV_LOGIN_STRICT)
 │   ├── federated-claims.js       # IDP_GROUP_MAP e IDP_SUB_ALIASES (hybrid)
 │   ├── federated-verifier.js     # verify() RS256 de tokens del Login Federado (hybrid)
-│   ├── groups.js                 # citizen / dispatcher / officer / delegado + permisos
+│   ├── groups.js                 # citizen / dispatcher / officer / delegado
 │   ├── hybrid-verifier.js        # Elige verifier local o federado según el iss
 │   ├── jwt-verifier.js           # verify() RS256 + claims CityPass+ (tokens locales e idp)
 │   ├── local-keys.js             # RSA local (AUTH_MODE=local y hybrid)
@@ -691,7 +691,6 @@ src/
 │   ├── panic-button.controller.js
 │   └── user.controller.js
 ├── db/
-│   ├── connection.js             # Reexporta pool.js (compat)
 │   └── pool.js                   # Pool de pg: max, timeouts y SSL configurables
 ├── domain/
 │   ├── emergency-status.js       # Máquina de estados (transiciones válidas)

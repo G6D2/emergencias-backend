@@ -290,13 +290,6 @@ describe('EmergencyRepository lecturas', () => {
     expect(await repo.findById('missing')).toBeNull();
   });
 
-  it('findAll mapea todas las filas', async () => {
-    const pool = createPool({ query: async () => ({ rows: [{ id: 'e-1' }, { id: 'e-2' }] }) });
-    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
-    const all = await repo.findAll();
-    expect(all.map((e) => e.id)).toEqual(['e-1', 'e-2']);
-  });
-
   it('findHistoryByEmergencyId mapea el historial', async () => {
     const pool = createPool({
       query: async () => ({ rows: [{ id: 1, emergency_id: 'e-1', previous_status: 'PENDING', new_status: 'VALIDATED' }] }),
@@ -453,13 +446,6 @@ describe('EmergencyRepository lecturas', () => {
     const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
     const audit = await repo.recordAccess({ emergencyId: 'e-1', actorSub: 'sub-1', action: 'view' });
     expect(audit.actorSub).toBe('sub-1');
-  });
-
-  it('findAccessAuditByEmergencyId mapea filas', async () => {
-    const pool = createPool({ query: async () => ({ rows: [{ id: 1, emergency_id: 'e-1', actor_sub: 's', action: 'view' }] }) });
-    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
-    const audits = await repo.findAccessAuditByEmergencyId('e-1');
-    expect(audits).toHaveLength(1);
   });
 });
 

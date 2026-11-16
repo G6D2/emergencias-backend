@@ -9,9 +9,9 @@ const {
   requireCitizenDispatcherOrOfficer,
 } = require('../auth/authorize');
 
-function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
+function createEmergenciesRoutes(emergencyRepository, authenticate) {
   const router = express.Router();
-  const controller = new EmergencyController(kafkaService, emergencyRepository);
+  const controller = new EmergencyController(emergencyRepository);
 
   /**
    * @openapi

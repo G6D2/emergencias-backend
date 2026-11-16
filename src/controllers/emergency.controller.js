@@ -56,8 +56,7 @@ function withoutOperationalFields({ incident, effectivePriority, dispatchPriorit
 }
 
 class EmergencyController {
-  constructor(kafkaService, emergencyRepository) {
-    this.kafkaService = kafkaService;
+  constructor(emergencyRepository) {
     this.emergencyRepository = emergencyRepository;
   }
 

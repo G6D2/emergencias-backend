@@ -12,7 +12,7 @@ const { randomUUID } = require('crypto');
 const { getPool } = require('../../db/pool');
 const { EmergencyRepository } = require('../../repositories/emergency.repository');
 const { EventosProcesadosRepository } = require('../../repositories/eventos-procesados.repository');
-const { ContextoZonaRepository } = require('../../repositories/contexto-zona.repository');
+const { ContextoZonaRepository, mapContextoZona } = require('../../repositories/contexto-zona.repository');
 const { OutcomeFactory } = require('../../listeners/outcome-factory');
 const { EventoComunitarioPublicadoListener } = require('../../listeners/cobertura-preventiva/evento-comunitario-publicado/evento-comunitario-publicado.listener');
 const { EventoCanceladoListener } = require('../../listeners/cobertura-preventiva/evento-cancelado/evento-cancelado.listener');
@@ -99,11 +99,12 @@ async function detalle(id) {
 }
 
 async function contextoDe(eventoId) {
-  return contextoZonaRepository.findByReferencia(null, {
-    tipo: 'EVENTO_ESPACIO_PUBLICO',
-    origen: 'espacios',
-    referenciaExterna: eventoId,
-  });
+  const { rows } = await pool.query(
+    `SELECT * FROM contexto_zona
+     WHERE tipo = $1 AND origen = $2 AND referencia_externa = $3`,
+    ['EVENTO_ESPACIO_PUBLICO', 'espacios', eventoId]
+  );
+  return mapContextoZona(rows[0]);
 }
 
 async function limpiarContextos() {

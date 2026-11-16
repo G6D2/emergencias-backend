@@ -180,33 +180,7 @@ describe('CitizenProfileRepository retention methods', () => {
   });
 });
 
-describe('AuthUserRepository findById', () => {
-  it('returns mapped user or null', async () => {
-    const repo = new AuthUserRepository({
-      query: async (_sql, params) => {
-        if (params[0] === 'missing') return { rows: [], rowCount: 0 };
-        return {
-          rows: [{
-            id: params[0],
-            email: 'a@b.com',
-            display_name: 'A',
-            groups: ['citizen'],
-            has_antipanic_button: false,
-            created_at: 't',
-            updated_at: 't',
-          }],
-          rowCount: 1,
-        };
-      },
-    });
-    expect(await repo.findById('missing')).toBeNull();
-    await expect(repo.findById('id-1')).resolves.toMatchObject({
-      id: 'id-1',
-      email: 'a@b.com',
-      displayName: 'A',
-    });
-  });
-
+describe('AuthUserRepository', () => {
   it('requires a pool', () => {
     expect(() => new AuthUserRepository(null)).toThrow(/pool/);
   });

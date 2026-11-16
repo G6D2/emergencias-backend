@@ -4,14 +4,6 @@ function isValidSeverity(value) {
   return typeof value === 'string' && SEVERITY_LEVELS.includes(value);
 }
 
-function normalizeSeverity(value, defaultValue = 'critical') {
-  const severity = value === undefined ? defaultValue : value;
-  if (!isValidSeverity(severity)) {
-    return null;
-  }
-  return severity;
-}
-
 function compareSeverity(left, right) {
   return SEVERITY_LEVELS.indexOf(left) - SEVERITY_LEVELS.indexOf(right);
 }
@@ -77,7 +69,6 @@ function dispatchPriority(priority, hasZoneContext) {
 module.exports = {
   SEVERITY_LEVELS,
   isValidSeverity,
-  normalizeSeverity,
   compareSeverity,
   SEVERITY_BY_TYPE,
   severityForType,
