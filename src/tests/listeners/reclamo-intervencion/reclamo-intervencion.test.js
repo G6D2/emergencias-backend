@@ -66,13 +66,11 @@ describe('listeners/reclamo-intervencion', () => {
     expect(new ReclamoActualizadoListener(kafka).topic).toBe('otro.ReclamoActualizado');
   });
 
-  it('son EventListener con group.id propio y reglas en su carpeta', () => {
+  it('son EventListener con reglas en su carpeta', () => {
     const base = path.join(__dirname, '../../../listeners/reclamo-intervencion');
     const creado = new ReclamoCreadoListener(kafka);
     const actualizado = new ReclamoActualizadoListener(kafka);
     expect(creado).toBeInstanceOf(EventListener);
-    expect(creado.groupId).toBe('com.citypass.emergencias.ReclamoCreadoListener');
-    expect(actualizado.groupId).toBe('com.citypass.emergencias.ReclamoActualizadoListener');
     expect(creado.rulesDir).toBe(path.join(base, 'reclamo-creado', 'rules'));
     expect(actualizado.rulesDir).toBe(path.join(base, 'reclamo-actualizado', 'rules'));
     expect(creado.rules().map((r) => r.constructor)).toEqual([CrearIntervencionPorReclamoRule]);
@@ -80,7 +78,6 @@ describe('listeners/reclamo-intervencion', () => {
 
     const solicitada = new EmergenciaSolicitadaListener(kafka);
     expect(solicitada).toBeInstanceOf(EventListener);
-    expect(solicitada.groupId).toBe('com.citypass.emergencias.EmergenciaSolicitadaListener');
     expect(solicitada.rulesDir).toBe(path.join(base, 'emergencia-solicitada', 'rules'));
     expect(solicitada.rules().map((r) => r.constructor)).toEqual([CrearIntervencionPorSolicitudRule]);
   });

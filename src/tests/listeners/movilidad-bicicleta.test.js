@@ -54,12 +54,11 @@ describe('listener EmergenciaBicicleta', () => {
     ]));
   });
 
-  it('usa el topic y grupo propios y carga su regla', () => {
+  it('usa su topic propio y carga su regla', () => {
     delete process.env.EDA_TOPIC_EMERGENCIA_BICICLETA;
     const listener = new EmergenciaBicicletaListener(kafka);
     expect(listener).toBeInstanceOf(EventListener);
     expect(listener.topic).toBe('com.citypass.movilidad.EmergenciaBicicleta');
-    expect(listener.groupId).toBe('com.citypass.emergencias.EmergenciaBicicletaListener');
     expect(listener.rulesDir).toBe(path.join(
       __dirname,
       '../../listeners/movilidad-bicicleta/emergencia-bicicleta/rules'

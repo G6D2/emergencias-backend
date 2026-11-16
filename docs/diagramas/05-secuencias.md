@@ -211,7 +211,7 @@ sequenceDiagram
     participant DB as Neon Postgres
 
     Esp->>Bus: EventoComunitarioPublicado (Avro)
-    Bus->>L: mensaje (consumer group com.citypass.emergencias.EventoComunitarioPublicadoListener)
+    Bus->>L: mensaje (consumer group com.citypass.emergencias.eventos, vía EventConsumer)
     L->>Bus: decode: schema por id (Bearer del Login Federado)
     L->>L: regla ProgramarCoberturaPreventivaRule: capacidad >= 500 y estado != CANCELLED
     alt la regla no aplica
