@@ -10,8 +10,8 @@ info:
       el issue #48 de `G6D2/demo-repository`, 2026-11-02). Los arma
       `src/services/emergency-events.js` y salen por el outbox transaccional
       (`OutboxPublisher`).
-    - **Consume** `EventoComunitarioPublicado` y `EventoCancelado` de Espacios
-      Públicos (cobertura preventiva, `src/listeners/cobertura-preventiva`).
+    - **Consume** `EventoComunitarioPublicado`, `EventoCancelado` y `ReservaCreada`
+      de Espacios Públicos (cobertura preventiva, `src/listeners/cobertura-preventiva`).
     - **Consume** `EmergenciaBicicleta` de Movilidad (asistencia durante un viaje,
       `src/listeners/movilidad-bicicleta`), sin reemplazar `EmergenciaSolicitada`
       (intervención por obstrucción de ciclovía).
@@ -131,6 +131,17 @@ channels:
     messages:
       eventoCancelado:
         $ref: '#/components/messages/EventoCancelado'
+
+  reservaCreada:
+    address: com.citypass.espacios.ReservaCreada
+    title: ReservaCreada (Espacios Públicos)
+    description: |
+      Opt-in: solo se consume con `EDA_TOPIC_RESERVA_CREADA` cargada (no tiene
+      default). Espacios lo publica al reservar un espacio o inscribirse a un
+      evento.
+    messages:
+      reservaCreada:
+        $ref: '#/components/messages/ReservaCreada'
 
   emergenciaSolicitada:
     address: com.citypass.movilidad.EmergenciaSolicitada
@@ -267,6 +278,23 @@ operations:
           const: com.citypass.emergencias.EventoCanceladoListener
     messages:
       - $ref: '#/channels/eventoCancelado/messages/eventoCancelado'
+
+  recibirReservaCreada:
+    action: receive
+    channel:
+      $ref: '#/channels/reservaCreada'
+    summary: |
+      Programa una cobertura preventiva (`PREVENTIVA`, causa `RESERVA`, `causaId` =
+      `reservaId`) para una reserva de espacio (`tipoReserva = ESPACIO`) de
+      `UMBRAL_PERSONAS_COBERTURA_RESERVA` personas o más (default 500) que no
+      terminó. Una sola por reserva.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.ReservaCreadaListener
+    messages:
+      - $ref: '#/channels/reservaCreada/messages/reservaCreada'
 
   recibirEmergenciaSolicitada:
     action: receive
@@ -505,6 +533,22 @@ components:
             $ref: '#/components/schemas/Metadata'
           data:
             $ref: '#/components/schemas/EventoCanceladoData'
+
+    ReservaCreada:
+      name: ReservaCreada
+      title: Reserva de espacio o inscripción creada
+      contentType: application/json
+      description: |
+        Producido por Espacios Públicos. Solo se documentan los campos que lee
+        `ProgramarCoberturaReservaRule`; el resto se ignora.
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/ReservaCreadaData'
 
     EmergenciaSolicitada:
       name: EmergenciaSolicitada
@@ -989,6 +1033,37 @@ components:
           type: string
         canceladoEn:
           $ref: '#/components/schemas/Timestamp'
+
+    ReservaCreadaData:
+      type: object
+      additionalProperties: true
+      required: [reservaId, tipoReserva, cantidadPersonas]
+      properties:
+        reservaId:
+          type: string
+          minLength: 1
+        tipoReserva:
+          type: string
+          enum: [ESPACIO, EVENTO]
+          description: Solo `ESPACIO` programa cobertura; las inscripciones las cubre `EVENTO_PUBLICO`.
+        categoria:
+          type: [string, 'null']
+          description: Categoría del espacio (`PLAZA`, `SALON`, ...). Va en la descripción de la emergencia.
+        zona:
+          type: [string, 'null']
+          description: Texto libre. Solo se usa sin coordenadas, si coincide con un barrio de CABA.
+        latitud:
+          type: [number, 'null']
+        longitud:
+          type: [number, 'null']
+        fechaFin:
+          type: string
+          description: ISO 8601. Una reserva que ya terminó no programa cobertura.
+        cantidadPersonas:
+          type: integer
+        correlationId:
+          type: string
+          description: En Espacios es el mismo `reservaId` (no UUID).
 
     ReclamoCreadoData:
       type: object

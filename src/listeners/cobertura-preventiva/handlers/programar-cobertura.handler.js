@@ -6,6 +6,9 @@ const { severityForType } = require('../../../domain/severity');
 
 const PROGRAMAR_COBERTURA = 'ProgramarCobertura';
 const CAUSA_TIPO = 'EVENTO_PUBLICO';
+// Causas que puede pedir la regla: EVENTO_PUBLICO (evento comunitario, default)
+// o RESERVA (reserva grande de un espacio, ReservaCreada).
+const CAUSAS_PERMITIDAS = new Set([CAUSA_TIPO, 'RESERVA']);
 const EMERGENCY_TYPE = 'PREVENTIVA';
 const MAX_DESCRIPTION_LENGTH = 200;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -17,7 +20,9 @@ function emergenciaCreadaTopic() {
 }
 
 // Crea una emergencia PREVENTIVA de origen externo para un evento comunitario
-// de Espacios que superó el umbral de capacidad.
+// o una reserva de espacio de Espacios que superó el umbral de personas.
+// `eventoId` es el id de la causa (eventoId o reservaId) y `causaTipo` dice
+// cuál (default EVENTO_PUBLICO).
 //
 // Corre dentro de la transacción del OutcomeFactory (recibe `client`) y pasa
 // por el repositorio, igual que un alta normal: INSERT + EmergenciaCreada en
@@ -34,14 +39,18 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
   return async function programarCobertura(client, payload) {
     const { eventoId, titulo, latitud, longitud, direccion, barrio, capacidad, correlationId } = payload || {};
     if (!eventoId) throw new ValidationError('ProgramarCobertura requiere eventoId');
+    const causaTipo = payload.causaTipo ?? CAUSA_TIPO;
+    if (!CAUSAS_PERMITIDAS.has(causaTipo)) {
+      throw new ValidationError(`ProgramarCobertura no admite causaTipo ${causaTipo}`);
+    }
 
     const existing = await emergencyRepository.findByCausa(client, {
-      causaTipo: CAUSA_TIPO,
+      causaTipo,
       causaId: eventoId,
       emergencyType: EMERGENCY_TYPE,
     });
     if (existing.length > 0) {
-      secureLog('info', 'Cobertura preventiva ya programada', { eventoId, emergencyId: existing[0].id });
+      secureLog('info', 'Cobertura preventiva ya programada', { eventoId, causaTipo, emergencyId: existing[0].id });
       return { emergencyId: existing[0].id, created: false };
     }
 
@@ -69,7 +78,7 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
       status: 'PENDING',
       source: 'EXTERNAL',
       requiresManualValidation: !hasLocation,
-      causaTipo: CAUSA_TIPO,
+      causaTipo,
       causaId: eventoId,
       outboxEvent: {
         topic,
@@ -80,6 +89,7 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
     secureLog('info', 'Cobertura preventiva programada', {
       emergencyId,
       eventoId,
+      causaTipo,
       requiresManual: !hasLocation,
     });
 
