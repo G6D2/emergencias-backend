@@ -111,7 +111,7 @@ class AuthController {
     // Se pide siempre, exista o no el correo: el costo de calcularlo (solo en
     // el primer login) no tiene que delatar si la cuenta existe.
     const dummyHash = await getDummyPasswordHash();
-    const passwordHash = (found && found.passwordHash) || dummyHash;
+    const passwordHash = found?.passwordHash || dummyHash;
     const ok = await this.authUserRepository.verifyPassword(passwordHash, password);
     if (!found || !ok) {
       throw new UnauthorizedError('Correo o contraseña incorrectos.');
