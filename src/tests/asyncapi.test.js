@@ -18,6 +18,7 @@ const { EMERGENCY_TYPES } = require('../domain/emergency-type');
 const { ProgramarCoberturaPreventivaRule } = require('../listeners/cobertura-preventiva/evento-comunitario-publicado/rules/01-programar-cobertura.rule');
 const { ProgramarCoberturaActividadRule } = require('../listeners/cobertura-preventiva/actividad-creada/rules/01-programar-cobertura.rule');
 const { CrearEmergenciaBicicletaRule } = require('../listeners/movilidad-bicicleta/emergencia-bicicleta/rules/01-crear-emergencia-bicicleta.rule');
+const { ProgramarCoberturaReservaRule } = require('../listeners/cobertura-preventiva/reserva-creada/rules/01-programar-cobertura-reserva.rule');
 
 const SPEC_PATH = path.join(__dirname, '..', '..', 'asyncapi.yaml');
 
@@ -57,7 +58,7 @@ describe('asyncapi.yaml', () => {
       'recibirEventoComunitarioPublicado', 'recibirEventoCancelado',
       'recibirReclamoCreado', 'recibirReclamoActualizado', 'recibirEmergenciaSolicitada',
       'recibirActividadCreada',
-      'recibirEmergenciaBicicleta',
+      'recibirEmergenciaBicicleta', 'recibirReservaCreada',
     ]));
   });
 
@@ -180,6 +181,29 @@ describe('asyncapi.yaml', () => {
       expect(validate('ActividadCreadaData', data)).toBe(true);
       expect(new ProgramarCoberturaActividadRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
       expect(() => validate('ActividadCreadaData', { titulo: 'sin id' })).toThrow();
+    });
+
+    it('un ReservaCreada válido según el spec dispara la regla de reserva', () => {
+      const data = {
+        reservaId: 'res-1',
+        tipoReserva: 'ESPACIO',
+        recursoId: 'esp-1',
+        espacioId: 'esp-1',
+        categoria: 'PLAZA',
+        zona: 'Palermo',
+        latitud: -34.58,
+        longitud: -58.42,
+        fechaHora: '2099-01-01T18:00:00Z',
+        fechaFin: '2099-01-01T23:00:00Z',
+        cantidadPersonas: 800,
+        cupoMaximo: 1000,
+        organizadorId: null,
+        createdAt: '2026-11-16T12:00:00Z',
+        correlationId: 'res-1',
+      };
+      expect(validate('ReservaCreadaData', data)).toBe(true);
+      expect(new ProgramarCoberturaReservaRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
+      expect(() => validate('ReservaCreadaData', { ...data, tipoReserva: 'OTRO' })).toThrow();
     });
 
     it('EventoCancelado requiere eventoId', () => {

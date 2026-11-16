@@ -6,6 +6,7 @@ const {
   EventoComunitarioPublicadoListener,
   EventoCanceladoListener,
   ActividadCreadaListener,
+  ReservaCreadaListener,
 } = require('../../../listeners/cobertura-preventiva');
 
 const kafka = { consumer: jest.fn() };
@@ -114,6 +115,38 @@ describe('listeners/cobertura-preventiva', () => {
   it('ActividadCreadaListener no dispara por debajo del umbral de 500', async () => {
     const evento = { metadata: { eventId: 'e5' }, data: { actividadId: 'act-2', capacidad: 499 } };
     await expect(new ActividadCreadaListener(kafka).handle(evento)).resolves.toEqual([]);
+  });
+
+  it('ReservaCreadaListener es opt-in: sin EDA_TOPIC_RESERVA_CREADA no tiene topic', () => {
+    delete process.env.EDA_TOPIC_RESERVA_CREADA;
+    expect(new ReservaCreadaListener(kafka).topic).toBeUndefined();
+    process.env.EDA_TOPIC_RESERVA_CREADA = 'com.citypass.espacios.ReservaCreada';
+    expect(new ReservaCreadaListener(kafka).topic).toBe('com.citypass.espacios.ReservaCreada');
+  });
+
+  it('createListeners incluye ReservaCreadaListener con sus reglas', () => {
+    const path = require('path');
+    const listener = createListeners(kafka).find((l) => l instanceof ReservaCreadaListener);
+    expect(listener).toBeDefined();
+    expect(listener.rulesDir).toBe(path.join(__dirname, '../../../listeners/cobertura-preventiva', 'reserva-creada', 'rules'));
+  });
+
+  it('ReservaCreadaListener dispara ProgramarCobertura con causa RESERVA para una reserva grande de espacio', async () => {
+    const evento = {
+      metadata: { eventId: 'e4' },
+      data: { reservaId: 'res-1', tipoReserva: 'ESPACIO', cantidadPersonas: 600, categoria: 'PLAZA' },
+    };
+    const outcomes = await new ReservaCreadaListener(kafka).handle(evento);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ type: 'ProgramarCobertura', payload: { eventoId: 'res-1', causaTipo: 'RESERVA' } });
+  });
+
+  it('ReservaCreadaListener no dispara para una inscripcion a un evento', async () => {
+    const evento = {
+      metadata: { eventId: 'e5' },
+      data: { reservaId: 'res-2', tipoReserva: 'EVENTO', cantidadPersonas: 600 },
+    };
+    await expect(new ReservaCreadaListener(kafka).handle(evento)).resolves.toEqual([]);
   });
 
   it('options.topic pisa el del env', () => {
