@@ -43,6 +43,29 @@ function pendingPreventiveCoverageSql(hoursParam) {
          )`;
 }
 
+// Una fila con ubicación indescifrable se avisa una sola vez por emergencia
+// mientras viva el proceso: el front consulta el listado cada 30 s y cada
+// consulta repetía el mismo warn por cada fila. El conjunto está acotado; al
+// llenarse se olvida el id más viejo (que, si sigue apareciendo, vuelve a
+// avisar una vez).
+const MAX_UNDECRYPTABLE_WARNED_IDS = 1000;
+const undecryptableWarnedIds = new Set();
+
+function warnUndecryptableLocationOnce(emergencyId, error) {
+  if (undecryptableWarnedIds.has(emergencyId)) return;
+
+  if (undecryptableWarnedIds.size >= MAX_UNDECRYPTABLE_WARNED_IDS) {
+    // Un Set itera en orden de inserción: el primero es el más viejo.
+    undecryptableWarnedIds.delete(undecryptableWarnedIds.values().next().value);
+  }
+  undecryptableWarnedIds.add(emergencyId);
+
+  secureLog('warn', 'Location ciphertext could not be decrypted', {
+    emergencyId,
+    message: error.message,
+  });
+}
+
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
 function mapEmergency(row, locationCrypto) {
@@ -66,12 +89,10 @@ function mapEmergency(row, locationCrypto) {
     } catch (error) {
       // Una fila cifrada con otra clave (p. ej. insertada desde un entorno
       // local contra la base compartida) no puede tumbar todo el listado:
-      // se devuelve sin ubicación y se deja constancia para saneamiento.
+      // se devuelve sin ubicación y se deja constancia para saneamiento
+      // (una vez por emergencia, ver warnUndecryptableLocationOnce).
       locationUnavailable = true;
-      secureLog('warn', 'Location ciphertext could not be decrypted', {
-        emergencyId: row.id,
-        message: error.message,
-      });
+      warnUndecryptableLocationOnce(row.id, error);
     }
   } else if (!locationAnonymized && row.latitude != null && row.longitude != null) {
     // Filas legacy (pre-V3) aún en claro hasta retención o re-escritura.

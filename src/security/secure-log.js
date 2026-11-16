@@ -61,7 +61,22 @@ function summarizeEventForLog(topic, value) {
   };
 }
 
+// Nivel mínimo que se escribe: LOG_LEVEL = debug | info | warn | error (sin
+// importar mayúsculas). Por defecto info: los 'debug' no salen. Un valor que
+// no es ninguno de los cuatro cae a info, así una variable mal escrita no deja
+// al servicio sin logs ni lo llena de ruido. Un mensaje con un nivel
+// desconocido se trata como info.
+const LOG_LEVELS = new Map([['debug', 10], ['info', 20], ['warn', 30], ['error', 40]]);
+const DEFAULT_LOG_LEVEL = 'info';
+
+function levelRank(level) {
+  const name = typeof level === 'string' ? level.trim().toLowerCase() : '';
+  return LOG_LEVELS.get(name) ?? LOG_LEVELS.get(DEFAULT_LOG_LEVEL);
+}
+
 function secureLog(level, message, meta) {
+  if (levelRank(level) < levelRank(process.env.LOG_LEVEL)) return;
+
   const payload = meta === undefined ? '' : ` ${JSON.stringify(redactObject(meta))}`;
   if (level === 'error') {
     console.error(`${message}${payload}`);

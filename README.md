@@ -395,10 +395,12 @@ Una **cobertura preventiva** no expira mientras su evento no terminó: se progra
 
 Al desplegarlo por primera vez expira de una pasada (hasta 100 por corrida) todo lo que ya esté vencido. Se apaga con `EMERGENCY_EXPIRATION_ENABLED=false`.
 
-Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
+Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id (una sola vez por emergencia mientras viva el proceso, no en cada consulta). Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
 ### Logs seguros
 No se loguean JWT ni coordenadas. Los eventos se loguean solo como resumen (`topic`, `type`, ids, `hasLocation`), nunca el payload.
+
+`LOG_LEVEL` fija el nivel mínimo que se escribe: `debug`, `info`, `warn` o `error`. Por defecto es `info` (los mensajes de `debug` no salen) y un valor inválido también cae a `info`.
 
 Un token rechazado responde siempre `401 Invalid or expired token`, sin contarle la causa al cliente. La causa queda en un `warn` `Token rechazado` con quién lo rechazó (`verifier`: `local`, `federated`, `idp`, `hybrid` o `authenticate`) y el `code` y `name` del error, sin el token ni sus claims. `ERR_JWT_EXPIRED` es un token vencido. Con `verifier: "federated"`, un `ERR_JWKS_TIMEOUT`, un `ERR_JOSE_GENERIC` o un código de red (`ECONNREFUSED`, `ENOTFOUND`) dicen que no se pudo leer el JWKS del Login Federado: el problema es del proveedor de identidad, no de los tokens.
 
