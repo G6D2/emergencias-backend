@@ -3,7 +3,7 @@
 Para qué sirve: reflejar exactamente las transiciones declaradas en
 `src/domain/emergency-status.js` (única fuente de verdad, usada por los controllers y por el
 repository como defensa en profundidad con `FOR UPDATE`) y qué endpoint dispara cada una. Hoy
-todas las transiciones tienen endpoint.
+todas las transiciones tienen endpoint, salvo las de expiración, que solo dispara el sistema.
 
 ```mermaid
 stateDiagram-v2
@@ -40,6 +40,13 @@ stateDiagram-v2
         la cancela el listener cuando llega
         EventoCancelado de Espacios.
     end note
+
+    note right of CLOSED
+        Expiración (solo el sistema): una emergencia
+        abierta sin cambios de estado en 72 h pasa a
+        CLOSED si estaba RESOLVED y a CANCELLED desde
+        cualquier otro estado, y se anonimiza.
+    end note
 ```
 
 ## Estados y transiciones
@@ -59,6 +66,8 @@ stateDiagram-v2
 | `ON_SCENE` | `RESOLVED` | `PATCH /api/emergencies/:id/resolve` | `officer` asignado | `resueltoAt` en el evento; el oficial sigue `ocupado` |
 | `RESOLVED` | `CLOSED` | `PATCH /api/emergencies/:id/close` | `dispatcher` | `closed_at = now()`; el oficial vuelve a `disponible` |
 | `PENDING`, `VALIDATED` | `CANCELLED` | listener `EventoCancelado` | sistema (`eda:espacios`) | Solo coberturas `PREVENTIVA` de ese evento |
+| `PENDING`, `VALIDATED`, `DISPATCHED`, `EN_ROUTE`, `ON_SCENE` | `CANCELLED` | job de expiración | sistema (`sistema:expiracion`) | Sin cambios de estado en `EMERGENCY_EXPIRATION_HOURS` (72). Anonimiza la ubicación, `closed_at = now()`, libera al oficial |
+| `RESOLVED` | `CLOSED` | job de expiración | sistema (`sistema:expiracion`) | Igual que arriba: lo resuelto que nadie cerró se cierra solo |
 
 Cada transición escribe, en la misma transacción, una fila en `emergency_status_history`
 (`previous_status`, `new_status`, `actor` = `sub` del token, `reason`) y un evento

@@ -146,3 +146,32 @@ describe('Máquina de estados de emergencias', () => {
     });
   });
 });
+
+describe('expiración (solo sistema)', () => {
+  const { EXPIRATION_TARGETS, expirationTarget } = require('../domain/emergency-status');
+
+  it('toda emergencia abierta tiene un estado terminal al que expira', () => {
+    expect(Object.keys(EXPIRATION_TARGETS).sort()).toEqual([...ACTIVE_STATUSES].sort());
+    for (const status of ACTIVE_STATUSES) {
+      expect(TERMINAL_STATUSES).toContain(expirationTarget(status));
+    }
+  });
+
+  it('lo resuelto se cierra y todo lo demás se cancela', () => {
+    expect(expirationTarget('RESOLVED')).toBe('CLOSED');
+    for (const status of ['PENDING', 'VALIDATED', 'DISPATCHED', 'EN_ROUTE', 'ON_SCENE']) {
+      expect(expirationTarget(status)).toBe('CANCELLED');
+    }
+  });
+
+  it('un estado terminal o desconocido no expira', () => {
+    for (const status of [...TERMINAL_STATUSES, 'CREATED', null, undefined]) {
+      expect(expirationTarget(status)).toBeNull();
+    }
+  });
+
+  it('no abre atajos en los endpoints: cancelar lo despachado sigue sin ser una transición válida', () => {
+    expect(canTransition('DISPATCHED', 'CANCELLED')).toBe(false);
+    expect(canTransition('ON_SCENE', 'CANCELLED')).toBe(false);
+  });
+});

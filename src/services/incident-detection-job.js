@@ -1,4 +1,5 @@
 const { secureLog } = require('../security/secure-log');
+const { schedulePeriodicJob } = require('../utils/periodic-job');
 const { EMERGENCY_TYPES } = require('../domain/emergency-type');
 const { processEmergencyTypeCandidates } = require('../domain/incident-detector');
 
@@ -197,24 +198,7 @@ function startIncidentDetectionJob(emergencyRepository, incidentRepository, opti
   }
 
   // Primera pasada diferida para no bloquear el boot.
-  const initialTimeout = setTimeout(() => {
-    runOnce();
-  }, Math.min(intervalMs, 15_000));
-
-  const timer = setInterval(() => {
-    runOnce();
-  }, intervalMs);
-
-  if (typeof timer.unref === 'function') timer.unref();
-  if (typeof initialTimeout.unref === 'function') initialTimeout.unref();
-
-  return {
-    runOnce,
-    stop() {
-      clearTimeout(initialTimeout);
-      clearInterval(timer);
-    },
-  };
+  return schedulePeriodicJob(runOnce, { intervalMs });
 }
 
 module.exports = {

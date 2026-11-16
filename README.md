@@ -379,7 +379,21 @@ En `EmergenciaCreada`, las coordenadas exactas van **solo** en `data.ubicacion.*
 Guía **autocontenida** para mandar a otros equipos (sin depender del repo): **[docs/bus-ubicacion-para-consumidores.md](docs/bus-ubicacion-para-consumidores.md)**.
 
 ### Retención / minimización
-Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Emergencias abiertas (`closed_at` null) no se tocan. La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`. El **barrio** se conserva (y se deriva antes de borrar si faltaba). Al anonimizar también se ponen en `null`, en los payloads del outbox de esas emergencias, las coordenadas cifradas (`data.ubicacion.latitud`/`longitud`) y las aproximadas en claro de la raíz (`data.latitud`/`longitud`), y se borran sus vínculos con contextos de zona junto con los `EmergenciaVinculadaAContextoZona` que sigan en el outbox. Los eventos ya entregados al bus no se pueden borrar.
+Job en background (y `npm run security:anonymize-locations`) borra el ciphertext `LOCATION_RETENTION_HOURS` (default 72) **después de `closed_at`**. Las emergencias abiertas (`closed_at` null) no las toca este job: las alcanza la expiración (abajo). La fila sigue existiendo; `latitude`/`longitude` quedan `null` y `locationAnonymized: true`. El **barrio** se conserva (y se deriva antes de borrar si faltaba). Al anonimizar también se ponen en `null`, en los payloads del outbox de esas emergencias, las coordenadas cifradas (`data.ubicacion.latitud`/`longitud`) y las aproximadas en claro de la raíz (`data.latitud`/`longitud`), y se borran sus vínculos con contextos de zona junto con los `EmergenciaVinculadaAContextoZona` que sigan en el outbox. Los eventos ya entregados al bus no se pueden borrar.
+
+#### Expiración de emergencias abiertas
+
+Una emergencia que queda abierta no acumula ubicación para siempre. El job de expiración (cada hora, y a los 15 s de arrancar) toma las emergencias en un estado no terminal cuyo **último cambio de estado** tiene más de `EMERGENCY_EXPIRATION_HOURS` (por defecto `LOCATION_RETENTION_HOURS`, 72) y, en una transacción por emergencia:
+
+1. Anonimiza la ubicación igual que la retención (conserva el barrio).
+2. La pasa a un estado terminal: `RESOLVED` → `CLOSED`; `PENDING`, `VALIDATED`, `DISPATCHED`, `EN_ROUTE` y `ON_SCENE` → `CANCELLED`. Libera al oficial asignado.
+3. Deja historial con actor `sistema:expiracion` y motivo `Expirada: sin cambios de estado en N h`, y un `EmergenciaActualizada` en el outbox (`CERRADA` o `CANCELADA`, sin coordenadas) para que los otros módulos den de baja el incidente.
+
+La regla queda una sola: **la ubicación se conserva N horas desde el último cambio de estado**, esté la emergencia cerrada o no. El plazo se mide contra `emergency_status_history` (o la creación, si nunca cambió de estado), no contra `updated_at`. No hay estados nuevos ni cambios en el contrato del bus. Cancelar una emergencia ya despachada es una transición que solo tiene el sistema: los endpoints siguen sin poder hacerlo.
+
+Una **cobertura preventiva** no expira mientras su evento no terminó: se programa con días de anticipación, así que su plazo corre desde el fin del evento (`contexto_zona.vigente_hasta`) y no desde que se creó.
+
+Al desplegarlo por primera vez expira de una pasada (hasta 100 por corrida) todo lo que ya esté vencido. Se apaga con `EMERGENCY_EXPIRATION_ENABLED=false`.
 
 Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno local apuntando a la base compartida), el listado no falla: esa emergencia vuelve con `latitude`/`longitude` en `null` y `locationUnavailable: true`, y queda un `warn` en el log con su id. Para sanearlas: `npm run security:anonymize-undecryptable` (con `DATABASE_URL` y `LOCATION_ENCRYPTION_KEY` del entorno afectado).
 
@@ -403,6 +417,8 @@ Solo `GET /api/panic-button/:id` deja registro: después de autorizar la lectura
 | `BUS_LOCATION_ENCRYPTION_KEYS` / `BUS_LOCATION_ENCRYPTION_KEY_ID` | Keyring de bus (mismo formato que at-rest) |
 | `LOCATION_RETENTION_HOURS` | Horas tras el cierre (`closed_at`) antes de anonimizar (default 72) |
 | `LOCATION_RETENTION_ENABLED` | `false` para desactivar el job |
+| `EMERGENCY_EXPIRATION_HOURS` | Horas sin cambios de estado tras las que una emergencia abierta expira. Sin definir usa `LOCATION_RETENTION_HOURS` (72) |
+| `EMERGENCY_EXPIRATION_ENABLED` | `false` para desactivar la expiración |
 | `FORCE_HTTPS` | Forzar HTTPS aunque no sea production |
 | `CORS_ALLOWED_ORIGINS` | Origins permitidos (coma-separados). Sin ella: `http://localhost:3001` fuera de producción; en producción exige la variable y si falta cae a `https://frontend-krds.onrender.com` con un warn en el log (nunca refleja el origin del request) |
 | `DB_POOL_MAX` | Máximo de conexiones del pool de `pg` (default 10) |
