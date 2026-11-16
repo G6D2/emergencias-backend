@@ -1,4 +1,5 @@
 const { BusinessRule } = require('../../../business-rule');
+const { esEstadoCancelado } = require('../../../../domain/contexto-zona');
 
 const UMBRAL_DEFAULT = 500;
 
@@ -8,7 +9,9 @@ const UMBRAL_DEFAULT = 500;
 // Umbral: UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA (env), default 500.
 // Payload de Espacios (EventoComunitarioPublicado): eventoId, titulo,
 // latitud, longitud, direccion, capacidad (o cupoMaximo), estado y
-// correlationId. Un evento ya cancelado no programa nada.
+// correlationId. Un evento ya cancelado no programa nada: se reconoce con
+// esEstadoCancelado, igual que la regla 02 (CANCELLED, CANCELED, CANCELADO,
+// CANCELADA, sin importar mayúsculas ni espacios).
 class ProgramarCoberturaPreventivaRule extends BusinessRule {
   get umbral() {
     const v = Number(process.env.UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA || UMBRAL_DEFAULT);
@@ -22,7 +25,7 @@ class ProgramarCoberturaPreventivaRule extends BusinessRule {
   appliesTo(context) {
     const data = context.data || {};
     if (typeof data.eventoId !== 'string' || !data.eventoId) return false;
-    if (data.estado === 'CANCELLED') return false;
+    if (esEstadoCancelado(data.estado)) return false;
     const capacidad = this.capacidad(data);
     return Number.isFinite(capacidad) && capacidad >= this.umbral;
   }

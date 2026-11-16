@@ -20,6 +20,10 @@ services:
       # estricto, y AUTH_MODE=local pasa a exigir ALLOW_LOCAL_AUTH=true.
       - key: NODE_ENV
         sync: false
+      # Nivel mínimo de los logs (debug, info, warn, error). Sin esta variable
+      # vale el default del código: info, sin los mensajes de debug.
+      # - key: LOG_LEVEL
+      #   value: info
 
       # Neon (ver ADR "Elegir base de datos"): connection string *pooled* con
       # sslmode=require. No se usa Postgres de Render.

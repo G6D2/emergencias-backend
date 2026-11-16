@@ -1,5 +1,6 @@
 const { createRemoteJWKSet, jwtVerify } = require('jose');
 const { UnauthorizedError } = require('../errors/app-errors');
+const { logTokenRejection } = require('./token-rejection-log');
 
 /**
  * Valida access tokens humanos emitidos por el IdP de CityPass+.
@@ -7,6 +8,9 @@ const { UnauthorizedError } = require('../errors/app-errors');
  */
 function createJwtVerifier(config, jwks = null) {
   const keySet = jwks || createRemoteJWKSet(new URL(config.jwksUri));
+  // Con AUTH_MODE=idp este verifier valida contra el JWKS remoto del IdP; en
+  // local e hybrid, contra la clave propia. El log lo distingue.
+  const verifierName = config.mode === 'idp' ? 'idp' : 'local';
 
   async function verifyAccessToken(token) {
     let payload;
@@ -19,7 +23,8 @@ function createJwtVerifier(config, jwks = null) {
         clockTolerance: config.clockTolerance,
         requiredClaims: ['exp', 'sub', 'iss', 'aud', 'token_use', 'ver'],
       }));
-    } catch {
+    } catch (error) {
+      logTokenRejection(verifierName, error);
       throw new UnauthorizedError('Invalid or expired token');
     }
 

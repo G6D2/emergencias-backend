@@ -87,6 +87,7 @@ describe('secureLog', () => {
   let errorSpy;
 
   beforeEach(() => {
+    delete process.env.LOG_LEVEL;
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -96,6 +97,7 @@ describe('secureLog', () => {
     logSpy.mockRestore();
     warnSpy.mockRestore();
     errorSpy.mockRestore();
+    delete process.env.LOG_LEVEL;
   });
 
   it('usa console.error para level error', () => {
@@ -111,5 +113,72 @@ describe('secureLog', () => {
   it('usa console.log para cualquier otro level', () => {
     secureLog('info', 'all good', { count: 1 });
     expect(logSpy).toHaveBeenCalledWith('all good {"count":1}');
+  });
+
+  describe('nivel mínimo (LOG_LEVEL)', () => {
+    // Emite un mensaje por nivel y devuelve cuáles llegaron a la consola.
+    function emitted() {
+      for (const level of ['debug', 'info', 'warn', 'error']) {
+        secureLog(level, `msg-${level}`);
+      }
+      return [...logSpy.mock.calls, ...warnSpy.mock.calls, ...errorSpy.mock.calls]
+        .map(([line]) => line.replace('msg-', ''));
+    }
+
+    it('por defecto es info: los debug no salen', () => {
+      expect(emitted()).toEqual(['info', 'warn', 'error']);
+      expect(logSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('LOG_LEVEL=debug deja salir todo, y debug va por console.log', () => {
+      process.env.LOG_LEVEL = 'debug';
+      expect(emitted()).toEqual(['debug', 'info', 'warn', 'error']);
+      expect(logSpy).toHaveBeenCalledWith('msg-debug');
+    });
+
+    it('LOG_LEVEL=info es lo mismo que no definirla', () => {
+      process.env.LOG_LEVEL = 'info';
+      expect(emitted()).toEqual(['info', 'warn', 'error']);
+    });
+
+    it('LOG_LEVEL=warn calla info y debug', () => {
+      process.env.LOG_LEVEL = 'warn';
+      expect(emitted()).toEqual(['warn', 'error']);
+      expect(logSpy).not.toHaveBeenCalled();
+    });
+
+    it('LOG_LEVEL=error deja solo los errores', () => {
+      process.env.LOG_LEVEL = 'error';
+      expect(emitted()).toEqual(['error']);
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('no distingue mayúsculas ni espacios', () => {
+      process.env.LOG_LEVEL = '  WARN ';
+      expect(emitted()).toEqual(['warn', 'error']);
+    });
+
+    it.each(['verbose', '', '0', 'constructor', 'true'])('un valor inválido (%p) cae a info', (value) => {
+      process.env.LOG_LEVEL = value;
+      expect(emitted()).toEqual(['info', 'warn', 'error']);
+    });
+
+    it('un mensaje con un nivel desconocido se trata como info', () => {
+      secureLog('trace', 'sin nivel conocido');
+      expect(logSpy).toHaveBeenCalledWith('sin nivel conocido');
+
+      logSpy.mockClear();
+      process.env.LOG_LEVEL = 'warn';
+      secureLog('trace', 'sin nivel conocido');
+      secureLog(undefined, 'sin nivel');
+      expect(logSpy).not.toHaveBeenCalled();
+    });
+
+    it('un mensaje que no sale tampoco arma el payload', () => {
+      const meta = { toJSON: jest.fn(() => ({})) };
+      secureLog('debug', 'no sale', meta);
+      expect(meta.toJSON).not.toHaveBeenCalled();
+      expect(logSpy).not.toHaveBeenCalled();
+    });
   });
 });

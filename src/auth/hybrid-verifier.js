@@ -1,5 +1,6 @@
 const { decodeJwt } = require('jose');
 const { UnauthorizedError } = require('../errors/app-errors');
+const { logTokenRejection } = require('./token-rejection-log');
 
 /**
  * AUTH_MODE=hybrid: elige con qué verifier validar según el `iss` del token.
@@ -22,7 +23,9 @@ function createHybridVerifier({ local, federated }) {
     let issuer;
     try {
       ({ iss: issuer } = decodeJwt(token));
-    } catch {
+    } catch (error) {
+      // Ni siquiera es un JWT (p. ej. "Bearer undefined" desde el front).
+      logTokenRejection('hybrid', error);
       throw new UnauthorizedError('Invalid or expired token');
     }
 
