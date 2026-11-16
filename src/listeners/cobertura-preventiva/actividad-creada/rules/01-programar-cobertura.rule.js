@@ -1,15 +1,16 @@
 const { BusinessRule } = require('../../../business-rule');
 
-const UMBRAL_DEFAULT = 1000;
+const UMBRAL_DEFAULT = 500;
 const ESTADOS_SIN_COBERTURA = new Set(['CANCELADA', 'CANCELLED']);
 
 // Programa cobertura preventiva cuando una actividad de Espacios llega al
-// umbral de personas (acordado en el squad: 1.000 o mas).
+// umbral de personas.
 //
-// Umbral: UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA (env), default 1000. Es la
-// misma variable que lee la regla de EventoComunitarioPublicado; alli el
-// default historico es 500, asi que en produccion conviene fijarla en 1000
-// para que las dos reglas coincidan.
+// Umbral: UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA (env), default 500: el mismo
+// que la regla de EventoComunitarioPublicado, asi que las dos entradas usan un
+// solo criterio sin cargar nada en produccion. Es un criterio de seguridad de
+// Emergencias (cubrir antes); otros modulos del caso usan 1.000 para clasificar
+// la causa, y toda actividad de 1.000 o mas tambien se cubre.
 //
 // Payload de Espacios (ActividadCreada.v3): actividadId (= eventoId),
 // titulo, capacidad (entero, no hay asistentes), ubicacion { lat, lng },

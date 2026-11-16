@@ -30,13 +30,13 @@ describe('listeners/cobertura-preventiva ProgramarCoberturaActividadRule', () =>
   });
 
   describe('appliesTo', () => {
-    it('aplica desde 1.000 personas (umbral default del squad)', () => {
-      expect(rule.appliesTo(buildContext(actividad({ capacidad: 1000 })))).toBe(true);
+    it('aplica desde 500 personas (umbral default)', () => {
+      expect(rule.appliesTo(buildContext(actividad({ capacidad: 500 })))).toBe(true);
       expect(rule.appliesTo(buildContext(actividad({ capacidad: 1200 })))).toBe(true);
     });
 
     it('no aplica por debajo del umbral', () => {
-      expect(rule.appliesTo(buildContext(actividad({ capacidad: 999 })))).toBe(false);
+      expect(rule.appliesTo(buildContext(actividad({ capacidad: 499 })))).toBe(false);
       expect(rule.appliesTo(buildContext(actividad({ capacidad: 0 })))).toBe(false);
     });
 
@@ -56,15 +56,15 @@ describe('listeners/cobertura-preventiva ProgramarCoberturaActividadRule', () =>
     });
 
     it('respeta UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA del env', () => {
-      process.env.UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA = '500';
-      expect(rule.appliesTo(buildContext(actividad({ capacidad: 500 })))).toBe(true);
-      expect(rule.appliesTo(buildContext(actividad({ capacidad: 499 })))).toBe(false);
-    });
-
-    it('un env invalido cae al default 1000', () => {
-      process.env.UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA = 'basura';
+      process.env.UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA = '1000';
       expect(rule.appliesTo(buildContext(actividad({ capacidad: 1000 })))).toBe(true);
       expect(rule.appliesTo(buildContext(actividad({ capacidad: 999 })))).toBe(false);
+    });
+
+    it('un env invalido cae al default 500', () => {
+      process.env.UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA = 'basura';
+      expect(rule.appliesTo(buildContext(actividad({ capacidad: 500 })))).toBe(true);
+      expect(rule.appliesTo(buildContext(actividad({ capacidad: 499 })))).toBe(false);
     });
   });
 

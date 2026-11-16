@@ -111,8 +111,8 @@ describe('listeners/cobertura-preventiva', () => {
     expect(outcomes[0].payload).toMatchObject({ eventoId: 'act-1', latitud: -34.5994, longitud: -58.3988 });
   });
 
-  it('ActividadCreadaListener no dispara por debajo del umbral de 1.000', async () => {
-    const evento = { metadata: { eventId: 'e5' }, data: { actividadId: 'act-2', capacidad: 999 } };
+  it('ActividadCreadaListener no dispara por debajo del umbral de 500', async () => {
+    const evento = { metadata: { eventId: 'e5' }, data: { actividadId: 'act-2', capacidad: 499 } };
     await expect(new ActividadCreadaListener(kafka).handle(evento)).resolves.toEqual([]);
   });
 

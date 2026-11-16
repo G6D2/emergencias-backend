@@ -132,8 +132,8 @@ describe('ActividadCreada.v3 → cobertura preventiva (integration)', () => {
     expect(await coberturas()).toHaveLength(1);
   });
 
-  it('no crea cobertura por debajo de 1.000 personas', async () => {
-    await actividad.onMessage(buildMessage({ ...ACTIVIDAD, data: { ...ACTIVIDAD.data, capacidad: 800 } }));
+  it('no crea cobertura por debajo de 500 personas', async () => {
+    await actividad.onMessage(buildMessage({ ...ACTIVIDAD, data: { ...ACTIVIDAD.data, capacidad: 400 } }));
     expect(await coberturas()).toHaveLength(0);
   });
 
