@@ -11,6 +11,7 @@ const {
   zoneContextLinkTopic,
   ZONE_CONTEXT_LINK_EVENT_TYPE,
   ZONE_CONTEXT_LINK_RULE_VERSION,
+  CATEGORIES_WITHOUT_PUBLISHED_LINK,
 } = require('../services/emergency-events');
 const { EmergencyRepository } = require('../repositories/emergency.repository');
 
@@ -103,8 +104,17 @@ describe('shouldPublishZoneContextLink', () => {
     expect(shouldPublishZoneContextLink('MEDICA', { EVENTO_VINCULO_CONTEXTO_ENABLED: '1' })).toBe(false);
   });
 
-  it('PANICO no se publica hasta que Security decida la precisión', () => {
-    expect(shouldPublishZoneContextLink('PANICO', ON)).toBe(false);
+  it('PANICO se publica como el resto: tiene la misma precisión en el bus', () => {
+    expect(shouldPublishZoneContextLink('PANICO', ON)).toBe(true);
+  });
+
+  it('una categoría excluida no se publica aunque el evento esté encendido', () => {
+    CATEGORIES_WITHOUT_PUBLISHED_LINK.add('EXCLUIDA');
+    try {
+      expect(shouldPublishZoneContextLink('EXCLUIDA', ON)).toBe(false);
+    } finally {
+      CATEGORIES_WITHOUT_PUBLISHED_LINK.delete('EXCLUIDA');
+    }
   });
 
   it('el topic se puede configurar', () => {
@@ -144,16 +154,31 @@ describe('EmergencyRepository.linkZoneContexts con el evento encendido', () => {
     expect(validate(event)).toBe(true);
   });
 
-  it('una PANICO se vincula igual (eleva) pero sin evento', async () => {
+  it('una PANICO se vincula y encola su evento como cualquier otra', async () => {
     const executor = executorCon([FILA_CONTEXTO]);
     const ids = await repoCon(ON).linkZoneContexts(executor, {
       id: EMERGENCY_ID, ...CERCA, emergencyType: 'PANICO',
     });
 
     expect(ids).toEqual([CONTEXTO.id]);
-    const [sql, params] = executor.query.mock.calls[1];
-    expect(sql).not.toMatch(/outbox_events/);
-    expect(params).toEqual([EMERGENCY_ID, [CONTEXTO.id]]);
+    expect(executor.query.mock.calls[1][0]).toMatch(/INSERT INTO outbox_events/);
+  });
+
+  it('una categoría excluida se vincula igual (eleva) pero sin evento', async () => {
+    CATEGORIES_WITHOUT_PUBLISHED_LINK.add('EXCLUIDA');
+    try {
+      const executor = executorCon([FILA_CONTEXTO]);
+      const ids = await repoCon(ON).linkZoneContexts(executor, {
+        id: EMERGENCY_ID, ...CERCA, emergencyType: 'EXCLUIDA',
+      });
+
+      expect(ids).toEqual([CONTEXTO.id]);
+      const [sql, params] = executor.query.mock.calls[1];
+      expect(sql).not.toMatch(/outbox_events/);
+      expect(params).toEqual([EMERGENCY_ID, [CONTEXTO.id]]);
+    } finally {
+      CATEGORIES_WITHOUT_PUBLISHED_LINK.delete('EXCLUIDA');
+    }
   });
 
   it('con el evento apagado no toca el outbox', async () => {
@@ -177,16 +202,28 @@ describe('EmergencyRepository.enqueueMissingZoneContextLinkEvents (backfill)', (
     ...overrides,
   });
 
-  it('encola con backfill: true los vínculos sin evento, salvo PANICO', async () => {
+  it('encola con backfill: true los vínculos sin evento, PANICO incluida, salvo las categorías excluidas', async () => {
     const pool = {
       query: jest.fn()
-        .mockResolvedValueOnce({ rows: [filaVinculo(), filaVinculo({ emergency_id: 'e-panico', emergency_type: 'PANICO' })] })
+        .mockResolvedValueOnce({
+          rows: [
+            filaVinculo(),
+            filaVinculo({ emergency_id: 'e-panico', emergency_type: 'PANICO' }),
+            filaVinculo({ emergency_id: 'e-excluida', emergency_type: 'EXCLUIDA' }),
+          ],
+        })
         .mockResolvedValue({ rows: [] }),
     };
 
-    const result = await repoCon(ON, pool).enqueueMissingZoneContextLinkEvents();
+    CATEGORIES_WITHOUT_PUBLISHED_LINK.add('EXCLUIDA');
+    let result;
+    try {
+      result = await repoCon(ON, pool).enqueueMissingZoneContextLinkEvents();
+    } finally {
+      CATEGORIES_WITHOUT_PUBLISHED_LINK.delete('EXCLUIDA');
+    }
 
-    expect(result).toEqual({ enqueuedCount: 1, skippedCount: 1 });
+    expect(result).toEqual({ enqueuedCount: 2, skippedCount: 1 });
     const [selectSql, selectParams] = pool.query.mock.calls[0];
     expect(selectSql).toMatch(/NOT EXISTS/);
     expect(selectParams).toEqual([ZONE_CONTEXT_LINK_EVENT_TYPE]);

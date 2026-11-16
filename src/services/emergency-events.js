@@ -212,10 +212,11 @@ const ZONE_CONTEXT_LINK_EVENT_TYPE = 'EmergenciaVinculadaAContextoZona';
 // Sube si cambia la forma de decidir el vínculo (radio, vigencia, exclusiones),
 // para que los consumidores distingan vínculos viejos de nuevos.
 const ZONE_CONTEXT_LINK_RULE_VERSION = 1;
-// Categorías cuyos vínculos no salen al bus. PANICO queda afuera hasta que
-// Security decida su precisión (ADR de coordenadas aproximadas): con 2
-// decimales (~1 km), un vínculo de 500 m daría más precisión que la coordenada.
-const CATEGORIES_WITHOUT_PUBLISHED_LINK = new Set(['PANICO']);
+// Categorías cuyos vínculos no salen al bus. Hoy ninguna: el ADR de
+// coordenadas aproximadas se aceptó con 3 decimales (~100 m) para todas las
+// categorías, PANICO incluida, así que un vínculo de 500 m no da más precisión
+// que la coordenada. Si esa precisión bajara para una categoría, se suma acá.
+const CATEGORIES_WITHOUT_PUBLISHED_LINK = new Set();
 
 function zoneContextLinkTopic(env = process.env) {
   return env.TOPIC_EMERGENCIA_VINCULADA_CONTEXTO || 'emergencias.vinculada-contexto-zona';

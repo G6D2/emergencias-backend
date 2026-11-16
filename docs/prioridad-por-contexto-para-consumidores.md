@@ -32,7 +32,7 @@ Reglas para no contar mal:
 
 - **Deduplicar por `(emergenciaId, contextoId)`.** El bus es *at-least-once*: el mismo vínculo puede llegar dos veces.
 - **Significado:** la emergencia quedó vinculada al evento al crearse y, mientras los dos estuvieron vigentes, su prioridad de despacho estuvo un nivel arriba. Una emergencia vinculada estuvo elevada.
-- **`PANICO` no se publica** mientras Security no defina su precisión en el bus. El conteo por evento no incluye botones de pánico.
+- **Se publican los vínculos de todas las categorías, `PANICO` incluida.** El ADR de coordenadas se aceptó con 3 decimales (~100 m) para todas, así que el vínculo no da más precisión que la coordenada.
 - **Historia:** el evento existe desde su activación. Al activarlo se cargaron (`backfill: true`) los vínculos que seguían en la base: emergencias abiertas o cerradas hace menos de 72 h. Lo anterior no se puede recuperar.
 - **Sin coordenadas.** El evento no lleva ubicación; si hace falta, sale de `EmergenciaCreada`.
 

@@ -133,10 +133,10 @@ describe('EmergenciaVinculadaAContextoZona (Postgres real)', () => {
     expect(await eventosDe(id)).toHaveLength(0);
   });
 
-  it('una PANICO se vincula (eleva) pero no publica el vínculo', async () => {
+  it('una PANICO se vincula (eleva) y publica el vínculo como el resto', async () => {
     const id = await crearEmergencia(CERCA, 'PANICO');
     expect(await vinculosDe(id)).toHaveLength(1);
-    expect(await eventosDe(id)).toHaveLength(0);
+    expect(await eventosDe(id)).toHaveLength(1);
   });
 
   it('con el evento apagado se vincula igual y el backfill lo recupera una sola vez', async () => {
