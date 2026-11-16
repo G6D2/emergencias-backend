@@ -91,8 +91,8 @@ channels:
       `emergencia_contexto_zona`, encolado en la misma sentencia que la fila.
       Clave de deduplicación: (`emergenciaId`, `contextoId`). Para contar por
       evento de Espacios, agrupar por `referenciaExterna`. No lleva
-      coordenadas. Los vínculos de `PANICO` no se publican (pendiente de
-      Security). Solo se encola con `EVENTO_VINCULO_CONTEXTO_ENABLED=true`.
+      coordenadas. Se publican los vínculos de todas las categorías, `PANICO`
+      incluida. Solo se encola con `EVENTO_VINCULO_CONTEXTO_ENABLED=true`.
       Con `EDA_PUBLISHER_MODE=kafka` sale por `TOPIC_EMERGENCIA_VINCULADA_CONTEXTO`
       (default `emergencias.vinculada-contexto-zona`). Schema:
       `docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json`.
