@@ -824,7 +824,7 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | `ubicacion.latitud`, `ubicacion.longitud` | string \| null | la coordenada exacta, ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null |
 | `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA`, `TRANSITO`; `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null | `causa_id` / `causa_tipo`. En un alta ciudadana, `null`; la cobertura preventiva manda el `eventoId` de Espacios y `EVENTO_PUBLICO` |
-| `prioridadOriginal` | enum \| null | hoy siempre `null` |
+| `prioridadOriginal` | enum \| null | con `causaTipo = EVENTO_CLIMATICO`, la prioridad sin ajuste climático (hoy igual a `prioridad`); en el resto, `null` |
 | `ciudadanoId` | string \| null | `user_id`; `null` en las emergencias externas |
 | `correlationId` | string | `correlation_id` (fallback: `id`) |
 | `createdAt` | ISO-8601 UTC | `created_at` |
@@ -1086,4 +1086,4 @@ Lo que hoy no está:
 - Publicación al bus: en producción sale por el gateway (`EDA_PUBLISHER_MODE=gateway`) desde el 05/11. El modo `kafka` sigue publicando en los tópicos propios (`emergencias.*`), no en los FQN del gateway.
 - Usuarios LDAP de oficial: el Login Federado ya está en uso para el dispatcher, pero los oficiales todavía entran con cuenta local.
 - Tiempo real: el front hace polling, no hay WebSocket ni SSE.
-- `prioridadOriginal` y `areaResponsable` salen siempre en `null` en los eventos.
+- `areaResponsable` sale siempre en `null` en los eventos.

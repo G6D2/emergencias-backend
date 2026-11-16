@@ -12,6 +12,8 @@ info:
       (`OutboxPublisher`).
     - **Consume** `EventoComunitarioPublicado` y `EventoCancelado` de Espacios
       Públicos (cobertura preventiva, `src/listeners/cobertura-preventiva`).
+    - **Consume** `CriticidadClimaticaConfirmada` y `CriticidadClimaticaFinalizada`
+      de Espacios Públicos (alerta climática, `src/listeners/alerta-climatica`).
     - **Consume** `EmergenciaBicicleta` de Movilidad (asistencia durante un viaje,
       `src/listeners/movilidad-bicicleta`), sin reemplazar `EmergenciaSolicitada`
       (intervención por obstrucción de ciclovía).
@@ -132,6 +134,26 @@ channels:
       eventoCancelado:
         $ref: '#/components/messages/EventoCancelado'
 
+  criticidadClimaticaConfirmada:
+    address: com.citypass.espacios.CriticidadClimaticaConfirmada
+    title: CriticidadClimaticaConfirmada (Espacios Públicos)
+    description: |
+      Topic configurable con `EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA`. Un
+      administrador de Espacios confirmó una alerta climática.
+    messages:
+      criticidadClimaticaConfirmada:
+        $ref: '#/components/messages/CriticidadClimaticaConfirmada'
+
+  criticidadClimaticaFinalizada:
+    address: com.citypass.espacios.CriticidadClimaticaFinalizada
+    title: CriticidadClimaticaFinalizada (Espacios Públicos)
+    description: |
+      Topic configurable con `EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA`. La
+      alerta venció o se cerró a mano; trae el mismo `alertaId`.
+    messages:
+      criticidadClimaticaFinalizada:
+        $ref: '#/components/messages/CriticidadClimaticaFinalizada'
+
   emergenciaSolicitada:
     address: com.citypass.movilidad.EmergenciaSolicitada
     title: EmergenciaSolicitada (Movilidad)
@@ -238,6 +260,41 @@ operations:
           const: com.citypass.emergencias.EventoCanceladoListener
     messages:
       - $ref: '#/channels/eventoCancelado/messages/eventoCancelado'
+
+  recibirCriticidadClimaticaConfirmada:
+    action: receive
+    channel:
+      $ref: '#/channels/criticidadClimaticaConfirmada'
+    summary: |
+      Registra un contexto de zona `ALERTA_CLIMATICA` por cada punto de
+      `ubicaciones` (radio `CONTEXTO_ZONA_RADIO_CLIMA_METROS`, default 2000) con la
+      ventana `vigenciaDesde`–`vigenciaHasta`. Con `nivelCriticidad` `ALTA` o
+      `CRITICA`, y la alerta todavía vigente, crea una única emergencia
+      `PREVENTIVA` por `alertaId` (causa `EVENTO_CLIMATICO`), que sale en
+      `EmergenciaCreada` con `prioridadOriginal`.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.CriticidadClimaticaConfirmadaListener
+    messages:
+      - $ref: '#/channels/criticidadClimaticaConfirmada/messages/criticidadClimaticaConfirmada'
+
+  recibirCriticidadClimaticaFinalizada:
+    action: receive
+    channel:
+      $ref: '#/channels/criticidadClimaticaFinalizada'
+    summary: |
+      Da de baja los contextos de la alerta y cancela su emergencia climática si
+      todavía no fue despachada. Si llega antes que la confirmación, la
+      confirmación tardía no crea contextos.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.CriticidadClimaticaFinalizadaListener
+    messages:
+      - $ref: '#/channels/criticidadClimaticaFinalizada/messages/criticidadClimaticaFinalizada'
 
   recibirEmergenciaSolicitada:
     action: receive
@@ -476,6 +533,34 @@ components:
             $ref: '#/components/schemas/Metadata'
           data:
             $ref: '#/components/schemas/EventoCanceladoData'
+
+    CriticidadClimaticaConfirmada:
+      name: CriticidadClimaticaConfirmada
+      title: Criticidad climática confirmada
+      contentType: application/json
+      description: Producido por Espacios Públicos (schemaId 28 en el gateway). Solo se documentan los campos que lee Emergencias.
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/CriticidadClimaticaConfirmadaData'
+
+    CriticidadClimaticaFinalizada:
+      name: CriticidadClimaticaFinalizada
+      title: Criticidad climática finalizada
+      contentType: application/json
+      description: Producido por Espacios Públicos (schemaId 27 en el gateway).
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/CriticidadClimaticaFinalizadaData'
 
     EmergenciaSolicitada:
       name: EmergenciaSolicitada
@@ -901,6 +986,53 @@ components:
           type: string
         canceladoEn:
           $ref: '#/components/schemas/Timestamp'
+
+    CriticidadClimaticaConfirmadaData:
+      type: object
+      additionalProperties: true
+      required: [alertaId, nivelCriticidad]
+      properties:
+        alertaId:
+          type: string
+          minLength: 1
+        nivelCriticidad:
+          type: string
+          enum: [BAJA, MEDIA, ALTA, CRITICA]
+        fenomeno:
+          type: string
+          examples: [TORMENTA_FUERTE]
+        ubicaciones:
+          type: array
+          description: Puntos de la consulta meteorológica. No son un polígono ni traen radio.
+          items:
+            type: object
+            properties:
+              latitud:
+                type: number
+              longitud:
+                type: number
+        barrios:
+          type: array
+          items:
+            type: string
+        vigenciaDesde:
+          type: integer
+          description: Epoch en milisegundos (timestamp-millis de Avro).
+        vigenciaHasta:
+          type: integer
+          description: Epoch en milisegundos (timestamp-millis de Avro).
+
+    CriticidadClimaticaFinalizadaData:
+      type: object
+      additionalProperties: true
+      required: [alertaId]
+      properties:
+        alertaId:
+          type: string
+          minLength: 1
+        finalizadaEn:
+          type: integer
+          description: Epoch en milisegundos (timestamp-millis de Avro).
 
     ReclamoCreadoData:
       type: object

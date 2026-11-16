@@ -48,6 +48,15 @@ function toPrioridad(severity) {
   return SEVERITY_TO_PRIORIDAD[String(severity).toLowerCase()] || null;
 }
 
+// Prioridad sin el ajuste climático (#88). Solo va con causaTipo
+// EVENTO_CLIMATICO (el contrato la exige ahí y la prohíbe en el resto). La
+// prioridad guardada de una emergencia climática no pasa por ningún ajuste
+// por clima, así que es la misma que `prioridad`.
+function toPrioridadOriginal(emergency) {
+  if (emergency.causaTipo !== 'EVENTO_CLIMATICO') return null;
+  return toPrioridad(emergency.severity);
+}
+
 function toAfectaCirculacion(emergencyType) {
   if (!emergencyType) return null;
   return AFECTA_CIRCULACION.has(emergencyType);
@@ -123,11 +132,11 @@ function buildEmergencyCreatedEvent(emergency, eventId, options = {}) {
         longitud: encrypted.longitud,
       },
       afectaCirculacion: toAfectaCirculacion(emergency.emergencyType),
-      // Causa externa (convencion de Analitica). Hoy la completa la cobertura
-      // preventiva (EVENTO_PUBLICO); el resto de las causas llega con #77/#79/#80.
+      // Causa externa (convencion de Analitica): la completan las emergencias
+      // que crean los listeners de eventos externos.
       causaId: emergency.causaId ?? null,
       causaTipo: emergency.causaTipo ?? null,
-      prioridadOriginal: null,
+      prioridadOriginal: toPrioridadOriginal(emergency),
       ciudadanoId: emergency.userId ?? null,
       correlationId,
       createdAt: emergency.createdAt,

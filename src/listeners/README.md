@@ -50,6 +50,14 @@ deduplica además por la causa única `MOVILIDAD_BICICLETA`, y conserva ese ID
 externo como `correlationId`. Los campos personales de `data.usuario` y
 `actorSub` no se persisten.
 
+`CriticidadClimaticaConfirmada` de Espacios deja un contexto de zona por cada
+punto de `ubicaciones` (referencia `<alertaId>#<n>`, radio
+`CONTEXTO_ZONA_RADIO_CLIMA_METROS`) y, con nivel `ALTA` o `CRITICA`, una
+emergencia `PREVENTIVA` por `alertaId` con causa `EVENTO_CLIMATICO`.
+`CriticidadClimaticaFinalizada` da de baja el grupo: deja la fila `<alertaId>`
+como marca, así una confirmación que llega tarde no crea contextos. Alta y
+baja del mismo grupo se serializan con un advisory lock de la transacción.
+
 ## Errores
 
 `error-classifier.js` decide:
