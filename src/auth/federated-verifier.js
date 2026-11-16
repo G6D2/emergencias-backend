@@ -1,6 +1,7 @@
 const { jwtVerify } = require('jose');
 const { UnauthorizedError } = require('../errors/app-errors');
 const { mapFederatedGroups } = require('./federated-claims');
+const { logTokenRejection } = require('./token-rejection-log');
 
 // Grupos del token: lista de strings (lo que dice el contrato) o un string
 // suelto. Cualquier otra cosa es un token mal formado.
@@ -46,7 +47,9 @@ function createFederatedVerifier(config, keySet) {
         clockTolerance: config.clockTolerance,
         requiredClaims,
       }));
-    } catch {
+    } catch (error) {
+      // Acá cae también un JWKS remoto que no responde: ver token-rejection-log.js.
+      logTokenRejection('federated', error);
       throw new UnauthorizedError('Invalid or expired token');
     }
 

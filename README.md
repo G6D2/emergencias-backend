@@ -400,6 +400,8 @@ Si una fila fue cifrada con otra clave (por ejemplo, insertada desde un entorno 
 ### Logs seguros
 No se loguean JWT ni coordenadas. Los eventos se loguean solo como resumen (`topic`, `type`, ids, `hasLocation`), nunca el payload.
 
+Un token rechazado responde siempre `401 Invalid or expired token`, sin contarle la causa al cliente. La causa queda en un `warn` `Token rechazado` con quién lo rechazó (`verifier`: `local`, `federated`, `idp`, `hybrid` o `authenticate`) y el `code` y `name` del error, sin el token ni sus claims. `ERR_JWT_EXPIRED` es un token vencido. Con `verifier: "federated"`, un `ERR_JWKS_TIMEOUT`, un `ERR_JOSE_GENERIC` o un código de red (`ECONNREFUSED`, `ENOTFOUND`) dicen que no se pudo leer el JWKS del Login Federado: el problema es del proveedor de identidad, no de los tokens.
+
 ### HTTPS / headers
 Siempre: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, etc. Con `NODE_ENV=production` o `FORCE_HTTPS=true`, además HSTS + redirect a HTTPS (vía `X-Forwarded-Proto`, típico en Render). Producción hoy no tiene ninguna de las dos, así que no manda HSTS.
 
