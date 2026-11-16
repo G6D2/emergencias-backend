@@ -1,0 +1,11 @@
+# Lo que no tiene que viajar en el contexto del build. La imagen copia solo
+# package*.json, src/, scripts/ y asyncapi.yaml (ver Dockerfile).
+node_modules
+.git
+coverage
+*.log
+npm-debug.log*
+.env*
+.DS_Store
+.vscode
+.idea
