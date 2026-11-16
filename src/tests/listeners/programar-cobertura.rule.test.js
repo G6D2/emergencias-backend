@@ -33,6 +33,20 @@ describe('ProgramarCoberturaPreventivaRule', () => {
       expect(rule.appliesTo(buildContext({ capacidad: 800, estado: 'CANCELLED' }))).toBe(false);
     });
 
+    // Mismas grafías que reconoce la regla 02 (esEstadoCancelado): antes solo
+    // se miraba 'CANCELLED' y un evento 'CANCELADO' programaba una cobertura.
+    it.each([
+      'CANCELED', 'CANCELADO', 'CANCELADA', 'cancelado', 'Cancelled', '  CANCELADA  ',
+    ])('no aplica con el evento cancelado escrito como %p', (estado) => {
+      expect(rule.appliesTo(buildContext({ capacidad: 800, estado }))).toBe(false);
+    });
+
+    it.each([
+      'ACTIVO', 'SIN_CUPOS', '', null, undefined, 7,
+    ])('un estado que no es cancelado (%p) no frena la cobertura', (estado) => {
+      expect(rule.appliesTo(buildContext({ capacidad: 800, estado }))).toBe(true);
+    });
+
     it('respeta UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA del env', () => {
       const original = process.env.UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA;
       process.env.UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA = '200';
