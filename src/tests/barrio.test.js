@@ -1,8 +1,10 @@
+const fs = require('fs');
 const {
   listBarrios,
   matchBarrioFromText,
   resolveBarrioFromPoint,
   resolveBarrio,
+  _resetCatalogCache,
 } = require('../domain/barrio');
 
 describe('domain/barrio — catálogo oficial CABA', () => {
@@ -60,5 +62,34 @@ describe('domain/barrio — catálogo oficial CABA', () => {
     })).toBeNull();
 
     expect(resolveBarrio({})).toBeNull();
+  });
+});
+
+describe('domain/barrio — el GeoJSON no carga', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+    _resetCatalogCache();
+  });
+
+  it('queda sin catálogo (barrio = null) y lo deja en el log una sola vez', () => {
+    _resetCatalogCache();
+    const readSpy = jest.spyOn(fs, 'readFileSync').mockImplementation(() => {
+      throw new Error('ENOENT: no such file or directory');
+    });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    expect(listBarrios()).toEqual([]);
+    expect(resolveBarrio({ latitude: -34.6037, longitude: -58.3816 })).toBeNull();
+    expect(matchBarrioFromText('palermo')).toBeNull();
+
+    expect(readSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0][0]).toMatch(/No se pudo cargar el catálogo de barrios/);
+    expect(errorSpy.mock.calls[0][0]).toMatch(/ENOENT/);
+  });
+
+  it('con el archivo de vuelta, el catálogo se carga normalmente', () => {
+    _resetCatalogCache();
+    expect(listBarrios()).toHaveLength(48);
   });
 });

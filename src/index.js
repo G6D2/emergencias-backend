@@ -36,11 +36,16 @@ const {
 } = require('./listeners/cobertura-preventiva/handlers/contexto-zona.handler');
 const { ContextoZonaRepository } = require('./repositories/contexto-zona.repository');
 const { gracefulShutdown, closeServer } = require('./utils/graceful-shutdown');
+const { installProcessSafetyNet } = require('./utils/process-safety-net');
 
 const PORT = process.env.PORT || 3000;
 // Tope del apagado ordenado. Render espera 30 s (default) entre el SIGTERM y
 // el SIGKILL, así que sobra margen.
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+// Antes de arrancar nada: process.on('unhandledRejection') loguea y sigue,
+// process.on('uncaughtException') loguea y sale con código 1.
+installProcessSafetyNet();
 
 async function start() {
   // Valida la key al boot (falla temprano si falta o es inválida).
