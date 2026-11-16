@@ -9,6 +9,9 @@
 //   Analítica; ninguno descifra. Ubica la cuadra, no el domicilio.
 // - data.ubicacion.latitud / longitud: la coordenada exacta, cifrada con
 //   BUS_LOCATION_ENCRYPTION_KEY (para quien tenga la clave).
+// La retención pone las cuatro en null en los payloads guardados en el outbox
+// (EmergencyRepository.scrubOutboxBusCoordinates): un campo de ubicación nuevo
+// en estos eventos tiene que sumarse ahí.
 
 const { getBusLocationCrypto } = require('../security/bus-location-crypto');
 const { secureLog } = require('../security/secure-log');
@@ -200,10 +203,78 @@ function buildEmergencyPrioritizedEvent({
   };
 }
 
+// EmergenciaVinculadaAContextoZona (ADR "Publicar el vínculo de una
+// emergencia con un contexto de zona"): un evento por fila de
+// emergencia_contexto_zona, encolado en la misma sentencia que la fila (ver
+// EmergencyRepository.linkZoneContexts). Clave de deduplicación para los
+// consumidores: (emergenciaId, contextoId). No lleva coordenadas.
+const ZONE_CONTEXT_LINK_EVENT_TYPE = 'EmergenciaVinculadaAContextoZona';
+// Sube si cambia la forma de decidir el vínculo (radio, vigencia, exclusiones),
+// para que los consumidores distingan vínculos viejos de nuevos.
+const ZONE_CONTEXT_LINK_RULE_VERSION = 1;
+// Categorías cuyos vínculos no salen al bus. Hoy ninguna: el ADR de
+// coordenadas aproximadas se aceptó con 3 decimales (~100 m) para todas las
+// categorías, PANICO incluida, así que un vínculo de 500 m no da más precisión
+// que la coordenada. Si esa precisión bajara para una categoría, se suma acá.
+const CATEGORIES_WITHOUT_PUBLISHED_LINK = new Set();
+
+function zoneContextLinkTopic(env = process.env) {
+  return env.TOPIC_EMERGENCIA_VINCULADA_CONTEXTO || 'emergencias.vinculada-contexto-zona';
+}
+
+// El encolado queda apagado hasta que el tipo esté registrado en el catálogo
+// del gateway; al encenderlo se corre el backfill (npm run backfill:vinculos-contexto).
+function zoneContextLinkEventEnabled(env = process.env) {
+  return env.EVENTO_VINCULO_CONTEXTO_ENABLED === 'true';
+}
+
+function shouldPublishZoneContextLink(emergencyType, env = process.env) {
+  return zoneContextLinkEventEnabled(env) && !CATEGORIES_WITHOUT_PUBLISHED_LINK.has(emergencyType);
+}
+
+function toIsoString(value) {
+  if (value instanceof Date) return value.toISOString();
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function buildEmergencyLinkedToZoneContextEvent({
+  emergencyId,
+  correlationId,
+  contexto,
+  vinculadaEn,
+  backfill = false,
+  eventId,
+}) {
+  return {
+    type: ZONE_CONTEXT_LINK_EVENT_TYPE,
+    eventId,
+    correlationId: correlationId || emergencyId,
+    data: {
+      emergenciaId: emergencyId,
+      contextoId: contexto.id,
+      contextoTipo: contexto.tipo,
+      contextoOrigen: contexto.origen ?? null,
+      referenciaExterna: contexto.referenciaExterna ?? null,
+      radioMetros: Number(contexto.radioMetros),
+      vinculadaEn: toIsoString(vinculadaEn),
+      reglaVersion: ZONE_CONTEXT_LINK_RULE_VERSION,
+      backfill: Boolean(backfill),
+    },
+  };
+}
+
 module.exports = {
   buildEmergencyCreatedEvent,
   buildEmergencyUpdatedEvent,
   buildEmergencyPrioritizedEvent,
+  buildEmergencyLinkedToZoneContextEvent,
+  shouldPublishZoneContextLink,
+  zoneContextLinkEventEnabled,
+  zoneContextLinkTopic,
+  ZONE_CONTEXT_LINK_EVENT_TYPE,
+  ZONE_CONTEXT_LINK_RULE_VERSION,
+  CATEGORIES_WITHOUT_PUBLISHED_LINK,
   STATUS_TO_ESTADO,
   SEVERITY_TO_PRIORIDAD,
   COORD_DECIMALS,

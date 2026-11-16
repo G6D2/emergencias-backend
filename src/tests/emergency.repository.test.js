@@ -610,6 +610,41 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
   });
 });
 
+describe('EmergencyRepository.scrubOutboxBusCoordinates', () => {
+  it('sin ids no consulta la base', async () => {
+    const pool = createPool();
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    await expect(repo.scrubOutboxBusCoordinates([])).resolves.toEqual({ scrubbedCount: 0 });
+    await expect(repo.scrubOutboxBusCoordinates(null)).resolves.toEqual({ scrubbedCount: 0 });
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  // El efecto sobre el JSON se prueba contra Postgres real en
+  // emergency.repository.integration.test.js; acá, la forma de la consulta.
+  it('limpia las coordenadas cifradas de ubicacion y las aproximadas en claro de la raíz', async () => {
+    const pool = createPool({ query: async () => ({ rowCount: 3, rows: [] }) });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await expect(repo.scrubOutboxBusCoordinates(['e-1', 'e-2'])).resolves.toEqual({ scrubbedCount: 3 });
+
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(params).toEqual([['e-1', 'e-2']]);
+    expect(sql).toMatch(/UPDATE outbox_events/);
+    expect(sql).toContain("'{data,ubicacion,latitud}', 'null'::jsonb, true");
+    expect(sql).toContain("'{data,ubicacion,longitud}', 'null'::jsonb, true");
+    // Raíz con create_missing = false: no agrega las claves a payloads viejos.
+    expect(sql).toContain("'{data,latitud}', 'null'::jsonb, false");
+    expect(sql).toContain("'{data,longitud}', 'null'::jsonb, false");
+    // Solo filas de esas emergencias que tengan algo para limpiar.
+    expect(sql).toContain("payload->'data'->>'emergenciaId' = ANY($1::text[])");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,ubicacion,latitud}') = 'string'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,ubicacion,longitud}') = 'string'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,latitud}') = 'number'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,longitud}') = 'number'");
+  });
+});
+
 describe('EmergencyRepository.anonymizeUndecryptableLocations', () => {
   it('devuelve vacío si no hay candidatos indescifrables', async () => {
     const crypto = { decryptLocation: () => ({ latitude: 1, longitude: 1 }) };

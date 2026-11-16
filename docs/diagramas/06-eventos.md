@@ -31,7 +31,7 @@ flowchart LR
     consumers["Reclamos · Espacios · Movilidad<br/>Residuos · Analítica"]
 
     espacios["Espacios Públicos<br/>EventoComunitarioPublicado<br/>EventoCancelado"]
-    listeners["src/listeners/cobertura-preventiva<br/>KAFKA_CONSUMER_ENABLED=true"]
+    listeners["src/listeners<br/>cobertura-preventiva y reclamo-intervencion<br/>KAFKA_CONSUMER_ENABLED=true"]
 
     t1 --> e1
     t2 --> e2
@@ -81,7 +81,9 @@ Puntos del contrato (issue #48, cerrado el 2026-11-02) que conviene tener presen
 |---|---|---|---|
 | `EventoComunitarioPublicado` | `EDA_TOPIC_EVENTO_PUBLICADO` (ej. `com.citypass.espacios.EventoComunitarioPublicado`) | `EventoComunitarioPublicadoListener` | Si `capacidad` (o `cupoMaximo`) ≥ `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500) y el evento no está `CANCELLED`, crea una única emergencia `PREVENTIVA` por `eventoId` → publica `EmergenciaCreada`. Sin importar la capacidad, registra un contexto de zona en el punto del evento con un radio fijo (`contexto_zona`, V28 y V31; `CONTEXTO_ZONA_RADIO_DEFAULT_METROS`, default 500): mientras dura (`inicio`–`fin`), las emergencias que se crean dentro de ese radio suben un nivel de prioridad de despacho |
 | `EventoCancelado` | `EDA_TOPIC_EVENTO_CANCELADO` (ej. `com.citypass.espacios.EventoCancelado`) | `EventoCanceladoListener` | Cancela las coberturas de ese `eventoId` que sigan en `PENDING`/`VALIDATED` → publica `EmergenciaActualizada` con `estadoNuevo = CANCELADA`. Si ya fue despachada, no la toca. Da de baja el contexto de zona del evento: la prioridad de las emergencias cercanas vuelve a la normal |
-| `ReclamoCreado` (Reclamos, v3) | `EDA_TOPIC_RECLAMO_CREADO` (default `com.citypass.reclamos.ReclamoCreado.v3`) | `ReclamoCreadoListener` | Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea una única emergencia `TRANSITO` por `reclamoId` (causa `RECLAMO`) → publica `EmergenciaCreada` |
+| `EmergenciaBicicleta` (Movilidad) | `EDA_TOPIC_EMERGENCIA_BICICLETA` (default `com.citypass.movilidad.EmergenciaBicicleta`) | `EmergenciaBicicletaListener` | Crea una emergencia externa `MEDICA` en `PENDING`, mapea P1/P2/P3/P4 a critical/high/medium/low y deduplica por `data.emergenciaId` (`causaTipo = MOVILIDAD_BICICLETA`). Ese ID se conserva como `correlationId` en `EmergenciaCreada` y todas las actualizaciones. No reemplaza `EmergenciaSolicitada` |
+| `EmergenciaSolicitada` (Movilidad) | `EDA_TOPIC_EMERGENCIA_SOLICITADA` (default `com.citypass.movilidad.EmergenciaSolicitada`) | `EmergenciaSolicitadaListener` | Disparador del caso de la ciclovía (default de `RECLAMO_INTERVENCION_DISPARADOR`): crea una única emergencia `TRANSITO` por `reclamoId` (causa `RECLAMO`) con la prioridad pedida → publica `EmergenciaCreada` |
+| `ReclamoCreado` (Reclamos, v3) | `EDA_TOPIC_RECLAMO_CREADO` (default `com.citypass.reclamos.ReclamoCreado.v3`) | `ReclamoCreadoListener` | Plan B: solo con `RECLAMO_INTERVENCION_DISPARADOR` en `reclamo` o `ambos`. Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea la misma emergencia `TRANSITO` por `reclamoId` → publica `EmergenciaCreada` |
 | `ReclamoActualizado` (Reclamos) | `EDA_TOPIC_RECLAMO_ACTUALIZADO` (default `com.citypass.reclamos.ReclamoActualizado`) | `ReclamoActualizadoListener` | Con `estadoNuevo` `RESUELTO`, `RECHAZADO` o `CERRADO`, cancela la intervención que siga en `PENDING`/`VALIDATED` → publica `EmergenciaActualizada` con `estadoNuevo = CANCELADA` |
 
 Los listeners arrancan solo con `KAFKA_CONSUMER_ENABLED=true` y cada uno necesita su tópico

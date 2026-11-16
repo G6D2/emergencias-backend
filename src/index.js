@@ -25,6 +25,10 @@ const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('./listen
 const { CREAR_INTERVENCION, createCrearIntervencionHandler } = require('./listeners/reclamo-intervencion/handlers/crear-intervencion.handler');
 const { CERRAR_INTERVENCION, createCerrarIntervencionHandler } = require('./listeners/reclamo-intervencion/handlers/cerrar-intervencion.handler');
 const {
+  CREAR_EMERGENCIA_BICICLETA,
+  createCrearEmergenciaBicicletaHandler,
+} = require('./listeners/movilidad-bicicleta/handlers/crear-emergencia-bicicleta.handler');
+const {
   REGISTRAR_CONTEXTO_ZONA,
   DAR_DE_BAJA_CONTEXTO_ZONA,
   createRegistrarContextoZonaHandler,
@@ -89,6 +93,10 @@ async function start() {
   outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository }));
   outcomeFactory.register(CREAR_INTERVENCION, createCrearIntervencionHandler({ emergencyRepository }));
   outcomeFactory.register(CERRAR_INTERVENCION, createCerrarIntervencionHandler({ emergencyRepository }));
+  outcomeFactory.register(
+    CREAR_EMERGENCIA_BICICLETA,
+    createCrearEmergenciaBicicletaHandler({ emergencyRepository })
+  );
   // Contexto de zona: mientras dura el evento, las emergencias que se crean
   // dentro de su radio suben un nivel de prioridad de despacho.
   const contextoZonaRepository = new ContextoZonaRepository(pool);

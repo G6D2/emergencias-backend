@@ -18,7 +18,7 @@ flowchart TB
 
     neonNode[("Neon Postgres<br/>(único proyecto, pooled)")]
     busNode["Bus del Grupo 1<br/>Kafka SASL_SSL + schema registry"]
-    loginNode["Login Federado Grupo 2<br/>(token de servicio; JWKS para AUTH_MODE=hybrid)"]
+    loginNode["Login Federado Grupo 2<br/>(token de servicio del bus; login del personal, AUTH_MODE=hybrid)"]
 
     subgraph githubOrg["GitHub — G6D2"]
         direction TB
@@ -31,9 +31,10 @@ flowchart TB
 
     feNode -->|"API_URL"| beNode
     beNode -->|"DATABASE_URL"| neonNode
-    busNode -->|"KAFKA_BROKER, EDA_SCHEMA_REGISTRY_URL (solo consumo)"| beNode
+    busNode -->|"KAFKA_BROKER, EDA_SCHEMA_REGISTRY_URL (consumo por Kafka)"| beNode
+    beNode -->|"EDA_API_URL (publicación por el gateway, HTTP)"| busNode
     beNode -->|"EDA_OAUTH_CLIENT_SECRET"| loginNode
-    beNode -.->|"IDP_JWKS_URI (solo AUTH_MODE=hybrid o idp)"| loginNode
+    beNode -->|"IDP_JWKS_URI (valida los tokens del personal, AUTH_MODE=hybrid)"| loginNode
     backupNode -.->|"contra la misma Neon (config del servicio backup fuera de este repo)"| neonNode
     repoBack --> actionsNode
     repoFront --> actionsNode
@@ -51,12 +52,13 @@ flowchart TB
 
 | Variable | Para qué |
 |---|---|
-| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH` (con `hybrid` no). Producción hoy **no** corre con `production` (no manda HSTS) |
+| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH` (con `hybrid` no). Producción hoy **no** corre con `production` (no manda HSTS; verificado el 12/11/2026) |
 | `DATABASE_URL` | Connection string pooled de Neon, `sslmode=require` |
 | `DATABASE_SSL`, `DATABASE_SSL_VERIFY`, `DATABASE_SSL_CA` | SSL del pool (por default cifra sin verificar el certificado) |
 | `DB_POOL_MAX` | Tope de conexiones del pool `pg` |
 | `KAFKA_ENABLED`, `KAFKA_BROKER`, `KAFKA_SSL`, `KAFKA_CLIENT_ID` | Conexión al bus del Grupo 1 (en producción: prendido, SSL, `test.citypass.mrfranco.net.ar:9092`) |
-| `KAFKA_CONSUMER_ENABLED`, `KAFKA_CONSUMER_GROUP_PREFIX`, `EDA_TOPIC_EVENTO_PUBLICADO`, `EDA_TOPIC_EVENTO_CANCELADO`, `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` | Listeners de cobertura preventiva (en producción: prendidos) |
+| `KAFKA_CONSUMER_ENABLED`, `KAFKA_CONSUMER_GROUP_PREFIX`, `EDA_TOPIC_EVENTO_PUBLICADO`, `EDA_TOPIC_EVENTO_CANCELADO`, `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA`, `CONTEXTO_ZONA_RADIO_DEFAULT_METROS` | Listeners de Espacios: cobertura preventiva y prioridad por evento en un radio (en producción: prendidos, radio por default de 500 m) |
+| `EDA_TOPIC_EMERGENCIA_SOLICITADA`, `EDA_TOPIC_RECLAMO_CREADO`, `EDA_TOPIC_RECLAMO_ACTUALIZADO`, `RECLAMO_INTERVENCION_DISPARADOR` | Listeners del caso de la ciclovía: `EmergenciaSolicitada` de Movilidad y `ReclamoCreado` / `ReclamoActualizado` de Reclamos. El disparador dice quién crea la intervención: `movilidad` (default), `reclamo` o `ambos` (en producción: tópicos por default del código; los de Reclamos prendidos desde el 12/11/2026) |
 | `EDA_CONSUMER_FROM_BEGINNING`, `EDA_CONSUMER_SINCE` | Grupo sin offset: lee desde el principio salteando lo anterior al piso (en producción: `EDA_CONSUMER_SINCE=2026-11-05T15:00:00Z`; tiene que quedar cargada) |
 | `EDA_PUBLISHER_MODE`, `EDA_API_URL` | Publicación por el gateway (en producción: `gateway`, `https://test.citypass.mrfranco.net.ar`) |
 | `EDA_SCHEMA_REGISTRY_URL` (+ `_USERNAME`/`_PASSWORD` opcionales) | Registry del gateway para decodificar Avro |
@@ -70,13 +72,13 @@ flowchart TB
 | `CORS_ALLOWED_ORIGINS` | Origins permitidos (sin ella, producción cae a un default con warning) |
 | `RATE_LIMIT_ENABLED` | Apaga el rate limit (login, panic-button) |
 | `KEEP_WARM_ENABLED`, `KEEP_WARM_URLS`, `KEEP_WARM_WINDOWS`, `KEEP_WARM_TZ`, `KEEP_WARM_INTERVAL_MS` | Job in-process que evita el sleep de Render (free) |
-| `AUTH_MODE`, `ALLOW_LOCAL_AUTH` | `local` (JWT propio) hoy. `hybrid` = Login Federado del Grupo 2 para el personal + cuentas locales para los ciudadanos, elegido por el `iss` del token (no mira `NODE_ENV` ni `ALLOW_LOCAL_AUTH`). `idp` = solo Login Federado |
+| `AUTH_MODE`, `ALLOW_LOCAL_AUTH` | En producción: `hybrid` desde el 12/11/2026 = Login Federado del Grupo 2 para el personal + cuentas locales para los ciudadanos y los atajos de demo, elegido por el `iss` del token (no mira `NODE_ENV` ni `ALLOW_LOCAL_AUTH`). `local` = solo JWT propio. `idp` = solo Login Federado |
 | `DEV_LOGIN_STRICT` | `true` en producción: `/auth/dev/login` solo emite tokens para los subs demo |
-| `IDP_ISSUER`, `IDP_AUDIENCE`, `IDP_MODULE`, `IDP_CLOCK_TOLERANCE_SECONDS` | Cargadas en producción. En `local`, iss/aud de los tokens propios; en `hybrid` e `idp`, los del Login Federado (`https://idp.citypass.local` y `citypass-emergencias-api` según el contrato del Grupo 2) |
-| `IDP_JWKS_URI` | JWKS del Login Federado (`https://api.citypass-login.pp.ua/.well-known/jwks.json`). Obligatoria en `hybrid` e `idp`; falta cargarla en producción |
-| `IDP_REQUIRE_TOKEN_USE`, `IDP_REQUIRE_TOKEN_VER`, `IDP_SUBJECT_CLAIM`, `IDP_GROUPS_CLAIM`, `IDP_GROUP_MAP`, `IDP_SUB_ALIASES` | Solo `hybrid`: claims del token federado, grupos federados → internos y sub federado → id de oficial (README > Login Federado + cuentas locales) |
+| `IDP_ISSUER`, `IDP_AUDIENCE`, `IDP_MODULE`, `IDP_CLOCK_TOLERANCE_SECONDS` | Cargadas en producción. En `hybrid` e `idp` son el iss/aud del Login Federado: `https://idp.citypass.local` (sin barra final) y `citypass-emergencias-api`, confirmados con un token real el 12/11/2026. En `local`, los de los tokens propios |
+| `IDP_JWKS_URI` | JWKS del Login Federado (`https://api.citypass-login.pp.ua/.well-known/jwks.json`). Obligatoria en `hybrid` e `idp`; cargada en producción desde el 12/11/2026 |
+| `IDP_REQUIRE_TOKEN_USE`, `IDP_REQUIRE_TOKEN_VER`, `IDP_SUBJECT_CLAIM`, `IDP_GROUPS_CLAIM`, `IDP_GROUP_MAP`, `IDP_SUB_ALIASES` | Solo `hybrid`: claims del token federado, grupos federados → internos y sub federado → id de oficial (README > Login Federado + cuentas locales). En producción no hicieron falta para el dispatcher (su grupo LDAP, `dispatcher`, está en el mapa por default); faltan para los oficiales, que todavía no tienen usuario LDAP |
 | `LOCAL_JWT_ISSUER`, `LOCAL_JWT_AUDIENCE` | Solo `hybrid`: iss/aud de los tokens locales (el iss tiene que ser distinto de `IDP_ISSUER`) |
-| `LOCAL_TOKEN_TTL_SECONDS`, `LOCAL_JWT_PRIVATE_KEY_PEM` | `AUTH_MODE=local` e `hybrid` |
+| `LOCAL_TOKEN_TTL_SECONDS`, `LOCAL_JWT_PRIVATE_KEY_PEM` | `AUTH_MODE=local` e `hybrid`. El TTL por default es 900 s: una sesión local (ciudadano o atajo de demo) dura 15 minutos y no se renueva |
 | `FORCE_HTTPS` | Forzar HTTPS fuera de `production` |
 | `CITIZEN_PII_RETENTION_*`, `INCIDENT_*`, `LOCATION_RETENTION_INTERVAL_MS` | Jobs de retención del perfil y de detección de incidentes (defaults del código en producción) |
 

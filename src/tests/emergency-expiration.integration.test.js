@@ -15,6 +15,7 @@ describe('expiración de emergencias abiertas (integración contra Postgres real
   let pool;
   let repository;
   const created = [];
+  const eventos = [];
 
   beforeAll(async () => {
     process.env.LOCATION_ENCRYPTION_KEY =
@@ -32,6 +33,7 @@ describe('expiración de emergencias abiertas (integración contra Postgres real
     await pool.query('DELETE FROM outbox_events WHERE topic = $1', [TOPIC]);
     await pool.query('DELETE FROM emergency_status_history WHERE emergency_id = ANY($1::uuid[])', [created]);
     await pool.query('DELETE FROM emergencies WHERE id = ANY($1::uuid[])', [created]);
+    await pool.query('DELETE FROM contexto_zona WHERE referencia_externa = ANY($1::text[])', [eventos]);
     await pool.query('DELETE FROM officers WHERE id = $1', [OFFICER_ID]);
     await closePool();
   });
@@ -75,6 +77,30 @@ describe('expiración de emergencias abiertas (integración contra Postgres real
         await repository.updateStatus(id, { newStatus: status, actor: 'test' });
       }
     }
+  }
+
+  // Cobertura preventiva de un evento de Espacios, creada hace `edadHoras`.
+  // `finEnHoras` es cuándo termina el evento respecto de ahora (negativo: ya
+  // terminó); con null no se registra el contexto del evento.
+  async function createCoverage({ edadHoras, finEnHoras }) {
+    const eventoId = `evento-exp-${randomUUID().slice(0, 8)}`;
+    eventos.push(eventoId);
+    const id = await createEmergency({
+      userId: null, source: 'EXTERNAL', emergencyType: 'PREVENTIVA', status: 'PENDING',
+      causaTipo: 'EVENTO_PUBLICO', causaId: eventoId,
+    });
+    await age(id, edadHoras);
+    if (finEnHoras !== null) {
+      await pool.query(
+        `INSERT INTO contexto_zona
+           (tipo, origen, referencia_externa, source_updated_at, vigente_desde, vigente_hasta, latitud, longitud, radio_metros)
+         VALUES ('EVENTO_ESPACIO_PUBLICO', 'espacios', $1, now(),
+                 now() - interval '300 hours', now() + ($2::double precision * interval '1 hour'),
+                 -34.6037, -58.3816, 500)`,
+        [eventoId, finEnHoras]
+      );
+    }
+    return id;
   }
 
   async function row(id) {
@@ -188,6 +214,20 @@ describe('expiración de emergencias abiertas (integración contra Postgres real
     const still = await row(viejaConActividad);
     expect(still.status).toBe('VALIDATED');
     expect(still.location_encrypted).not.toBeNull();
+  });
+
+  it('una cobertura preventiva no expira hasta pasado el plazo desde el fin de su evento', async () => {
+    const eventoFuturo = await createCoverage({ edadHoras: 100, finEnHoras: 48 });
+    const terminoHacePoco = await createCoverage({ edadHoras: 100, finEnHoras: -10 });
+    const terminoHaceMucho = await createCoverage({ edadHoras: 100, finEnHoras: -80 });
+    const sinContexto = await createCoverage({ edadHoras: 100, finEnHoras: null });
+
+    await runJob();
+
+    expect((await row(eventoFuturo)).status).toBe('PENDING');
+    expect((await row(terminoHacePoco)).status).toBe('PENDING');
+    expect((await row(terminoHaceMucho)).status).toBe('CANCELLED');
+    expect((await row(sinContexto)).status).toBe('CANCELLED');
   });
 
   it('justo antes del plazo no expira; pasado el plazo, sí', async () => {

@@ -15,7 +15,7 @@ services:
     autoDeployTrigger: "off"
     envVars:
       # Producción NO corre con NODE_ENV=production: las respuestas no traen
-      # Strict-Transport-Security (verificado el 05/11/2026). El valor vive en
+      # Strict-Transport-Security (verificado el 12/11/2026). El valor vive en
       # el dashboard. Con production se prenden HSTS + redirect a HTTPS y CORS
       # estricto, y AUTH_MODE=local pasa a exigir ALLOW_LOCAL_AUTH=true.
       - key: NODE_ENV
@@ -29,40 +29,47 @@ services:
       - key: DB_POOL_MAX
         value: "10"
 
-      # Auth local (JWT propio con el contrato de CityPass+). DEV_LOGIN_STRICT
-      # limita /auth/dev/login a los subs demo de src/auth/dev-login-policy.js.
+      # Auth híbrida desde el 12/11/2026: el personal entra por el Login
+      # Federado del Grupo 2 y los ciudadanos (y los atajos de demo) con cuenta
+      # local. El iss del token decide contra qué claves se valida (README >
+      # Login Federado + cuentas locales). No depende de NODE_ENV ni de
+      # ALLOW_LOCAL_AUTH. Volver atrás: AUTH_MODE=local.
+      # DEV_LOGIN_STRICT limita /auth/dev/login a los subs demo de
+      # src/auth/dev-login-policy.js.
       - key: AUTH_MODE
-        value: local
+        value: hybrid
       - key: DEV_LOGIN_STRICT
         value: "true"
-      # Ya cargadas en el dashboard (valores ahí). En local, IDP_ISSUER e
-      # IDP_AUDIENCE son el iss/aud de los tokens propios; en hybrid, los del
-      # Login Federado.
+      # iss y aud del Login Federado, confirmados con un token real el
+      # 12/11/2026. El iss va sin barra final: con barra el token se rechaza.
       - key: IDP_ISSUER
-        sync: false
+        value: https://idp.citypass.local
       - key: IDP_AUDIENCE
-        sync: false
+        value: citypass-emergencias-api
+      - key: IDP_JWKS_URI
+        value: https://api.citypass-login.pp.ua/.well-known/jwks.json
+      # Cargadas en el dashboard (valores ahí).
       - key: IDP_MODULE
         sync: false
       - key: IDP_CLOCK_TOLERANCE_SECONDS
         sync: false
-      # Para aceptar también el Login Federado del Grupo 2 (personal) sin
-      # perder las cuentas locales (ciudadanos): AUTH_MODE=hybrid + lo de abajo
-      # (README > Login Federado + cuentas locales). No depende de NODE_ENV ni
-      # de ALLOW_LOCAL_AUTH. Revisar antes que IDP_ISSUER sea
-      # https://idp.citypass.local e IDP_AUDIENCE citypass-emergencias-api (o
-      # lo que traiga un token real). Volver atrás: AUTH_MODE=local.
-      # - key: AUTH_MODE
-      #   value: hybrid
-      # - key: IDP_JWKS_URI
-      #   value: https://api.citypass-login.pp.ua/.well-known/jwks.json
-      # Sub federado → id del catálogo de oficiales, cuando se conozcan.
-      # - key: IDP_SUB_ALIASES
-      #   value: '{"<sub-federado>":"of-001"}'
+      # El grupo LDAP del dispatcher (`dispatcher`) ya está en el mapa por
+      # default: no hizo falta IDP_GROUP_MAP. El grupo LDAP de los oficiales
+      # (`poli`) también está en el default. Cada oficial LDAP necesita
+      # IDP_SUB_ALIASES para llevar su sub al id del catálogo de oficiales.
+      # Puente hasta implementar el ADR "Vincular los oficiales del LDAP al
+      # catálogo de oficiales" (el vínculo pasa a la tabla officers).
+      # U000025 = jefe.gorgory (grupo poli) → of-001, 16/11/2026.
+      - key: IDP_SUB_ALIASES
+        value: '{"U000025":"of-001"}'
+      # Vida del token local (default 900 s): una sesión de demo dura 15 minutos
+      # y no se renueva. Para una demo larga conviene subirlo (ej. 14400). No
+      # sabemos si está cargada en el dashboard.
+      # - key: LOCAL_TOKEN_TTL_SECONDS
+      #   value: "14400"
 
-      # Bus del Grupo 1. Kafka está prendido solo para consumir: el outbox no
-      # publica (OUTBOX_PUBLISHER_ENABLED=false) y los eventos propios quedan
-      # PENDING en outbox_events.
+      # Bus del Grupo 1. Se consume por Kafka (SASL_SSL) y se publica por HTTP
+      # al gateway desde el 05/11/2026 (ver EDA_PUBLISHER_MODE más abajo).
       - key: KAFKA_ENABLED
         value: "true"
       - key: KAFKA_BROKER
@@ -73,13 +80,38 @@ services:
         value: emergencias-backend
       - key: KAFKA_CONSUMER_ENABLED
         value: "true"
+      # Publicación: el outbox manda EmergenciaCreada y EmergenciaActualizada al
+      # gateway (POST /api/v1/event-types/{fqn}/events). OUTBOX_PUBLISH_SINCE
+      # está cargada con la hora en que se activó (valor en el dashboard).
       - key: OUTBOX_PUBLISHER_ENABLED
-        value: "false"
-      # Listeners de cobertura preventiva (eventos de Espacios).
+        value: "true"
+      - key: EDA_PUBLISHER_MODE
+        value: gateway
+      - key: EDA_API_URL
+        value: https://test.citypass.mrfranco.net.ar
+      - key: OUTBOX_PUBLISH_SINCE
+        sync: false
+      # Listeners de Espacios: cobertura preventiva y prioridad por evento.
       - key: EDA_TOPIC_EVENTO_PUBLICADO
         value: com.citypass.espacios.EventoComunitarioPublicado
       - key: EDA_TOPIC_EVENTO_CANCELADO
         value: com.citypass.espacios.EventoCancelado
+      # Listeners del caso ciclovía: usan el default del código
+      # (com.citypass.movilidad.EmergenciaSolicitada,
+      # com.citypass.reclamos.ReclamoCreado.v3 y ...ReclamoActualizado). Se
+      # pisan con EDA_TOPIC_EMERGENCIA_SOLICITADA / EDA_TOPIC_RECLAMO_CREADO /
+      # EDA_TOPIC_RECLAMO_ACTUALIZADO. Quién crea la intervención lo decide
+      # RECLAMO_INTERVENCION_DISPARADOR: movilidad (default), reclamo o ambos.
+      # Pedido de asistencia en bicicleta: listener independiente y tópico propio.
+      - key: EDA_TOPIC_EMERGENCIA_BICICLETA
+        value: com.citypass.movilidad.EmergenciaBicicleta
+      # Piso de consumo: un grupo sin offset lee desde el principio y saltea lo
+      # anterior a esta fecha. Tiene que quedar cargada siempre.
+      - key: EDA_CONSUMER_SINCE
+        value: "2026-11-05T15:00:00Z"
+      # Radio de la prioridad por evento (default 500 m): usa el default.
+      # - key: CONTEXTO_ZONA_RADIO_DEFAULT_METROS
+      #   value: "500"
       # Schema registry del gateway (Avro); usa el mismo token que el broker.
       - key: EDA_SCHEMA_REGISTRY_URL
         value: https://test.citypass.mrfranco.net.ar/api/v1
@@ -92,6 +124,12 @@ services:
       # emergencias.priorizada).
       - key: TOPIC_PANIC_BUTTON
         value: emergencias.boton-panico
+      # EmergenciaVinculadaAContextoZona (ADR "Publicar el vínculo de una
+      # emergencia con un contexto de zona"). Apagado hasta que el tipo esté
+      # registrado en el catálogo del gateway; al pasarlo a true, correr una vez
+      # `npm run backfill:vinculos-contexto` (Shell de Render).
+      - key: EVENTO_VINCULO_CONTEXTO_ENABLED
+        value: "false"
 
       # Clave AES-256-GCM de ubicaciones (openssl rand -base64 32). Sin esto el
       # servicio no arranca. Para rotar: ver README (Seguridad de datos).
@@ -124,7 +162,9 @@ services:
       # Keep-warm in-process (ver README > Keep-warm): en horario de clase el
       # backend se pega a sí mismo (URL pública) y al frontend cada 8 min para
       # que Render (free) no los duerma. El cron de GitHub
-      # (.github/workflows/keep-warm.yml) solo hace el primer despertar.
+      # (.github/workflows/keep-warm.yml) tendría que hacer el primer despertar,
+      # pero llega tarde (el 05/11/2026 el primer ping fue a las 21:33 ART):
+      # antes de la clase hay que despertar el servicio a mano con /health.
       - key: KEEP_WARM_ENABLED
         value: "true"
       - key: KEEP_WARM_URLS

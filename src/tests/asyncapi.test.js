@@ -16,6 +16,7 @@ const {
 } = require('../services/emergency-events');
 const { EMERGENCY_TYPES } = require('../domain/emergency-type');
 const { ProgramarCoberturaPreventivaRule } = require('../listeners/cobertura-preventiva/evento-comunitario-publicado/rules/01-programar-cobertura.rule');
+const { CrearEmergenciaBicicletaRule } = require('../listeners/movilidad-bicicleta/emergencia-bicicleta/rules/01-crear-emergencia-bicicleta.rule');
 
 const SPEC_PATH = path.join(__dirname, '..', '..', 'asyncapi.yaml');
 
@@ -53,7 +54,8 @@ describe('asyncapi.yaml', () => {
     expect(send).toEqual(expect.arrayContaining(['publicarEmergenciaCreada', 'publicarEmergenciaActualizada']));
     expect(receive).toEqual(expect.arrayContaining([
       'recibirEventoComunitarioPublicado', 'recibirEventoCancelado',
-      'recibirReclamoCreado', 'recibirReclamoActualizado',
+      'recibirReclamoCreado', 'recibirReclamoActualizado', 'recibirEmergenciaSolicitada',
+      'recibirEmergenciaBicicleta',
     ]));
   });
 
@@ -164,6 +166,44 @@ describe('asyncapi.yaml', () => {
     it('EventoCancelado requiere eventoId', () => {
       expect(validate('EventoCanceladoData', { eventoId: 'evt-espacios-1', motivo: 'lluvia', canceladoEn: '2026-11-03T10:00:00Z' })).toBe(true);
       expect(() => validate('EventoCanceladoData', { motivo: 'lluvia' })).toThrow();
+    });
+
+    it('EmergenciaBicicleta valida el schema y conserva emergenciaId para el outcome', () => {
+      const data = {
+        emergenciaId: 'EMG-20261115-12345',
+        actorSub: 'usuario-demo',
+        reportadaEn: 1763218800000,
+        ubicacion: { latitud: -34.6037, longitud: -58.3816, precisionMetros: 12.5 },
+        triage: {
+          respondido: true,
+          puedeMoverse: false,
+          estaSangrando: true,
+          vehiculoInvolucrado: true,
+          prioridadSugerida: 'P1',
+        },
+        viaje: {
+          viajeId: 101,
+          iniciadoEn: 1763217900000,
+          estacionOrigenId: 7,
+          estacionOrigenNombre: 'Estación Ejemplo',
+          bicicletaId: 55,
+          bicicletaCodigo: 'BIKE-0055',
+        },
+        usuario: { usuarioId: 42, nombre: 'Usuario', apellido: 'Demo', email: 'demo@example.invalid' },
+      };
+      const rule = new CrearEmergenciaBicicletaRule();
+
+      expect(validate('EmergenciaBicicletaData', data)).toBe(true);
+      expect(rule.apply({ data })).toMatchObject({
+        type: 'CrearEmergenciaBicicleta',
+        payload: {
+          emergenciaId: 'EMG-20261115-12345',
+          latitud: -34.6037,
+          longitud: -58.3816,
+          prioridadSugerida: 'P1',
+        },
+      });
+      expect(rule.apply({ data }).payload).not.toHaveProperty('usuario');
     });
   });
 });
