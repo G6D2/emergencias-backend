@@ -16,6 +16,7 @@ const {
 } = require('../services/emergency-events');
 const { EMERGENCY_TYPES } = require('../domain/emergency-type');
 const { ProgramarCoberturaPreventivaRule } = require('../listeners/cobertura-preventiva/evento-comunitario-publicado/rules/01-programar-cobertura.rule');
+const { ProgramarCoberturaActividadRule } = require('../listeners/cobertura-preventiva/actividad-creada/rules/01-programar-cobertura.rule');
 const { CrearEmergenciaBicicletaRule } = require('../listeners/movilidad-bicicleta/emergencia-bicicleta/rules/01-crear-emergencia-bicicleta.rule');
 
 const SPEC_PATH = path.join(__dirname, '..', '..', 'asyncapi.yaml');
@@ -55,6 +56,7 @@ describe('asyncapi.yaml', () => {
     expect(receive).toEqual(expect.arrayContaining([
       'recibirEventoComunitarioPublicado', 'recibirEventoCancelado',
       'recibirReclamoCreado', 'recibirReclamoActualizado', 'recibirEmergenciaSolicitada',
+      'recibirActividadCreada',
       'recibirEmergenciaBicicleta',
     ]));
   });
@@ -161,6 +163,23 @@ describe('asyncapi.yaml', () => {
       };
       expect(validate('EventoComunitarioPublicadoData', data)).toBe(true);
       expect(new ProgramarCoberturaPreventivaRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
+    });
+
+    it('una ActividadCreada válida según el spec dispara la regla', () => {
+      const data = {
+        actividadId: 'act-1',
+        titulo: 'Festival de Primavera',
+        capacidad: 1200,
+        ubicacion: { lat: -34.5994, lng: -58.3988 },
+        direccion: 'Av. Córdoba 2100',
+        estado: 'PROGRAMADA',
+        correlationId: 'act-1',
+        fechaHoraInicio: Date.now() + 60 * 60 * 1000,
+        fechaHoraFinalizacion: Date.now() + 3 * 60 * 60 * 1000,
+      };
+      expect(validate('ActividadCreadaData', data)).toBe(true);
+      expect(new ProgramarCoberturaActividadRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
+      expect(() => validate('ActividadCreadaData', { titulo: 'sin id' })).toThrow();
     });
 
     it('EventoCancelado requiere eventoId', () => {

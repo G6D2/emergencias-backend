@@ -172,6 +172,17 @@ channels:
       reclamoActualizado:
         $ref: '#/components/messages/ReclamoActualizado'
 
+  actividadCreada:
+    address: com.citypass.espacios.ActividadCreada.v3
+    title: ActividadCreada v3 (Espacios Públicos)
+    description: |
+      Topic configurable con `EDA_TOPIC_ACTIVIDAD_CREADA`. Espacios lo publica
+      una vez, justo después de `EventoComunitarioPublicado`. El `actividadId`
+      es el mismo valor que el `eventoId` de ese evento.
+    messages:
+      actividadCreada:
+        $ref: '#/components/messages/ActividadCreada'
+
 operations:
   publicarEmergenciaCreada:
     action: send
@@ -223,6 +234,24 @@ operations:
           const: com.citypass.emergencias.EventoComunitarioPublicadoListener
     messages:
       - $ref: '#/channels/eventoComunitarioPublicado/messages/eventoComunitarioPublicado'
+
+  recibirActividadCreada:
+    action: receive
+    channel:
+      $ref: '#/channels/actividadCreada'
+    summary: |
+      Programa una cobertura preventiva (emergencia `PREVENTIVA`) si la capacidad
+      llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500), la actividad no terminó (`fechaHoraFinalizacion`) y no es una
+      reserva de ciudadano (`organizadorTipo: CIUDADANO`). Usa el
+      `actividadId` como causa, así que no duplica la cobertura que ya haya
+      creado `EventoComunitarioPublicado`.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.ActividadCreadaListener
+    messages:
+      - $ref: '#/channels/actividadCreada/messages/actividadCreada'
 
   recibirEventoCancelado:
     action: receive
@@ -566,6 +595,22 @@ components:
           data:
             $ref: '#/components/schemas/ReclamoActualizadoData'
 
+    ActividadCreada:
+      name: ActividadCreada
+      title: Actividad creada
+      contentType: application/json
+      description: |
+        Producido por Espacios Públicos (versión 2). Solo se documentan los
+        campos que lee `ProgramarCoberturaActividadRule`; el resto se ignora.
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/ActividadCreadaData'
+
   schemas:
     Metadata:
       type: object
@@ -888,6 +933,49 @@ components:
         correlationId:
           type: string
           description: En Espacios no es UUID (`evento-<id>`).
+
+    ActividadCreadaData:
+      type: object
+      additionalProperties: true
+      required: [actividadId]
+      properties:
+        actividadId:
+          type: string
+          minLength: 1
+          description: Mismo valor que el `eventoId` de `EventoComunitarioPublicado`.
+        titulo:
+          type: string
+        organizadorTipo:
+          type: string
+          enum: [CIUDAD, CIUDADANO]
+          description: |
+            Obligatorio desde la v3. CIUDAD: lo creó un administrador municipal;
+            CIUDADANO: lo creó un ciudadano. Hoy siempre llega CIUDAD. La regla de
+            cobertura no lo usa.
+        capacidad:
+          type: integer
+          description: Personas esperadas (no hay campo de asistentes).
+        ubicacion:
+          type: object
+          properties:
+            lat:
+              type: number
+            lng:
+              type: number
+        direccion:
+          type: [string, 'null']
+        estado:
+          type: string
+          description: Llega `PROGRAMADA`. Con `CANCELADA` no se programa cobertura.
+        correlationId:
+          type: string
+          description: En Espacios no es UUID (`act-<id>`).
+        fechaHoraInicio:
+          type: integer
+          description: Epoch millis.
+        fechaHoraFinalizacion:
+          type: integer
+          description: Epoch millis. Espacios no publica nada cuando la actividad termina.
 
     EventoCanceladoData:
       type: object
