@@ -89,6 +89,11 @@ describe('listeners/cobertura-preventiva', () => {
     expect(listener.rules()).toHaveLength(1);
   });
 
+  it('ActividadCreadaListener usa ActividadCreada.v3 por defecto si no hay variable', () => {
+    delete process.env.EDA_TOPIC_ACTIVIDAD_CREADA;
+    expect(new ActividadCreadaListener(kafka).topic).toBe('com.citypass.espacios.ActividadCreada.v3');
+  });
+
   it('ActividadCreadaListener dispara ProgramarCobertura con el actividadId como eventoId', async () => {
     const evento = {
       metadata: { eventId: 'e4' },
