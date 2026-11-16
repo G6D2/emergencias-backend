@@ -247,7 +247,7 @@ Desde G6D2/Frontend#56 el front loguea al personal (dispatchers, oficiales, dele
 | Grupo federado | Grupo interno |
 |---|---|
 | `dispatcher`, `dispatchers`, `operador` | `dispatcher` |
-| `officer` | `officer` |
+| `officer`, `poli` | `officer` (`poli` es el grupo LDAP de los oficiales) |
 | `delegado`, `delegados` | `delegado` (no habilita ninguna ruta) |
 
 Un grupo que no está en el mapa no otorga nada. `citizen` no está en el default a propósito: en `hybrid` los ciudadanos entran con cuenta local, y los tokens locales y federados comparten el espacio de `sub` (el contrato del Grupo 2 usa subs como `U000042`, que también es un sub demo local). Un federado con `citizen` podría ver las emergencias de un ciudadano local con el mismo `sub`. Si hace falta, se agrega con `IDP_GROUP_MAP`.
@@ -286,7 +286,7 @@ IDP_JWKS_URI=https://api.citypass-login.pp.ua/.well-known/jwks.json
 
 Para volver atrás alcanza con `AUTH_MODE=local`. Para saber desde afuera en qué modo corre, sin credenciales: un JWT con un `iss` cualquiera recibe `401 Unknown token issuer` en `hybrid` y `401 Invalid or expired token` en `local`.
 
-**Confirmado con un token real el 12/11/2026** (se decodificó solo el payload): `iss` = `https://idp.citypass.local`; `aud` = `citypass-emergencias-api` (string); el usuario va en `sub` (por ejemplo `U000014`); vienen `token_use: "human"`, `ver: 1` y `module: "emergencias"`; el token dura 15 minutos. El dispatcher de prueba trae `groups: ["dispatcher"]`, que ya está en el mapa por default, y el delegado `groups: ["delegados"]`. Con eso `GET /api/user` devuelve `authSource: "federated"` y el rol `dispatcher`. **Falta**: usuarios LDAP de oficial (cuando existan, `IDP_GROUP_MAP` si su grupo no se llama `officer` e `IDP_SUB_ALIASES` con su `sub`) y decidir si se prenden `IDP_REQUIRE_TOKEN_USE` e `IDP_REQUIRE_TOKEN_VER`. El contrato de referencia es la guía de integración del Grupo 2 (`docs/externo/GRUPO-2-AUTENTICACION.md` del repo `carlos-illobre/citypass-event-gateway`).
+**Confirmado con un token real el 12/11/2026** (se decodificó solo el payload): `iss` = `https://idp.citypass.local`; `aud` = `citypass-emergencias-api` (string); el usuario va en `sub` (por ejemplo `U000014`); vienen `token_use: "human"`, `ver: 1` y `module: "emergencias"`; el token dura 15 minutos. El dispatcher de prueba trae `groups: ["dispatcher"]`, que ya está en el mapa por default, y el delegado `groups: ["delegados"]`. Con eso `GET /api/user` devuelve `authSource: "federated"` y el rol `dispatcher`. **Falta**: usuarios LDAP de oficial: su grupo `poli` ya está en el mapa por default, y el primero (`jefe.gorgory`, `sub` `U000025`) se vincula a `of-001` con `IDP_SUB_ALIASES` hasta implementar el ADR del vínculo en la tabla `officers` y decidir si se prenden `IDP_REQUIRE_TOKEN_USE` e `IDP_REQUIRE_TOKEN_VER`. El contrato de referencia es la guía de integración del Grupo 2 (`docs/externo/GRUPO-2-AUTENTICACION.md` del repo `carlos-illobre/citypass-event-gateway`).
 
 ### Autorización por `groups`
 

@@ -267,6 +267,28 @@ describe('AUTH_MODE=hybrid', () => {
       );
     });
 
+    it('el grupo LDAP `poli` es oficial, no dispatcher', async () => {
+      const token = await ctx.federatedToken({ sub: 'U000777', groups: ['poli'] });
+
+      const res = await me(ctx.app, token).expect(200);
+      expect(res.body.data).toMatchObject({
+        sub: 'of-001',
+        groups: ['officer'],
+        idpGroups: ['poli'],
+      });
+
+      await request(ctx.app)
+        .patch(`/api/emergencies/${EMERGENCY_ID}/en-route`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      // No opera como dispatcher.
+      await request(ctx.app)
+        .patch(`/api/emergencies/${EMERGENCY_ID}/validate`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+
     it('un oficial federado sin alias no puede tocar la emergencia de of-001', async () => {
       const token = await ctx.federatedToken({ sub: 'U000778', groups: ['officer'] });
 

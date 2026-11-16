@@ -54,11 +54,14 @@ services:
       - key: IDP_CLOCK_TOLERANCE_SECONDS
         sync: false
       # El grupo LDAP del dispatcher (`dispatcher`) ya está en el mapa por
-      # default: no hizo falta IDP_GROUP_MAP. Todavía no hay usuarios LDAP de
-      # oficial; cuando existan: IDP_GROUP_MAP si el grupo tiene otro nombre e
+      # default: no hizo falta IDP_GROUP_MAP. El grupo LDAP de los oficiales
+      # (`poli`) también está en el default. Cada oficial LDAP necesita
       # IDP_SUB_ALIASES para llevar su sub al id del catálogo de oficiales.
-      # - key: IDP_SUB_ALIASES
-      #   value: '{"<sub-federado>":"of-001"}'
+      # Puente hasta implementar el ADR "Vincular los oficiales del LDAP al
+      # catálogo de oficiales" (el vínculo pasa a la tabla officers).
+      # U000025 = jefe.gorgory (grupo poli) → of-001, 16/11/2026.
+      - key: IDP_SUB_ALIASES
+        value: '{"U000025":"of-001"}'
       # Vida del token local (default 900 s): una sesión de demo dura 15 minutos
       # y no se renueva. Para una demo larga conviene subirlo (ej. 14400). No
       # sabemos si está cargada en el dashboard.

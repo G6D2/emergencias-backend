@@ -150,6 +150,7 @@ describe('federated-claims', () => {
     const map = parseGroupMap(undefined);
     expect([...map.keys()].sort()).toEqual(Object.keys(DEFAULT_IDP_GROUP_MAP).sort());
     expect(map.get('operador')).toEqual(['dispatcher']);
+    expect(map.get('poli')).toEqual(['officer']);
     expect(map.get('delegados')).toEqual(['delegado']);
     expect(map.has('citizen')).toBe(false);
   });

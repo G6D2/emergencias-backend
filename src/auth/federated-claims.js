@@ -26,6 +26,8 @@ const DEFAULT_IDP_GROUP_MAP = Object.freeze({
   dispatchers: [GROUPS.DISPATCHER],
   operador: [GROUPS.DISPATCHER],
   officer: [GROUPS.OFFICER],
+  // Grupo LDAP de los oficiales en el Login Federado (alta del 15/11/2026).
+  poli: [GROUPS.OFFICER],
   delegado: [GROUPS.DELEGATE],
   delegados: [GROUPS.DELEGATE],
 });
