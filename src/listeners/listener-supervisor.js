@@ -6,7 +6,8 @@ const { secureLog } = require('../security/secure-log');
 const DEFAULT_RETRY_DELAYS_MS = Object.freeze([5_000, 30_000, 120_000]);
 
 /**
- * Arranca un listener y lo mantiene arriba: si start() falla, o si el consumer
+ * Arranca algo con start()/stop()/status()/onCrash (hoy, el EventConsumer
+ * que lee todos los topics) y lo mantiene arriba: si start() falla, o si el consumer
  * se cae sin que kafkajs lo reinicie (CRASH sin restart), lo vuelve a
  * levantar con backoff. Devuelve un handle con status() para GET /health y
  * stop() para el shutdown.

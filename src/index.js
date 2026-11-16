@@ -17,7 +17,7 @@ const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher, isOutboxPublisherEnabled } = require('./services/outbox-publisher');
 const { GatewayPublisher } = require('./services/gateway-publisher');
-const { createListeners, superviseListener, OutcomeFactory } = require('./listeners');
+const { createListeners, superviseListener, OutcomeFactory, EventConsumer } = require('./listeners');
 const { createEventDecoder, registryFromEnv } = require('./listeners/event-decoder');
 const { EventosProcesadosRepository } = require('./repositories/eventos-procesados.repository');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
@@ -109,9 +109,13 @@ async function start() {
       decoder: createEventDecoder({ registry: registryFromEnv(process.env, { authClient: edaAuthClient }) }),
     })
     : [];
-  // Si un listener no arranca (o se cae sin que kafkajs lo reinicie), se
-  // reintenta con backoff en vez de quedar muerto hasta el próximo deploy.
-  const listenerHandles = listeners.map((listener) => superviseListener(listener));
+  // Un solo consumer de Kafka para todos los listeners (un group.id, 2
+  // conexiones al broker en total; EDA limita a 10 por IP). Si no arranca, o
+  // se cae sin que kafkajs lo reinicie, se reintenta con backoff en vez de
+  // quedar muerto hasta el próximo deploy.
+  const eventConsumer = listeners.length > 0 ? new EventConsumer(kafkaService.kafka, listeners) : null;
+  const consumerHandle = eventConsumer ? superviseListener(eventConsumer) : null;
+  const listenerStatuses = () => (eventConsumer ? eventConsumer.listenerStatuses(consumerHandle.status()) : []);
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
   // Las abiertas que nadie tocó en el plazo de retención expiran (y se anonimizan).
@@ -127,7 +131,7 @@ async function start() {
     // GET /health: estado en memoria, sin conectar nada.
     health: () => kafkaHealth(kafkaService, {
       outbox: outboxPublisher.health(),
-      listeners: listenerHandles.map((handle) => handle.status()),
+      listeners: listenerStatuses(),
     }),
     officerRepository,
     incidentRepository,
@@ -162,7 +166,7 @@ async function start() {
     // pool se cierra al final, cuando ya nadie lo usa.
     const exitCode = await gracefulShutdown([
       { name: 'el servidor HTTP', run: () => closeServer(server) },
-      { name: 'los listeners', run: () => Promise.all(listenerHandles.map((handle) => handle.stop())) },
+      { name: 'el consumer de Kafka', run: () => (consumerHandle ? consumerHandle.stop() : Promise.resolve()) },
       { name: 'el producer de Kafka', run: () => kafkaService.disconnect() },
       { name: 'el pool de Postgres', run: () => closePool() },
     ], { timeoutMs: SHUTDOWN_TIMEOUT_MS });

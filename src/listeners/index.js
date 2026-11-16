@@ -1,4 +1,5 @@
 const { EventListener } = require('./event-listener');
+const { EventConsumer } = require('./event-consumer');
 const { BusinessRule } = require('./business-rule');
 const { OutcomeFactory } = require('./outcome-factory');
 const { superviseListener } = require('./listener-supervisor');
@@ -21,6 +22,7 @@ function createListeners(kafka, options = {}) {
 
 module.exports = {
   EventListener,
+  EventConsumer,
   BusinessRule,
   OutcomeFactory,
   coberturaPreventiva,
