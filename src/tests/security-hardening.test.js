@@ -63,10 +63,18 @@ describe('resolveDevLoginClaims', () => {
     )).toThrow(/Demo subject not allowed/);
 
     const demo = resolveDevLoginClaims(
-      { sub: 'DISP-Demo001', groups: ['citizen'] },
+      { sub: 'CIT-JuanPanico', groups: ['dispatcher'] },
       { NODE_ENV: 'production' }
     );
-    expect(demo.groups).toEqual(['dispatcher']);
+    expect(demo.groups).toEqual(['citizen']);
+    expect(demo.has_antipanic_button).toBe(true);
+  });
+
+  it('never issues a dispatcher token in strict mode, not even for the old demo sub', () => {
+    expect(() => resolveDevLoginClaims(
+      { sub: 'DISP-Demo001', groups: ['dispatcher'] },
+      { DEV_LOGIN_STRICT: 'true' }
+    )).toThrow(/Demo subject not allowed/);
   });
 });
 
