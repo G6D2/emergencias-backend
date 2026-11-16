@@ -564,7 +564,7 @@ Detalle de una emergencia. Delega en el mismo método que `GET /api/emergencies/
 
 ### GET `/api/emergencies`
 
-Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad de despacho (`dispatchPriority`: la efectiva más un nivel si hay un [contexto de zona](#prioridad-elevada-durante-un-evento) vigente en el barrio). Citizen solo ve las propias; officer solo las asignadas a él (el `assignedOfficerId` sale del `sub`, el del query se ignora). Los dos sin `incident`/`effectivePriority`/`dispatchPriority`/`priorityContext`.
+Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad de despacho (`dispatchPriority`: la efectiva más un nivel si hay un [contexto de zona](#prioridad-elevada-durante-un-evento) vigente en el barrio). Los empates se resuelven por `createdAt` y después por `id`, así el orden es el mismo entre una página y la siguiente. Citizen solo ve las propias; officer solo las asignadas a él (el `assignedOfficerId` sale del `sub`, el del query se ignora). Los dos sin `incident`/`effectivePriority`/`dispatchPriority`/`priorityContext`.
 
 ### GET `/api/emergencies/:id`
 

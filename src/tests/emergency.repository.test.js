@@ -770,6 +770,87 @@ describe('EmergencyRepository.findPage', () => {
     expect(calls[0].sql).not.toMatch(/WHERE/);
     expect(calls[1].sql).toMatch(/DESC/);
   });
+
+  it('lanza el COUNT y la página en paralelo, sin esperar una para pedir la otra', async () => {
+    const pending = [];
+    const pool = createPool({
+      query: (sql) => new Promise((resolve) => {
+        pending.push({ sql, resolve });
+      }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const page = repo.findPage(baseArgs);
+    // Ninguna respondió todavía y las dos ya están pedidas.
+    expect(pool.query).toHaveBeenCalledTimes(2);
+
+    // Responden en el orden inverso al que se pidieron: el resultado no cambia.
+    const select = pending.find(({ sql }) => !sql.includes('AS total'));
+    const count = pending.find(({ sql }) => sql.includes('AS total'));
+    select.resolve({ rows: [{ id: 'e-1' }] });
+    count.resolve({ rows: [{ total: 7 }] });
+
+    const result = await page;
+    expect(result.total).toBe(7);
+    expect(result.emergencies.map((emergency) => emergency.id)).toEqual(['e-1']);
+    expect(Object.keys(result)).toEqual(['emergencies', 'total']);
+  });
+
+  it('el COUNT recibe solo los filtros; limit y offset van únicamente a la página', async () => {
+    const calls = [];
+    const pool = createPool({
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        if (sql.includes('AS total')) return { rows: [{ total: 45 }] };
+        return { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.findPage({ ...baseArgs, userId: 'u-1', severity: 'high', page: 3, limit: 20 });
+
+    const count = calls.find(({ sql }) => sql.includes('AS total'));
+    const select = calls.find(({ sql }) => !sql.includes('AS total'));
+    expect(count.params).toEqual(['u-1', 'high']);
+    expect(select.params).toEqual(['u-1', 'high', 20, 40]);
+    // Arreglos distintos: en paralelo, compartirlo le mandaría al COUNT dos
+    // parámetros que su SQL no usa.
+    expect(select.params).not.toBe(count.params);
+    expect(select.sql).toMatch(/LIMIT \$3 OFFSET \$4/);
+    expect(count.sql).not.toMatch(/LIMIT|OFFSET|ORDER BY/);
+  });
+
+  it.each([
+    ['createdAt', 'desc', /ORDER BY e\.created_at DESC, e\.created_at ASC, e\.id ASC\s+LIMIT/],
+    ['createdAt', 'asc', /ORDER BY e\.created_at ASC, e\.created_at ASC, e\.id ASC\s+LIMIT/],
+    ['priority', 'desc', /ORDER BY LEAST\(.*\) DESC, e\.created_at ASC, e\.id ASC\s+LIMIT/],
+  ])('sortBy=%s order=%s: e.id es el último criterio del ORDER BY (desempate)', async (sortBy, order, expected) => {
+    const calls = [];
+    const pool = createPool({
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        if (sql.includes('AS total')) return { rows: [{ total: 0 }] };
+        return { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.findPage({ ...baseArgs, sortBy, order });
+
+    expect(calls.find(({ sql }) => !sql.includes('AS total')).sql).toMatch(expected);
+  });
+
+  it('si una de las dos consultas falla, propaga ese error', async () => {
+    const pool = createPool({
+      query: async (sql) => {
+        if (sql.includes('AS total')) throw new Error('count caído');
+        return { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await expect(repo.findPage(baseArgs)).rejects.toThrow('count caído');
+  });
 });
 
 describe('EmergencyRepository.findOutboxPage', () => {
