@@ -60,6 +60,51 @@ describe('GET /api/officers', () => {
     });
   });
 
+  it('filters by a valid status and treats an empty one as no filter', async () => {
+    const officerRepository = createMockOfficerRepository([
+      { id: 'of-001', name: 'A', status: 'disponible' },
+      { id: 'of-002', name: 'B', status: 'ocupado' },
+    ]);
+    const app = createApp(mockKafkaService, {}, {
+      authenticate: stubAuthenticate(),
+      officerRepository,
+    });
+
+    // Lo que manda el front: ?status=disponible, o nada.
+    const disponibles = await request(app).get('/api/officers?status=disponible').expect(200);
+    expect(disponibles.body.data.map((o) => o.id)).toEqual(['of-001']);
+
+    const ocupados = await request(app).get('/api/officers?status=%20ocupado%20').expect(200);
+    expect(ocupados.body.data.map((o) => o.id)).toEqual(['of-002']);
+
+    for (const url of ['/api/officers', '/api/officers?status=', '/api/officers?status=%20']) {
+      const todos = await request(app).get(url).expect(200);
+      expect(todos.body.data).toHaveLength(2);
+    }
+  });
+
+  it('rejects a status outside the catalog with 400 instead of an empty list', async () => {
+    const officerRepository = createMockOfficerRepository([
+      { id: 'of-001', name: 'A', status: 'disponible' },
+    ]);
+    const findAll = jest.spyOn(officerRepository, 'findAll');
+    const app = createApp(mockKafkaService, {}, {
+      authenticate: stubAuthenticate(),
+      officerRepository,
+    });
+
+    for (const url of [
+      '/api/officers?status=libre',
+      '/api/officers?status=DISPONIBLE',
+      '/api/officers?status=disponible&status=ocupado',
+    ]) {
+      const response = await request(app).get(url).expect(400);
+      expect(response.body.error).toBe('ValidationError');
+      expect(response.body.message).toBe('status must be one of: disponible, ocupado');
+    }
+    expect(findAll).not.toHaveBeenCalled();
+  });
+
   it('forbids citizens from listing officers', async () => {
     const officerRepository = createMockOfficerRepository([]);
     const app = createApp(mockKafkaService, {}, {

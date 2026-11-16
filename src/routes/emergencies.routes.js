@@ -42,6 +42,12 @@ function createEmergenciesRoutes(emergencyRepository, authenticate) {
    *           type: string
    *           enum: [low, medium, high, critical]
    *       - in: query
+   *         name: priority
+   *         schema:
+   *           type: string
+   *           enum: [low, medium, high, critical]
+   *         description: Alias de severity (se usa si no viene severity). Inválido → 400.
+   *       - in: query
    *         name: from
    *         schema:
    *           type: string
@@ -90,7 +96,7 @@ function createEmergenciesRoutes(emergencyRepository, authenticate) {
    *         description: Página de emergencias
    *       400:
    *         description: |
-   *           Filtro inválido: status desconocido, severity o emergencyType fuera del catálogo,
+   *           Filtro inválido: status desconocido, severity, priority o emergencyType fuera del catálogo,
    *           o from/to que no son una fecha ISO 8601
    *         content:
    *           application/json:

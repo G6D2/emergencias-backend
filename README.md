@@ -562,7 +562,7 @@ Detalle de una emergencia. Delega en el mismo método que `GET /api/emergencies/
 
 ### GET `/api/emergencies`
 
-Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity`, `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). `sortBy=priority` ordena por prioridad de despacho (`dispatchPriority`: la efectiva más un nivel si hay un [contexto de zona](#prioridad-elevada-durante-un-evento) vigente en el barrio). Citizen solo ve las propias; officer solo las asignadas a él (el `assignedOfficerId` sale del `sub`, el del query se ignora). Los dos sin `incident`/`effectivePriority`/`dispatchPriority`/`priorityContext`.
+Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separada por coma), `severity` (o `priority`), `from`/`to`, `assignedOfficerId` y `emergencyType` (o `type`). Un filtro inválido responde 400. `sortBy=priority` ordena por prioridad de despacho (`dispatchPriority`: la efectiva más un nivel si hay un [contexto de zona](#prioridad-elevada-durante-un-evento) vigente en el barrio). Citizen solo ve las propias; officer solo las asignadas a él (el `assignedOfficerId` sale del `sub`, el del query se ignora). Los dos sin `incident`/`effectivePriority`/`dispatchPriority`/`priorityContext`.
 
 ### GET `/api/emergencies/:id`
 
@@ -595,7 +595,7 @@ Cancela una emergencia propia en estado `PENDING` o `VALIDATED`. Requiere grupo 
 
 ### GET `/api/officers`
 
-Catálogo de oficiales para el dispatcher (`?status=disponible` opcional). El catálogo vive en la tabla `officers` (V11); los oficiales se loguean con su id como `sub` (`of-001`, `of-002` en el dev login).
+Catálogo de oficiales para el dispatcher (`?status=disponible` u `ocupado`, opcional; otro valor responde 400). El catálogo vive en la tabla `officers` (V11); los oficiales se loguean con su id como `sub` (`of-001`, `of-002` en el dev login).
 
 ### GET `/api/incidents` y `/api/incidents/:id`
 
