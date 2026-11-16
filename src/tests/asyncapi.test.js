@@ -174,8 +174,8 @@ describe('asyncapi.yaml', () => {
         direccion: 'Av. Córdoba 2100',
         estado: 'PROGRAMADA',
         correlationId: 'act-1',
-        fechaHoraInicio: 1763000000000,
-        fechaHoraFinalizacion: 1763007200000,
+        fechaHoraInicio: Date.now() + 60 * 60 * 1000,
+        fechaHoraFinalizacion: Date.now() + 3 * 60 * 60 * 1000,
       };
       expect(validate('ActividadCreadaData', data)).toBe(true);
       expect(new ProgramarCoberturaActividadRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);

@@ -11,8 +11,8 @@ const actividad = (extra = {}) => ({
   direccion: 'Av. Cordoba 2100',
   correlationId: 'act-7',
   ubicacion: { lat: -34.5994, lng: -58.3988 },
-  fechaHoraInicio: 1763000000000,
-  fechaHoraFinalizacion: 1763007200000,
+  fechaHoraInicio: Date.now() + 60 * 60 * 1000,
+  fechaHoraFinalizacion: Date.now() + 3 * 60 * 60 * 1000,
   ...extra,
 });
 
@@ -53,6 +53,31 @@ describe('listeners/cobertura-preventiva ProgramarCoberturaActividadRule', () =>
 
     it('no aplica a una actividad ya cancelada', () => {
       expect(rule.appliesTo(buildContext(actividad({ estado: 'CANCELADA' })))).toBe(false);
+    });
+
+    it('no aplica a una actividad que ya termino (fechaHoraFinalizacion en el pasado)', () => {
+      const pasado = Date.now() - 60 * 1000;
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: pasado })))).toBe(false);
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: new Date(pasado) })))).toBe(false);
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: new Date(pasado).toISOString() })))).toBe(false);
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: String(pasado) })))).toBe(false);
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: BigInt(pasado) })))).toBe(false);
+    });
+
+    it('aplica a una actividad en curso o futura y a la que no trae fecha de fin', () => {
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: Date.now() + 1000 })))).toBe(true);
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: undefined })))).toBe(true);
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: null })))).toBe(true);
+      expect(rule.appliesTo(buildContext(actividad({ fechaHoraFinalizacion: 'no-es-fecha' })))).toBe(true);
+    });
+
+    it('no aplica a reservas de ciudadanos (organizadorTipo CIUDADANO)', () => {
+      expect(rule.appliesTo(buildContext(actividad({ organizadorTipo: 'CIUDADANO' })))).toBe(false);
+    });
+
+    it('aplica si el organizador es la CIUDAD o no viene organizadorTipo', () => {
+      expect(rule.appliesTo(buildContext(actividad({ organizadorTipo: 'CIUDAD' })))).toBe(true);
+      expect(rule.appliesTo(buildContext(actividad({ organizadorTipo: undefined })))).toBe(true);
     });
 
     it('respeta UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA del env', () => {

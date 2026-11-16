@@ -3,6 +3,20 @@ const { BusinessRule } = require('../../../business-rule');
 const UMBRAL_DEFAULT = 500;
 const ESTADOS_SIN_COBERTURA = new Set(['CANCELADA', 'CANCELLED']);
 
+// Epoch millis de una fecha del evento. Acepta number, bigint, Date, string
+// numerico o ISO; devuelve NaN si no hay un valor interpretable.
+function aMillis(valor) {
+  if (valor === null || valor === undefined || valor === '') return NaN;
+  if (typeof valor === 'bigint') return Number(valor);
+  if (valor instanceof Date) return valor.getTime();
+  if (typeof valor === 'number') return valor;
+  if (typeof valor === 'string') {
+    const n = Number(valor);
+    return Number.isFinite(n) ? n : Date.parse(valor);
+  }
+  return NaN;
+}
+
 // Programa cobertura preventiva cuando una actividad de Espacios llega al
 // umbral de personas.
 //
@@ -11,6 +25,13 @@ const ESTADOS_SIN_COBERTURA = new Set(['CANCELADA', 'CANCELLED']);
 // solo criterio sin cargar nada en produccion. Es un criterio de seguridad de
 // Emergencias (cubrir antes); otros modulos del caso usan 1.000 para clasificar
 // la causa, y toda actividad de 1.000 o mas tambien se cubre.
+//
+// No programa cobertura para (1) actividades que ya terminaron
+// (fechaHoraFinalizacion < ahora): al arrancar sin offset el listener relee el
+// topico entero y crearia una PREVENTIVA por cada actividad vieja; ni
+// (2) reservas de vecinos (organizadorTipo CIUDADANO): su baja llega por
+// ActividadModificada, que no consumimos. Sin fecha de fin o sin organizadorTipo
+// la actividad se cubre.
 //
 // Payload de Espacios (ActividadCreada.v3): actividadId (= eventoId),
 // titulo, capacidad (entero, no hay asistentes), ubicacion { lat, lng },
@@ -34,6 +55,9 @@ class ProgramarCoberturaActividadRule extends BusinessRule {
     const data = context.data || {};
     if (typeof data.actividadId !== 'string' || !data.actividadId) return false;
     if (ESTADOS_SIN_COBERTURA.has(data.estado)) return false;
+    if (data.organizadorTipo === 'CIUDADANO') return false;
+    const fin = aMillis(data.fechaHoraFinalizacion);
+    if (Number.isFinite(fin) && fin < Date.now()) return false;
     const capacidad = this.capacidad(data);
     return Number.isFinite(capacidad) && capacidad >= this.umbral;
   }

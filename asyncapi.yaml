@@ -241,7 +241,8 @@ operations:
       $ref: '#/channels/actividadCreada'
     summary: |
       Programa una cobertura preventiva (emergencia `PREVENTIVA`) si la capacidad
-      llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500). Usa el
+      llega a `UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA` (default 500), la actividad no terminó (`fechaHoraFinalizacion`) y no es una
+      reserva de ciudadano (`organizadorTipo: CIUDADANO`). Usa el
       `actividadId` como causa, así que no duplica la cobertura que ya haya
       creado `EventoComunitarioPublicado`.
     bindings:

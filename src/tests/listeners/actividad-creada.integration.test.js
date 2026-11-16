@@ -83,8 +83,8 @@ const ACTIVIDAD = {
     direccion: 'Av. Córdoba 2100',
     correlationId: `act-${ACTIVIDAD_ID}`,
     ubicacion: { lat: -34.5994, lng: -58.3988 },
-    fechaHoraInicio: 1763000000000,
-    fechaHoraFinalizacion: 1763007200000,
+    fechaHoraInicio: Date.now() + 60 * 60 * 1000,
+    fechaHoraFinalizacion: Date.now() + 3 * 60 * 60 * 1000,
   },
 };
 
@@ -134,6 +134,20 @@ describe('ActividadCreada.v3 → cobertura preventiva (integration)', () => {
 
   it('no crea cobertura por debajo de 500 personas', async () => {
     await actividad.onMessage(buildMessage({ ...ACTIVIDAD, data: { ...ACTIVIDAD.data, capacidad: 400 } }));
+    expect(await coberturas()).toHaveLength(0);
+  });
+
+  it('no crea cobertura para una actividad que ya termino', async () => {
+    await actividad.onMessage(
+      buildMessage({ ...ACTIVIDAD, data: { ...ACTIVIDAD.data, fechaHoraFinalizacion: Date.now() - 60 * 1000 } })
+    );
+    expect(await coberturas()).toHaveLength(0);
+  });
+
+  it('no crea cobertura para una reserva de ciudadano', async () => {
+    await actividad.onMessage(
+      buildMessage({ ...ACTIVIDAD, data: { ...ACTIVIDAD.data, organizadorTipo: 'CIUDADANO' } })
+    );
     expect(await coberturas()).toHaveLength(0);
   });
 
