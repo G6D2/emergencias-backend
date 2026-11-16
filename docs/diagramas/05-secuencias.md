@@ -129,9 +129,9 @@ sequenceDiagram
                 Pub->>Kafka: producer.send(topic, payload)
                 alt envío OK
                     Kafka-->>Pub: ack
-                    Pub->>DB: markPublished(id) — status=PUBLISHED
+                    Pub->>DB: markPublished(id, attempts) — status=PUBLISHED (solo si sigue PROCESSING con ese attempts)
                 else falla o Kafka no conectado
-                    Pub->>DB: markFailed(id, attempts) — backoff exponencial hasta OUTBOX_MAX_ATTEMPTS, luego FAILED
+                    Pub->>DB: markFailed(id, attempts) — backoff hasta OUTBOX_MAX_ATTEMPTS, luego FAILED (mismo filtro)
                 end
             end
         else kafkaService.isEnabled() === false (KAFKA_ENABLED=false)
