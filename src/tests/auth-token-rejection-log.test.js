@@ -150,12 +150,15 @@ describe('verifier de tokens locales (jwt-verifier)', () => {
     let jwksUri;
 
     beforeAll(async () => {
-      // JWKS "caído" en la misma máquina: responde 503 a todo.
+      // JWKS "caído" en la misma máquina: responde 503 a todo. Escucha como
+      // los servidores de supertest (listen(0), sin fijar la dirección): en
+      // macOS un listener atado a 127.0.0.1 puede recibir el mismo puerto que
+      // el servidor de otro test y quedarse con sus requests.
       server = http.createServer((req, res) => {
         res.statusCode = 503;
         res.end('unavailable');
       });
-      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      await new Promise((resolve) => server.listen(0, resolve));
       jwksUri = `http://127.0.0.1:${server.address().port}/.well-known/jwks.json`;
     });
 
