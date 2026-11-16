@@ -55,10 +55,6 @@ function normalizeEmergencyType(value) {
   return EMERGENCY_TYPE_ALIASES[trimmed.toLowerCase()] || null;
 }
 
-function isValidEmergencyType(value) {
-  return normalizeEmergencyType(value) !== null;
-}
-
 /**
  * Normaliza o lanza ValidationError (400) con la lista de valores válidos.
  * Un valor ausente (undefined/null/'') devuelve null: cada caller decide el default.
@@ -81,6 +77,5 @@ module.exports = {
   EMERGENCY_TYPES,
   EMERGENCY_TYPE_ALIASES,
   normalizeEmergencyType,
-  isValidEmergencyType,
   assertEmergencyType,
 };

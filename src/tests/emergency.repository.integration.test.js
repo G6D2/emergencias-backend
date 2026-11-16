@@ -309,16 +309,6 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(found).toBeNull();
   });
 
-  it('lista emergencias existentes', async () => {
-    const input = buildEmergency();
-    await repository.create(input);
-
-    const all = await repository.findAll();
-
-    expect(Array.isArray(all)).toBe(true);
-    expect(all.some((emergency) => emergency.id === input.id)).toBe(true);
-  });
-
   it('actualiza el estado y registra el historial de forma atómica', async () => {
     const input = buildEmergency();
     await repository.create(input);
@@ -438,9 +428,11 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
       action: 'emergency:read',
     });
 
-    const audit = await repository.findAccessAuditByEmergencyId(input.id);
-    expect(audit).toHaveLength(1);
-    expect(audit[0].actorSub).toBe('U000999');
+    const audit = await getPool().query(
+      'SELECT actor_sub, action FROM emergency_access_audit WHERE emergency_id = $1',
+      [input.id]
+    );
+    expect(audit.rows).toEqual([{ actor_sub: 'U000999', action: 'emergency:read' }]);
 
     await getPool().query(
       `UPDATE emergencies SET closed_at = now() - interval '100 hours' WHERE id = $1`,

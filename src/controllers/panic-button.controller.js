@@ -29,13 +29,12 @@ function normalizeAddress(rawAddress) {
 }
 
 class PanicButtonController {
-  constructor(kafkaService, emergencyRepository) {
-    this.kafkaService = kafkaService;
+  constructor(emergencyRepository) {
     this.emergencyRepository = emergencyRepository;
     // GET /api/panic-button/:id delega en el mismo método de detalle que usa
     // GET /api/emergencies/:id: misma regla de acceso, mismo 404 unificado
     // para una emergencia ajena (ver EmergencyController#getEmergencyDetail).
-    this.emergencyController = new EmergencyController(kafkaService, emergencyRepository);
+    this.emergencyController = new EmergencyController(emergencyRepository);
   }
 
   /**

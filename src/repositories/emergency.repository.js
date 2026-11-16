@@ -516,16 +516,6 @@ class EmergencyRepository {
     return mapEmergency(result.rows[0], this.locationCrypto);
   }
 
-  async findAll() {
-    const result = await this.pool.query(
-      `SELECT e.*, o.name AS assigned_officer_name
-       FROM emergencies e
-       LEFT JOIN officers o ON o.id = e.assigned_officer_id
-       ORDER BY e.created_at DESC`
-    );
-    return result.rows.map((row) => mapEmergency(row, this.locationCrypto));
-  }
-
   async findHistoryByEmergencyId(emergencyId) {
     const result = await this.pool.query(
       'SELECT * FROM emergency_status_history WHERE emergency_id = $1 ORDER BY created_at ASC',
@@ -566,16 +556,6 @@ class EmergencyRepository {
       [emergencyId, actorSub, action]
     );
     return mapAccessAudit(result.rows[0]);
-  }
-
-  async findAccessAuditByEmergencyId(emergencyId) {
-    const result = await this.pool.query(
-      `SELECT * FROM emergency_access_audit
-       WHERE emergency_id = $1
-       ORDER BY created_at ASC`,
-      [emergencyId]
-    );
-    return result.rows.map(mapAccessAudit);
   }
 
   /**

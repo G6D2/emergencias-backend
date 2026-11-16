@@ -27,6 +27,8 @@ function createOfficerRoutes(officerRepository, authenticate) {
    *     responses:
    *       200:
    *         description: Listado de oficiales
+   *       400:
+   *         description: Filtro status fuera del catálogo (disponible, ocupado)
    *       401:
    *         description: Token ausente o inválido
    *       403:

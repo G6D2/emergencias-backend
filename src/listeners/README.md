@@ -71,9 +71,10 @@ marca transitorios: si no consigue conexion, o si ni el `ROLLBACK` anda.
 
 ## Conexion al bus
 
-- `group.id`: `com.citypass.emergencias.<Listener>` por default
-  (`KAFKA_CONSUMER_GROUP_PREFIX` lo cambia, pero tiene que empezar con
-  `com.citypass.emergencias.`: el broker solo acepta ese prefijo).
+- `group.id`: `com.citypass.emergencias.eventos` por default, uno solo para
+  todos los listeners (`event-consumer.js`). `KAFKA_CONSUMER_GROUP_PREFIX`
+  cambia el prefijo, pero tiene que empezar con `com.citypass.emergencias.`:
+  el broker solo acepta ese prefijo.
 - SASL/OAUTHBEARER con el token client-credentials del Login Federado
   (`EDA_OAUTH_*`, ver `KafkaService`). Sin secreto se conecta sin SASL.
 - `KAFKA_SSL=true` en produccion (SASL_SSL).

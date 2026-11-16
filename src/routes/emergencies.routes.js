@@ -9,9 +9,9 @@ const {
   requireCitizenDispatcherOrOfficer,
 } = require('../auth/authorize');
 
-function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
+function createEmergenciesRoutes(emergencyRepository, authenticate) {
   const router = express.Router();
-  const controller = new EmergencyController(kafkaService, emergencyRepository);
+  const controller = new EmergencyController(emergencyRepository);
 
   /**
    * @openapi
@@ -41,6 +41,12 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *         schema:
    *           type: string
    *           enum: [low, medium, high, critical]
+   *       - in: query
+   *         name: priority
+   *         schema:
+   *           type: string
+   *           enum: [low, medium, high, critical]
+   *         description: Alias de severity (se usa si no viene severity). Inválido → 400.
    *       - in: query
    *         name: from
    *         schema:
@@ -90,7 +96,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *         description: Página de emergencias
    *       400:
    *         description: |
-   *           Filtro inválido: status desconocido, severity o emergencyType fuera del catálogo,
+   *           Filtro inválido: status desconocido, severity, priority o emergencyType fuera del catálogo,
    *           o from/to que no son una fecha ISO 8601
    *         content:
    *           application/json:

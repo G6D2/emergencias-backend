@@ -97,16 +97,6 @@ class ContextoZonaRepository {
     );
     return mapContextoZona(result.rows[0]);
   }
-
-  async findByReferencia(executor, { tipo, origen, referenciaExterna }) {
-    const client = executor || this.pool;
-    const result = await client.query(
-      `SELECT * FROM contexto_zona
-       WHERE tipo = $1 AND origen = $2 AND referencia_externa = $3`,
-      [tipo, origen, referenciaExterna]
-    );
-    return mapContextoZona(result.rows[0]);
-  }
 }
 
 module.exports = { ContextoZonaRepository, mapContextoZona };

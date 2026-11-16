@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const { secureLog } = require('../security/secure-log');
 
 // Catálogo oficial de los 48 barrios de CABA (datos abiertos GCBA).
 // Fuente: https://data.buenosaires.gob.ar/dataset/barrios
@@ -42,7 +43,12 @@ function loadCatalog() {
       polygons,
     };
   } catch (error) {
-    // No tumbar el alta de emergencias si falta/rompe el GeoJSON.
+    // No tumbar el alta de emergencias si falta/rompe el GeoJSON. Pero que
+    // quede en el log (una vez: el catálogo vacío queda cacheado): sin
+    // catálogo todas las emergencias se guardan con barrio = null.
+    secureLog('error', 'No se pudo cargar el catálogo de barrios: las emergencias quedan sin barrio', {
+      message: error.message,
+    });
     cachedCatalog = emptyCatalog();
   }
   return cachedCatalog;

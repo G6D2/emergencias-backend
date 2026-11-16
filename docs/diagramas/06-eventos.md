@@ -87,7 +87,7 @@ Puntos del contrato (issue #48, cerrado el 2026-11-02) que conviene tener presen
 | `ReclamoActualizado` (Reclamos) | `EDA_TOPIC_RECLAMO_ACTUALIZADO` (default `com.citypass.reclamos.ReclamoActualizado`) | `ReclamoActualizadoListener` | Con `estadoNuevo` `RESUELTO`, `RECHAZADO` o `CERRADO`, cancela la intervención que siga en `PENDING`/`VALIDATED` → publica `EmergenciaActualizada` con `estadoNuevo = CANCELADA` |
 
 Los listeners arrancan solo con `KAFKA_CONSUMER_ENABLED=true` y cada uno necesita su tópico
-seteado. Consumer group `com.citypass.emergencias.<Listener>`, deduplicación por
+seteado. Un solo consumer group, `com.citypass.emergencias.eventos`; deduplicación por
 `metadata.eventId` en `eventos_procesados`, y los mensajes ilegibles o inválidos se descartan sin
 frenar el tópico. Detalle en [`src/listeners/README.md`](../../src/listeners/README.md).
 

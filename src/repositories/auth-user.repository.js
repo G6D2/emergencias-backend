@@ -42,16 +42,6 @@ class AuthUserRepository {
     };
   }
 
-  async findById(id) {
-    const result = await this.pool.query(
-      `SELECT id, email, display_name, groups, has_antipanic_button, created_at, updated_at
-       FROM auth_users
-       WHERE id = $1`,
-      [id]
-    );
-    return mapAuthUser(result.rows[0]);
-  }
-
   async create({ email, password, displayName, groups, hasAntipanicButton = false }) {
     const id = randomUUID();
     const normalizedEmail = String(email).trim().toLowerCase();

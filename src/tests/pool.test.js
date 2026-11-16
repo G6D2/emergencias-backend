@@ -179,13 +179,3 @@ describe('db/pool', () => {
     expect(mockEnd).not.toHaveBeenCalled();
   });
 });
-
-describe('db/connection', () => {
-  it('reexporta lo mismo que db/pool', () => {
-    jest.resetModules();
-    process.env.DATABASE_URL = 'postgresql://localhost/test';
-    const pool = require('../db/pool');
-    const connection = require('../db/connection');
-    expect(connection).toBe(pool);
-  });
-});

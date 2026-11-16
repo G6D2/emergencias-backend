@@ -84,6 +84,11 @@ services:
         value: emergencias-backend
       - key: KAFKA_CONSUMER_ENABLED
         value: "true"
+      # Particiones que el consumer procesa a la vez. Usa el default del
+      # código: una por topic, hasta 3 (cada mensaje abre una transacción y el
+      # pool de DB_POOL_MAX conexiones se comparte con HTTP y los jobs).
+      # - key: KAFKA_CONSUMER_CONCURRENCY
+      #   value: "3"
       # Publicación: el outbox manda EmergenciaCreada y EmergenciaActualizada al
       # gateway (POST /api/v1/event-types/{fqn}/events). OUTBOX_PUBLISH_SINCE
       # está cargada con la hora en que se activó (valor en el dashboard).
