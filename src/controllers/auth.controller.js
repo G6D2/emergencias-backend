@@ -24,9 +24,23 @@ function resolveDisplayName(body) {
 // Hash bcrypt de relleno, con el mismo costo que los reales: si el correo no
 // existe, el login compara igual contra este hash, así el 401 tarda lo mismo
 // que con una contraseña incorrecta y no se pueden enumerar cuentas midiendo
-// la respuesta. Se genera al cargar el módulo (una vez, en el arranque) para
-// que el primer login ya lo tenga listo.
-const DUMMY_PASSWORD_HASH = bcrypt.hashSync(randomUUID(), BCRYPT_ROUNDS);
+// la respuesta.
+//
+// Se calcula en el primer login y queda memorizado. Antes era un
+// bcrypt.hashSync al cargar el módulo, que bloqueaba el arranque. Se guarda la
+// promesa (dos logins simultáneos no lo calculan dos veces) y, si el cálculo
+// falla, no queda memorizado el error: el próximo login lo reintenta.
+let dummyPasswordHash = null;
+
+function getDummyPasswordHash() {
+  if (!dummyPasswordHash) {
+    dummyPasswordHash = bcrypt.hash(randomUUID(), BCRYPT_ROUNDS).catch((error) => {
+      dummyPasswordHash = null;
+      throw error;
+    });
+  }
+  return dummyPasswordHash;
+}
 
 class AuthController {
   constructor(authUserRepository, tokenIssuer) {
@@ -94,7 +108,10 @@ class AuthController {
     }
 
     const found = await this.authUserRepository.findByEmail(email);
-    const passwordHash = (found && found.passwordHash) || DUMMY_PASSWORD_HASH;
+    // Se pide siempre, exista o no el correo: el costo de calcularlo (solo en
+    // el primer login) no tiene que delatar si la cuenta existe.
+    const dummyHash = await getDummyPasswordHash();
+    const passwordHash = (found && found.passwordHash) || dummyHash;
     const ok = await this.authUserRepository.verifyPassword(passwordHash, password);
     if (!found || !ok) {
       throw new UnauthorizedError('Correo o contraseña incorrectos.');
