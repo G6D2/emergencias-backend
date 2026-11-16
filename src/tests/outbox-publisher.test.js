@@ -1,6 +1,6 @@
 const { OutboxPublisher, resolvePublishSince, isOutboxPublisherEnabled } = require('../services/outbox-publisher');
 
-function createPool({ events = [], claimError = null } = {}) {
+function createPool({ events = [], claimError = null, updateRowCount = 1 } = {}) {
   const queries = [];
   const client = {
     query: async (sql, params) => {
@@ -16,7 +16,7 @@ function createPool({ events = [], claimError = null } = {}) {
     connect: async () => client,
     query: async (sql, params) => {
       queries.push({ sql, params });
-      return { rowCount: 0, rows: [] };
+      return { rowCount: updateRowCount, rows: [] };
     },
   };
 }
@@ -57,7 +57,7 @@ describe('OutboxPublisher', () => {
     await publisher.markFailed('event-1', 2, new Error('broker down'));
 
     const failureQuery = pool.queries.at(-1);
-    expect(failureQuery.params).toEqual(['event-1', 'FAILED', 0, 'broker down']);
+    expect(failureQuery.params).toEqual(['event-1', 'FAILED', 0, 'broker down', 2]);
   });
 
   it('claimBatch hace ROLLBACK y repropaga si la query falla', async () => {
@@ -214,7 +214,7 @@ describe('OutboxPublisher', () => {
   });
 
   it('purgePublished devuelve el rowCount de la limpieza', async () => {
-    const pool = createPool();
+    const pool = createPool({ updateRowCount: 0 });
     const publisher = new OutboxPublisher(pool, { isEnabled: () => false });
     await expect(publisher.purgePublished()).resolves.toBe(0);
   });
@@ -409,7 +409,7 @@ describe('OutboxPublisher', () => {
 
       const skipQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'SKIPPED'"));
       expect(skipQ).toBeDefined();
-      expect(skipQ.params).toEqual(['e1']);
+      expect(skipQ.params).toEqual(['e1', 1]);
       expect(pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"))).toBeUndefined();
     });
 
@@ -425,7 +425,7 @@ describe('OutboxPublisher', () => {
 
       const markQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"));
       expect(markQ).toBeDefined();
-      expect(markQ.params).toEqual(['e1', 'hash-1', 'evt-gw-1']);
+      expect(markQ.params).toEqual(['e1', 'hash-1', 'evt-gw-1', 1]);
     });
 
     it('markPublished deja payload_hash/gateway_event_id en NULL cuando el publisher devuelve true (KafkaService)', async () => {
@@ -440,7 +440,7 @@ describe('OutboxPublisher', () => {
       await publisher.runOnce();
 
       const markQ = pool.queries.find(({ sql }) => sql.includes("SET status = 'PUBLISHED'"));
-      expect(markQ.params).toEqual(['e2', null, null]);
+      expect(markQ.params).toEqual(['e2', null, null, 1]);
     });
 
     it('markFailed con error.isPermanent → FAILED directo sin importar los attempts', async () => {
@@ -489,5 +489,37 @@ describe('isOutboxPublisherEnabled', () => {
     expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: 'false' })).toBe(false);
     expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: '1' })).toBe(false);
     expect(isOutboxPublisherEnabled({ OUTBOX_PUBLISHER_ENABLED: 'true' })).toBe(true);
+  });
+
+  describe('mark* solo actualiza si la fila sigue siendo de este reclamo', () => {
+    const where = /WHERE id = \$1 AND status = 'PROCESSING' AND attempts = \$\d+$/;
+    const lastSql = (pool) => pool.queries.at(-1).sql.replace(/\s+/g, ' ').trim();
+
+    it.each([
+      ['markPublished', (p) => p.markPublished('e1', 3, null), 'e1', 3],
+      ['markSkipped', (p) => p.markSkipped('e1', 3), 'e1', 3],
+      ['markFailed', (p) => p.markFailed('e1', 3, new Error('x')), 'e1', 3],
+    ])('%s filtra por status PROCESSING y el attempts del reclamo', async (_name, call, id, attempts) => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+
+      await expect(call(publisher)).resolves.toBe(true);
+
+      expect(lastSql(pool)).toMatch(where);
+      expect(pool.queries.at(-1).params[0]).toBe(id);
+      expect(pool.queries.at(-1).params.at(-1)).toBe(attempts);
+    });
+
+    it('si otro proceso ya la reclamó (rowCount 0) no la pisa: devuelve false y loguea warn', async () => {
+      const pool = createPool({ updateRowCount: 0 });
+      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(publisher.markFailed('e1', 1, new Error('timeout'))).resolves.toBe(false);
+      await expect(publisher.markPublished('e1', 1)).resolves.toBe(false);
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ya no es de este reclamo'));
+      warnSpy.mockRestore();
+    });
   });
 });

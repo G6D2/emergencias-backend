@@ -94,3 +94,46 @@ describe('OutboxPublisher: orden de publicación', () => {
     expect(publisher.sent).toEqual(['VALIDADA', 'DESPACHADA', 'EN_CAMINO']);
   });
 });
+
+describe('OutboxPublisher: dos procesos sobre la misma fila (lock vencido)', () => {
+  // Caso del backup de Render (16/11): el proceso A reclama la fila y tarda más
+  // de 1 minuto en fallar; B la vuelve a reclamar por lock vencido y la publica.
+  // Cuando A por fin falla, no tiene que pisar el PUBLISHED de B con PENDING.
+  it('el markFailed tardío del primer reclamo no pisa el PUBLISHED del segundo', async () => {
+    await insertEvent('VALIDADA', new Date(BASE).toISOString(), randomUUID());
+    const since = new Date(BASE - 1000);
+    const procesoA = new OutboxPublisher(pool, { isEnabled: () => true }, { publisher: capturingPublisher(), publishSince: since });
+    const publisherB = capturingPublisher();
+    const procesoB = new OutboxPublisher(pool, { isEnabled: () => true }, { publisher: publisherB, publishSince: since });
+
+    const [claimA] = (await procesoA.claimBatch()).filter((e) => e.topic === TOPIC);
+    expect(claimA.attempts).toBe(1);
+    // Simula que A lleva más de 1 minuto con la fila.
+    await pool.query(
+      `UPDATE outbox_events SET locked_at = now() - interval '2 minutes' WHERE id = $1`,
+      [claimA.id]
+    );
+
+    await procesoB.runOnce();
+    expect(publisherB.sent).toEqual(['VALIDADA']);
+
+    await expect(procesoA.markFailed(claimA.id, claimA.attempts, new Error('kafka timeout'))).resolves.toBe(false);
+    await expect(procesoA.markPublished(claimA.id, claimA.attempts)).resolves.toBe(false);
+
+    const { rows } = await pool.query('SELECT status, attempts FROM outbox_events WHERE id = $1', [claimA.id]);
+    expect(rows[0]).toEqual({ status: 'PUBLISHED', attempts: 2 });
+  });
+
+  it('el dueño actual del reclamo sí puede marcarla', async () => {
+    await insertEvent('VALIDADA', new Date(BASE).toISOString(), randomUUID());
+    const proceso = new OutboxPublisher(pool, { isEnabled: () => true }, {
+      publisher: capturingPublisher(), publishSince: new Date(BASE - 1000), maxAttempts: 5,
+    });
+
+    const [claim] = (await proceso.claimBatch()).filter((e) => e.topic === TOPIC);
+    await expect(proceso.markFailed(claim.id, claim.attempts, new Error('503'))).resolves.toBe(true);
+
+    const { rows } = await pool.query('SELECT status FROM outbox_events WHERE id = $1', [claim.id]);
+    expect(rows[0].status).toBe('PENDING');
+  });
+});
