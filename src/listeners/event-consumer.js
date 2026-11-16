@@ -17,10 +17,29 @@ const { NAMESPACE } = require('./event-listener');
 // false si no hay nada que consumir), stop(), status() y onCrash.
 
 const GROUP_SUFFIX = 'eventos';
+const DEFAULT_MAX_CONCURRENCY = 3;
 
 function groupIdFromEnv(env = process.env) {
   const prefix = env.KAFKA_CONSUMER_GROUP_PREFIX || NAMESPACE;
   return `${prefix}.${GROUP_SUFFIX}`;
+}
+
+// Cuántas particiones se procesan a la vez (partitionsConsumedConcurrently).
+// Cada mensaje abre una transacción, y el pool de Postgres (DB_POOL_MAX, 10
+// por default) se comparte con los requests HTTP y los jobs: con una por
+// topic (6 hoy) el consumer solo podía ocupar más de la mitad del pool.
+// Default: una por topic, hasta 3. KAFKA_CONSUMER_CONCURRENCY lo cambia
+// (entero >= 1); un valor inválido se ignora y queda el default.
+function concurrencyFromEnv(topicCount, env = process.env) {
+  const fallback = Math.max(1, Math.min(topicCount, DEFAULT_MAX_CONCURRENCY));
+  const raw = env.KAFKA_CONSUMER_CONCURRENCY;
+  if (raw === undefined || raw === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    secureLog('warn', 'KAFKA_CONSUMER_CONCURRENCY inválida: se usa el default', { value: raw, default: fallback });
+    return fallback;
+  }
+  return value;
 }
 
 class EventConsumer {
@@ -84,16 +103,18 @@ class EventConsumer {
       for (const [topic, listener] of this.byTopic) {
         await this.consumer.subscribe({ topic, fromBeginning: listener.fromBeginning });
       }
+      const concurrency = concurrencyFromEnv(this.byTopic.size);
       await this.consumer.run({
-        // Una partición a la vez por topic no alcanza: con 1 (el default de
-        // kafkajs) un mensaje lento o un error transitorio en un topic frena
-        // a todos los demás.
-        partitionsConsumedConcurrently: Math.max(1, this.byTopic.size),
+        // Una partición a la vez no alcanza: con 1 (el default de kafkajs) un
+        // mensaje lento o un error transitorio en un topic frena a todos los
+        // demás. Tampoco una por topic: ver concurrencyFromEnv.
+        partitionsConsumedConcurrently: concurrency,
         eachMessage: async ({ topic, message }) => this.dispatch(topic, message),
       });
       this.running = true;
       secureLog('info', 'EventConsumer escuchando', {
         groupId: this.groupId,
+        concurrency,
         topics: this.topics(),
         listeners: [...this.byTopic.values()].map((listener) => listener.constructor.name),
       });
@@ -175,4 +196,4 @@ class EventConsumer {
   }
 }
 
-module.exports = { EventConsumer, groupIdFromEnv, GROUP_SUFFIX };
+module.exports = { EventConsumer, groupIdFromEnv, concurrencyFromEnv, GROUP_SUFFIX };

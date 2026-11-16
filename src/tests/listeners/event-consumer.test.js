@@ -2,7 +2,8 @@ jest.mock('../../security/secure-log', () => ({ secureLog: jest.fn() }));
 
 const path = require('path');
 const { EventListener } = require('../../listeners/event-listener');
-const { EventConsumer, groupIdFromEnv } = require('../../listeners/event-consumer');
+const { EventConsumer, groupIdFromEnv, concurrencyFromEnv } = require('../../listeners/event-consumer');
+const { secureLog } = require('../../security/secure-log');
 const { superviseListener } = require('../../listeners/listener-supervisor');
 
 class TestListener extends EventListener {
@@ -44,7 +45,12 @@ function buildKafka() {
 describe('EventConsumer', () => {
   const saved = {};
   beforeEach(() => {
-    ['KAFKA_CONSUMER_GROUP_PREFIX', 'EDA_CONSUMER_FROM_BEGINNING', 'EDA_CONSUMER_SINCE'].forEach((k) => {
+    [
+      'KAFKA_CONSUMER_GROUP_PREFIX',
+      'KAFKA_CONSUMER_CONCURRENCY',
+      'EDA_CONSUMER_FROM_BEGINNING',
+      'EDA_CONSUMER_SINCE',
+    ].forEach((k) => {
       saved[k] = process.env[k];
       delete process.env[k];
     });
@@ -73,6 +79,36 @@ describe('EventConsumer', () => {
     });
   });
 
+  describe('concurrencyFromEnv', () => {
+    it('sin la variable: una por topic, con mínimo 1 y tope 3', () => {
+      expect(concurrencyFromEnv(0, {})).toBe(1);
+      expect(concurrencyFromEnv(1, {})).toBe(1);
+      expect(concurrencyFromEnv(2, {})).toBe(2);
+      expect(concurrencyFromEnv(3, {})).toBe(3);
+      expect(concurrencyFromEnv(6, {})).toBe(3);
+      expect(concurrencyFromEnv(6, { KAFKA_CONSUMER_CONCURRENCY: '' })).toBe(3);
+    });
+
+    it('acepta cualquier entero >= 1, también por encima del default', () => {
+      expect(concurrencyFromEnv(6, { KAFKA_CONSUMER_CONCURRENCY: '1' })).toBe(1);
+      expect(concurrencyFromEnv(6, { KAFKA_CONSUMER_CONCURRENCY: '6' })).toBe(6);
+      expect(concurrencyFromEnv(2, { KAFKA_CONSUMER_CONCURRENCY: ' 4 ' })).toBe(4);
+    });
+
+    it.each(['0', '-1', '2.5', 'abc', '3x', 'NaN', 'Infinity', '  '])(
+      'un valor inválido (%p) cae al default',
+      (value) => {
+        expect(concurrencyFromEnv(6, { KAFKA_CONSUMER_CONCURRENCY: value })).toBe(3);
+        expect(concurrencyFromEnv(2, { KAFKA_CONSUMER_CONCURRENCY: value })).toBe(2);
+      }
+    );
+
+    it('lee process.env por default', () => {
+      process.env.KAFKA_CONSUMER_CONCURRENCY = '4';
+      expect(concurrencyFromEnv(6)).toBe(4);
+    });
+  });
+
   it('requiere una instancia de Kafka', () => {
     expect(() => new EventConsumer(null, [])).toThrow(/Kafka/);
   });
@@ -83,7 +119,7 @@ describe('EventConsumer', () => {
   });
 
   describe('start', () => {
-    it('crea UN consumer, se suscribe a todos los topics y corre con un topic por partición en paralelo', async () => {
+    it('crea UN consumer, se suscribe a todos los topics y procesa una partición por topic en paralelo', async () => {
       const { kafka, consumer } = buildKafka();
       const listeners = [
         new TestListener({ topic: 'a' }),
@@ -98,6 +134,42 @@ describe('EventConsumer', () => {
       expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 'b', fromBeginning: false });
       expect(consumer.run).toHaveBeenCalledTimes(1);
       expect(consumer.run.mock.calls[0][0].partitionsConsumedConcurrently).toBe(2);
+    });
+
+    it('por default procesa una partición por topic en paralelo, hasta 3', async () => {
+      const { kafka, consumer } = buildKafka();
+      // Seis topics, como en producción.
+      const listeners = ['a', 'b', 'c', 'd', 'e', 'f'].map((topic) => new TestListener({ topic }));
+      await new EventConsumer(kafka, listeners).start();
+
+      expect(consumer.subscribe).toHaveBeenCalledTimes(6);
+      expect(consumer.run.mock.calls[0][0].partitionsConsumedConcurrently).toBe(3);
+    });
+
+    it('KAFKA_CONSUMER_CONCURRENCY cambia la concurrencia y queda en el log de arranque', async () => {
+      process.env.KAFKA_CONSUMER_CONCURRENCY = '5';
+      const { kafka, consumer } = buildKafka();
+      await new EventConsumer(kafka, [new TestListener({ topic: 'a' }), new OtroListener({ topic: 'b' })]).start();
+
+      expect(consumer.run.mock.calls[0][0].partitionsConsumedConcurrently).toBe(5);
+      expect(secureLog).toHaveBeenCalledWith(
+        'info',
+        'EventConsumer escuchando',
+        expect.objectContaining({ concurrency: 5 })
+      );
+    });
+
+    it('una KAFKA_CONSUMER_CONCURRENCY inválida cae al default y avisa en el log', async () => {
+      process.env.KAFKA_CONSUMER_CONCURRENCY = 'muchas';
+      const { kafka, consumer } = buildKafka();
+      await new EventConsumer(kafka, [new TestListener({ topic: 'a' }), new OtroListener({ topic: 'b' })]).start();
+
+      expect(consumer.run.mock.calls[0][0].partitionsConsumedConcurrently).toBe(2);
+      expect(secureLog).toHaveBeenCalledWith(
+        'warn',
+        expect.stringContaining('KAFKA_CONSUMER_CONCURRENCY inválida'),
+        { value: 'muchas', default: 2 }
+      );
     });
 
     it('es idempotente', async () => {
