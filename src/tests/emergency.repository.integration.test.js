@@ -649,6 +649,62 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(Number(found.longitude)).toBeCloseTo(input.longitude);
   });
 
+  describe('findPage: orden determinístico entre filas empatadas', () => {
+    const MISMO_INSTANTE = '2026-11-10T15:00:00.000Z';
+    let userId;
+    let idsAscendentes;
+
+    // Seis emergencias del mismo usuario, misma severity y mismo created_at:
+    // lo único que las distingue es el id. Se insertan de mayor a menor id
+    // para que el orden físico de la tabla sea el contrario al esperado.
+    beforeEach(async () => {
+      userId = `user-empate-${randomUUID()}`;
+      idsAscendentes = Array.from({ length: 6 }, () => randomUUID()).sort();
+      for (const id of [...idsAscendentes].reverse()) {
+        await repository.create(buildEmergency({ id, userId, severity: 'high' }));
+      }
+      await getPool().query(
+        'UPDATE emergencies SET created_at = $1 WHERE user_id = $2',
+        [MISMO_INSTANTE, userId]
+      );
+    });
+
+    async function recorrerPaginas({ sortBy, order }) {
+      const ids = [];
+      let total;
+      for (let page = 1; page <= 3; page += 1) {
+        const result = await repository.findPage({ userId, statuses: [], page, limit: 2, sortBy, order });
+        ids.push(...result.emergencies.map((emergency) => emergency.id));
+        total = result.total;
+      }
+      return { ids, total };
+    }
+
+    it.each([
+      ['createdAt', 'desc'],
+      ['createdAt', 'asc'],
+      ['priority', 'desc'],
+      ['priority', 'asc'],
+    ])('sortBy=%s order=%s: desempata por id y ninguna fila se repite ni falta al paginar', async (sortBy, order) => {
+      const { ids, total } = await recorrerPaginas({ sortBy, order });
+
+      expect(total).toBe(6);
+      expect(ids).toEqual(idsAscendentes);
+    });
+
+    it('el desempate no pisa el criterio principal: created_at sigue mandando', async () => {
+      const [masNueva] = idsAscendentes.slice(-1);
+      await getPool().query(
+        "UPDATE emergencies SET created_at = $1::timestamptz + interval '1 minute' WHERE id = $2",
+        [MISMO_INSTANTE, masNueva]
+      );
+
+      const { ids } = await recorrerPaginas({ sortBy: 'createdAt', order: 'desc' });
+
+      expect(ids).toEqual([masNueva, ...idsAscendentes.slice(0, -1)]);
+    });
+  });
+
   it('una fila con ciphertext indescifrable no tumba el listado y se puede sanear', async () => {
     const good = buildEmergency();
     await repository.create(good);

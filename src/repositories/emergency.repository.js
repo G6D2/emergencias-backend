@@ -43,6 +43,29 @@ function pendingPreventiveCoverageSql(hoursParam) {
          )`;
 }
 
+// Una fila con ubicación indescifrable se avisa una sola vez por emergencia
+// mientras viva el proceso: el front consulta el listado cada 30 s y cada
+// consulta repetía el mismo warn por cada fila. El conjunto está acotado; al
+// llenarse se olvida el id más viejo (que, si sigue apareciendo, vuelve a
+// avisar una vez).
+const MAX_UNDECRYPTABLE_WARNED_IDS = 1000;
+const undecryptableWarnedIds = new Set();
+
+function warnUndecryptableLocationOnce(emergencyId, error) {
+  if (undecryptableWarnedIds.has(emergencyId)) return;
+
+  if (undecryptableWarnedIds.size >= MAX_UNDECRYPTABLE_WARNED_IDS) {
+    // Un Set itera en orden de inserción: el primero es el más viejo.
+    undecryptableWarnedIds.delete(undecryptableWarnedIds.values().next().value);
+  }
+  undecryptableWarnedIds.add(emergencyId);
+
+  secureLog('warn', 'Location ciphertext could not be decrypted', {
+    emergencyId,
+    message: error.message,
+  });
+}
+
 // Pasa filas de Postgres (snake_case) a objetos JS (camelCase) para que el
 // detalle de las columnas no se filtre afuera del repository.
 function mapEmergency(row, locationCrypto) {
@@ -66,12 +89,10 @@ function mapEmergency(row, locationCrypto) {
     } catch (error) {
       // Una fila cifrada con otra clave (p. ej. insertada desde un entorno
       // local contra la base compartida) no puede tumbar todo el listado:
-      // se devuelve sin ubicación y se deja constancia para saneamiento.
+      // se devuelve sin ubicación y se deja constancia para saneamiento
+      // (una vez por emergencia, ver warnUndecryptableLocationOnce).
       locationUnavailable = true;
-      secureLog('warn', 'Location ciphertext could not be decrypted', {
-        emergencyId: row.id,
-        message: error.message,
-      });
+      warnUndecryptableLocationOnce(row.id, error);
     }
   } else if (!locationAnonymized && row.latitude != null && row.longitude != null) {
     // Filas legacy (pre-V3) aún en claro hasta retención o re-escritura.
@@ -949,22 +970,31 @@ class EmergencyRepository {
       ? `LEAST(GREATEST(${priorityRank('e.severity')}, ${priorityRank('i.priority')}) + CASE WHEN cz.tipo IS NULL THEN 0 ELSE 1 END, 4)`
       : 'e.created_at';
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*)::int AS total FROM emergencies e ${where}`,
-      values
-    );
-    values.push(limit, offset);
-    const result = await this.pool.query(
-      `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}, ${ZONE_CONTEXT_SELECT_FIELDS}
-       FROM emergencies e
-       LEFT JOIN officers o ON o.id = e.assigned_officer_id
-       ${INCIDENT_JOIN_SQL}
-       ${ZONE_CONTEXT_JOIN_SQL}
-       ${where}
-       ORDER BY ${sortExpression} ${direction}, e.created_at ASC
-       LIMIT $${values.length - 1} OFFSET $${values.length}`,
-      values
-    );
+    // El total y la página no dependen uno del otro: van en paralelo (el
+    // front consulta este listado cada 30 s). Cada consulta lleva su propio
+    // arreglo de parámetros: el COUNT no recibe limit ni offset.
+    //
+    // e.id cierra el ORDER BY: entre dos filas iguales en todo lo anterior
+    // (mismo created_at) Postgres no garantiza un orden, y una fila podía
+    // repetirse o faltar al pasar de página.
+    const pageValues = [...values, limit, offset];
+    const [countResult, result] = await Promise.all([
+      this.pool.query(
+        `SELECT COUNT(*)::int AS total FROM emergencies e ${where}`,
+        values
+      ),
+      this.pool.query(
+        `SELECT e.*, o.name AS assigned_officer_name, ${INCIDENT_SELECT_FIELDS}, ${ZONE_CONTEXT_SELECT_FIELDS}
+         FROM emergencies e
+         LEFT JOIN officers o ON o.id = e.assigned_officer_id
+         ${INCIDENT_JOIN_SQL}
+         ${ZONE_CONTEXT_JOIN_SQL}
+         ${where}
+         ORDER BY ${sortExpression} ${direction}, e.created_at ASC, e.id ASC
+         LIMIT $${pageValues.length - 1} OFFSET $${pageValues.length}`,
+        pageValues
+      ),
+    ]);
 
     return {
       emergencies: result.rows.map((row) => mapEmergencyWithIncident(row, this.locationCrypto)),

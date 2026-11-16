@@ -2,6 +2,7 @@ const { UnauthorizedError } = require('../errors/app-errors');
 const { loadAuthConfig } = require('./config');
 const { applySubAlias } = require('./federated-claims');
 const { createJwtVerifier } = require('./jwt-verifier');
+const { logTokenRejection } = require('./token-rejection-log');
 
 /**
  * Middleware: exige Authorization: Bearer <JWT> y deja la identidad en req.user.
@@ -43,6 +44,10 @@ function createAuthenticateMiddleware(options = {}) {
         next(err);
         return;
       }
+      // Un error que no es UnauthorizedError no es un token malo: es una falla
+      // inesperada del verifier (un bug o una dependencia caída). Se responde
+      // 401 igual, pero queda en el log en vez de perderse.
+      logTokenRejection('authenticate', err);
       next(new UnauthorizedError('Invalid or expired token'));
     }
   };
