@@ -54,7 +54,7 @@ sequenceDiagram
     participant Back as Backend (/api/emergencies, /api/officers)
     participant DB as Neon Postgres
 
-    loop cada 5000ms (POLLING_INTERVAL_MS)
+    loop cada 30000ms (POLLING_INTERVAL_MS)
         Front->>BFF: GET /api/backend/api/emergencies?limit=100&sortBy=createdAt&order=desc
         BFF->>Back: GET /api/emergencies (Bearer dispatcher)
         Back->>DB: SELECT ... LEFT JOIN officers, paginado

@@ -59,9 +59,10 @@ function createCrearIntervencionHandler({ emergencyRepository, topic = emergenci
       : 'Reclamo por ciclovía obstruida').slice(0, MAX_DESCRIPTION_LENGTH);
     const emergencyId = randomUUID();
 
-    // Los listeners corren en paralelo (un consumer group cada uno): dos
-    // eventos del mismo reclamo pueden pasar el findByCausa sin ver nada (no
-    // hay fila que bloquear) y el segundo INSERT choca con el índice único.
+    // Los topics se procesan en paralelo (un solo consumer y un solo group,
+    // pero varias particiones a la vez; ver EventConsumer): dos eventos del
+    // mismo reclamo pueden pasar el findByCausa sin ver nada (no hay fila que
+    // bloquear) y el segundo INSERT choca con el índice único.
     // Un INSERT fallido deja abortada la transacción del OutcomeFactory; el
     // SAVEPOINT permite deshacer solo eso y terminar como "ya creada", con el
     // evento registrado como procesado en vez de descartado.

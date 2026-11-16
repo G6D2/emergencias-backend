@@ -131,10 +131,12 @@ class EmergencyController {
    * existe. Un grupo que no sea citizen/dispatcher ya cortó con 403 en el
    * middleware requireCitizenOrDispatcher de la ruta.
    *
-   * TODO(#13): cuando exista el grupo `officer`, debe ver solo las
-   * emergencias que tiene asignadas (emergency.assignedOfficerId === user.sub).
-   * Agregar la regla en canViewEmergency (src/auth/authorize.js) y sumar el
-   * grupo al middleware de la ruta; este método no necesita cambios.
+   * TODO(#13): el grupo `officer` ya existe y lista lo que tiene asignado
+   * (GET /api/emergencies), pero todavía no entra al detalle. Cuando entre,
+   * debe ver solo las emergencias que tiene asignadas
+   * (emergency.assignedOfficerId === user.sub): agregar la regla en
+   * canViewEmergency (src/auth/authorize.js) y sumar el grupo al middleware
+   * de la ruta; este método no necesita cambios.
    *
    * Con `audit: true` (GET /api/emergencies/:id) la lectura ya autorizada
    * queda en emergency_access_audit. GET /api/panic-button/:id delega acá sin

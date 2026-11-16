@@ -314,7 +314,7 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 | `POST /api/panic-button` | `citizen` | 5 req/min por IP; `emergencyType=PREVENTIVA` → 400 |
 | `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena); deja registro de auditoría |
 | `GET /api/emergencies` | `citizen`, `dispatcher` u `officer` | citizen: solo propias; officer: solo las asignadas a él (`assignedOfficerId` = `sub`). Los dos sin `incident`/`effectivePriority` |
-| `GET /api/emergencies/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena) |
+| `GET /api/emergencies/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena); deja registro de auditoría |
 | `PATCH /api/emergencies/:id/validate` | `dispatcher` | `PENDING` → `VALIDATED` |
 | `PATCH /api/emergencies/:id/discard` | `dispatcher` | `PENDING` → `DISCARDED`; `reason` obligatorio |
 | `PATCH /api/emergencies/:id/assign` | `dispatcher` | `VALIDATED` → `DISPATCHED`; el oficial tiene que estar `disponible` y pasa a `ocupado` |
@@ -404,9 +404,9 @@ No se loguean JWT ni coordenadas. Los eventos se loguean solo como resumen (`top
 Siempre: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, etc. Con `NODE_ENV=production` o `FORCE_HTTPS=true`, además HSTS + redirect a HTTPS (vía `X-Forwarded-Proto`, típico en Render). Producción hoy no tiene ninguna de las dos, así que no manda HSTS.
 
 ### Auditoría de lectura
-Solo `GET /api/panic-button/:id` deja registro: después de autorizar la lectura, inserta una fila en `emergency_access_audit` (`emergency_id`, `actor_sub`, `action = 'emergency:read'`, `created_at`). Si ese insert falla, la lectura responde igual y el error queda en el log.
+Los dos endpoints de detalle dejan registro, `GET /api/emergencies/:id` y `GET /api/panic-button/:id`: después de autorizar la lectura, insertan una fila en `emergency_access_audit` (`emergency_id`, `actor_sub`, `action = 'emergency:read'`, `created_at`). Si ese insert falla, la lectura responde igual y el error queda en el log.
 
-`GET /api/emergencies` y `GET /api/emergencies/:id` **no** dejan registro, y no hay endpoint para consultar la auditoría (se lee en la base). Los cambios de estado no van a esta tabla: quedan en `emergency_status_history`, con `actor` y `reason`.
+El listado (`GET /api/emergencies`) **no** deja registro, y no hay endpoint para consultar la auditoría (se lee en la base). Los cambios de estado no van a esta tabla: quedan en `emergency_status_history`, con `actor` y `reason`.
 
 | Variable | Rol |
 |----------|-----|
@@ -424,7 +424,7 @@ Solo `GET /api/panic-button/:id` deja registro: después de autorizar la lectura
 | `DB_POOL_MAX` | Máximo de conexiones del pool de `pg` (default 10) |
 | `RATE_LIMIT_ENABLED` | `false` apaga el rate limiting (default: activo) |
 
-El health check reporta el estado de Kafka (`connected`, `disconnected` o `disabled` con `KAFKA_ENABLED=false`) con lo que el proceso ya sabe, sin conectarse al broker: `connected` si el producer (cuando el outbox publica) y cada listener con topic están arriba. En producción el outbox no publica. Ojo: que el producer esté conectado no garantiza que publicar ande — ver la sección de Kafka para una trampa conocida al publicar desde el host.
+El health check reporta el estado de Kafka (`connected`, `disconnected` o `disabled` con `KAFKA_ENABLED=false`) con lo que el proceso ya sabe, sin conectarse al broker: `connected` si el producer (cuando el outbox publica por Kafka) y cada listener con topic están arriba. En producción el outbox publica por el gateway HTTP (`EDA_PUBLISHER_MODE=gateway`), así que no hay producer y el estado depende solo de los listeners. Ojo: que el producer esté conectado no garantiza que publicar ande — ver la sección de Kafka para una trampa conocida al publicar desde el host.
 
 ### Rate limiting
 
@@ -558,7 +558,7 @@ Es la base sobre la que el Risk Engine (`src/domain/risk-engine.js`, job
 
 ### GET `/api/panic-button/:id`
 
-Detalle de una emergencia. Delega en el mismo método que `GET /api/emergencies/:id` (una emergencia ajena responde **404**, no 403, para no revelar que el id existe) y además deja el registro de [auditoría de lectura](#auditoría-de-lectura).
+Detalle de una emergencia. Delega en el mismo método que `GET /api/emergencies/:id` (una emergencia ajena responde **404**, no 403, para no revelar que el id existe) y, igual que ese endpoint, deja el registro de [auditoría de lectura](#auditoría-de-lectura).
 
 ### GET `/api/emergencies`
 
@@ -1073,7 +1073,7 @@ Implementado en `main`:
 - Ciclo de vida completo por API: validar, descartar, asignar, devolver, en camino, en el lugar, resolver, cerrar y cancelar.
 - Grupos `citizen`, `dispatcher` y `officer` con JWT del contrato CityPass+. En producción (`AUTH_MODE=hybrid`, desde el 12/11/2026) el personal entra con el token del Login Federado del Grupo 2 y los ciudadanos con el que emite el propio backend.
 - Detección de incidentes cada 60 s (DBSCAN con fallback a reglas) y prioridad efectiva.
-- Cifrado de ubicación y perfil, retención, logs seguros, rate limiting y auditoría de lectura en `GET /api/panic-button/:id`.
+- Cifrado de ubicación y perfil, retención, logs seguros, rate limiting y auditoría de lectura en los dos endpoints de detalle.
 - Outbox transaccional con los eventos del contrato del #48, publicados por el gateway en orden de creación.
 - Consumo de eventos de Espacios (cobertura preventiva y prioridad elevada en un radio de 500 m alrededor del evento) y de Reclamos (un reclamo por ciclovía obstruida crea una intervención).
 
