@@ -80,7 +80,7 @@ sequenceDiagram
     Back->>DB: INSERT history, INSERT outbox (EmergenciaActualizada DESPACHADA, asignadoA=X), COMMIT
     Back-->>Front: 200 { data, assignedOfficer } (vía BFF)
 
-    Note over Oficial,Back: el front no tiene vista de oficial: estos tres pasos se hacen por API (token officer, sub = id del oficial)
+    Note over Oficial,Back: el oficial los dispara desde /oficial en el front, vía BFF. Se dibujan directo contra el backend para simplificar (token officer, sub = id del oficial)
     Oficial->>Back: PATCH /api/emergencies/:id/en-route (Bearer officer)
     Back->>Back: canAdvanceEmergencyStatus (sub === assigned_officer_id, si no 404) + assertTransition(DISPATCHED, EN_ROUTE)
     Back->>DB: BEGIN, SELECT ... FOR UPDATE (oficial sigue asignado), UPDATE status, INSERT history, INSERT outbox (EmergenciaActualizada), COMMIT
@@ -249,7 +249,7 @@ con historial y `EmergenciaActualizada`.
 | `fetchBackend` | Reintenta 502/503/504 hasta 6 veces (~24s) porque Render (free) duerme el backend tras 15 min sin tráfico |
 | Outbox transaccional | El `INSERT` en `emergencies`/`emergency_status_history` y el `INSERT` en `outbox_events` van en la **misma transacción**: si Kafka está caído, la emergencia igual queda persistida |
 | `OUTBOX_PUBLISHER_ENABLED=false` | El publisher del flujo (c) no arranca y los eventos se acumulan `PENDING`. Producción corre desde el 05/11 con `true` y `EDA_PUBLISHER_MODE=gateway` |
-| Oficial (b) | El grupo `officer` y sus tres endpoints existen en el backend; el `Frontend` no tiene vista de oficial, así que en la demo se usan por Swagger o Postman con el token de `of-001`/`of-002` |
+| Oficial (b) | El oficial opera desde `/oficial` en el `Frontend`: lista lo que tiene asignado y avanza con un botón por paso. Los tres endpoints validan que el `sub` del token sea el oficial asignado; con las cuentas demo `of-001`/`of-002` también se pueden llamar por Swagger o Postman |
 | `address` en el SOS | La dirección legible que resuelve el front (`resolveEmergencyAddress`, geocode inverso con timeout 2.5s) viaja al backend en el mismo body que `latitude`/`longitude`, como campo `address` (≤200 caracteres); `normalizeAddress` la sanea y `locationCrypto.encryptLocation` la guarda **dentro del mismo blob cifrado** que la ubicación (ver `02-modelo-entidad-relacion.md`) |
 | Advisory lock del job (d) | `pg_try_advisory_lock` no bloquea: si otra instancia del backend (p. ej. el stack de backup activado) ya tiene el lock, esa corrida se saltea en vez de esperar — hay otra corrida 60s después |
 | `EmergenciaPriorizada` condicional | Solo se publica si `applyScoringDecision` detecta que la `priority` del incidente cambió respecto a la que tenía antes (`NULL` cuenta como distinta, así que la primera vez siempre notifica); si no cambió, la corrida no genera evento nuevo aunque haya recalculado el score |

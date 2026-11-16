@@ -70,8 +70,8 @@ function createCrearIntervencionHandler({ emergencyRepository, topic = emergenci
       await emergencyRepository.create({
         client,
         id: emergencyId,
-        // Reclamos manda un UUID salvo que el cliente haya puesto su propio
-        // X-Correlation-Id: ese no entra en la columna y se usa el id propio.
+        // Este flujo conserva correlationId externos solo si son UUID; el
+        // reclamoId siempre queda asociado por causaTipo/causaId.
         correlationId: UUID_PATTERN.test(correlationId || '') ? correlationId : emergencyId,
         userId: null,
         latitude: hasLocation ? latitud : null,

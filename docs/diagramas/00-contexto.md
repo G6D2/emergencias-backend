@@ -10,7 +10,7 @@ alto de C4 (contexto): no muestra contenedores ni componentes internos — eso e
 flowchart TB
     ciudadano(["Ciudadano"]):::persona
     dispatcher(["Operador / Dispatcher"]):::persona
-    oficial(["Oficial<br/>(solo por API, sin vista en el front)"]):::persona
+    oficial(["Oficial"]):::persona
 
     core["Emergencias y Seguridad<br/>(CityPass+)"]:::sistemaPropio
 
@@ -62,7 +62,7 @@ flowchart TB
   evento. Para el caso del auto en la ciclovía escucha `EmergenciaSolicitada` de Movilidad y
   `ReclamoCreado` / `ReclamoActualizado` de Reclamos, y crea o cancela una intervención
   `TRANSITO`. El disparador por default es el de Movilidad (`RECLAMO_INTERVENCION_DISPARADOR`),
-  que al 13/11/2026 todavía no publica ese evento (su PR está abierto). Se conecta con
+  que arma ese pedido a partir del `ReclamoCreado` v3 de Reclamos. Se conecta con
   SASL/OAUTHBEARER y SSL, y lee Avro con el schema registry del gateway.
 - **Login Federado (Grupo 2)**: da el token client-credentials que pide el bus (`EDA_OAUTH_*`)
   y, desde el 12/11/2026, valida al personal: el backend acepta los JWT del IdP contra su JWKS.
@@ -71,9 +71,9 @@ flowchart TB
 - **Login de usuarios**: `AUTH_MODE=hybrid`. El personal entra por el Login Federado y los
   ciudadanos siguen con cuentas locales (email y contraseña, JWT propio con el mismo contrato de
   claims que el IdP real).
-- **Oficial**: el grupo `officer` existe y los endpoints `en-route`, `on-scene` y `resolve`
-  funcionan, pero el `Frontend` no tiene una vista de oficial; esos pasos se hacen por API
-  (Swagger o Postman).
+- **Oficial**: el grupo `officer` existe, los endpoints `en-route`, `on-scene` y `resolve`
+  funcionan y el `Frontend` tiene su vista en `/oficial`: lista lo que tiene asignado y avanza
+  el estado con un botón por paso.
 
 ## Fuente en el código
 
