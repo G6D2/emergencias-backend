@@ -7,7 +7,8 @@ del PR #38; actualizada de nuevo al 2026-09-23 para incorporar `DbscanGrouper` e
 `IncidentDetectionStrategy` del PR #51, verificado en producción ese mismo día; y al
 2026-11-05 para incorporar el rol oficial y sus endpoints, `return`, el contrato de eventos del
 issue #48, el consumer de cobertura preventiva y el schema hasta V26; y al 2026-11-17, después
-de la corrección de la cátedra, para llevar el schema a V35, sumar las secuencias de los casos
+de una revisión interna del equipo (una corrección simulada con la consigna y la rúbrica,
+no la de la cátedra), para llevar el schema a V35, sumar las secuencias de los casos
 transversales y dejar una sola versión de la semántica de orden), en
 [Mermaid](https://mermaid.js.org/) para que GitHub los renderice directo en el repo, sin
 herramientas externas.
