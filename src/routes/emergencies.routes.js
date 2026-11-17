@@ -22,8 +22,9 @@ function createEmergenciesRoutes(emergencyRepository, authenticate) {
    *     description: |
    *       Requiere grupo `citizen`, `dispatcher` u `officer`. Dispatcher ve todas; officer solo las
    *       que tiene asignadas (se fuerza `assignedOfficerId` = sub del JWT); citizen solo las propias
-   *       (se fuerza el filtro por el sub del JWT). Officer y citizen las reciben sin `incident` ni
-   *       `effectivePriority`.
+   *       (se fuerza el filtro por el sub del JWT). El citizen las recibe sin `incident`,
+   *       `effectivePriority`, `dispatchPriority` ni `priorityContext`; el officer, con los cuatro
+   *       (la prioridad de despacho de lo que tiene asignado y su motivo).
    *       El officer recibe además `returned`: true en las que el dispatcher le devolvió (solo salen
    *       con `scope=history`), sin el oficial al que quedaron asignadas.
    *       Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.

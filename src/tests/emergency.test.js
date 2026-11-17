@@ -155,7 +155,6 @@ describe('GET /api/emergencies', () => {
 
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].id).toBe(mine);
-    expect(res.body.data[0]).not.toHaveProperty('effectivePriority');
   });
 
   describe('?scope=active|history (vista del oficial, issue #17)', () => {
@@ -183,9 +182,47 @@ describe('GET /api/emergencies', () => {
         statuses: [],
       }));
       expect(res.body.data).toEqual([
-        { id: 'e-own', status: 'CLOSED', assignedOfficerId: 'of-001', assignedOfficer: 'Ana', returned: false },
+        {
+          id: 'e-own', status: 'CLOSED', assignedOfficerId: 'of-001', assignedOfficer: 'Ana', effectivePriority: 'high', returned: false,
+        },
         { id: 'e-ret', status: 'DISPATCHED', assignedOfficerId: null, assignedOfficer: null, returned: true },
       ]);
+    });
+
+    it('el oficial recibe la prioridad de despacho, su motivo y el incidente; el citizen no', async () => {
+      const zoneContext = {
+        tipo: 'ALERTA_CLIMATICA',
+        latitud: -34.6,
+        longitud: -58.4,
+        radioMetros: 500,
+        origen: 'espacios',
+        referenciaExterna: 'alerta-1#0',
+        descripcion: 'Alerta climática CRITICA: tormenta fuerte',
+        vigenteDesde: '2026-11-17T10:00:00.000Z',
+        vigenteHasta: '2026-11-17T22:00:00.000Z',
+      };
+      const operational = {
+        incident: { id: 'inc-1', priority: 'high', score: 56, reportCount: 3, uniqueCitizens: 3, reasonCodes: ['MULTI_REPORT'] },
+        effectivePriority: 'high',
+        dispatchPriority: 'critical',
+        priorityContext: zoneContext,
+      };
+      const row = {
+        id: 'e-1', userId: CITIZEN_A.sub, status: 'DISPATCHED', severity: 'medium', assignedOfficerId: OFFICER_1.sub, ...operational,
+      };
+
+      const asOfficer = await request(createTestApp(OFFICER_1, repoReturning([row])))
+        .get('/api/emergencies?scope=active&sortBy=priority')
+        .expect(200);
+      const asCitizen = await request(createTestApp(CITIZEN_A, repoReturning([row])))
+        .get('/api/emergencies')
+        .expect(200);
+
+      expect(asOfficer.body.data[0]).toMatchObject({ ...operational, severity: 'medium', returned: false });
+      for (const field of Object.keys(operational)) {
+        expect(asCitizen.body.data[0]).not.toHaveProperty(field);
+      }
+      expect(asCitizen.body.data[0].severity).toBe('medium');
     });
 
     it('active: pasa el scope al repository', async () => {
