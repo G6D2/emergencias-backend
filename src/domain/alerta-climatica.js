@@ -212,7 +212,7 @@ function alertaDesdeContexto(alertaId, contexto) {
 function resumirAlertasActivas(contextos = []) {
   const porAlerta = new Map();
   for (const contexto of contextos) {
-    if (!contexto || contexto.tipo !== CONTEXTO_TIPO.ALERTA_CLIMATICA) continue;
+    if (contexto?.tipo !== CONTEXTO_TIPO.ALERTA_CLIMATICA) continue;
     const alertaId = alertaIdDeReferencia(contexto.referenciaExterna);
     if (!alertaId) continue;
 
