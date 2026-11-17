@@ -1,6 +1,7 @@
 # Plan para partir `EmergencyRepository`
 
-> **Estado:** plan, sin código. Sale de la corrección de la cátedra del 17/11/2026, que marcó que
+> **Estado:** plan, sin código. Sale de una revisión interna del equipo del 17/11/2026 (una
+> corrección simulada con la consigna y la rúbrica, no la de la cátedra), que marcó que
 > `src/repositories/emergency.repository.js` tiene ~1.485 líneas (1.507 después del #134). No se
 > ejecuta antes de la entrega del 26/11 (ver [Por qué no antes del 26/11](#por-qué-no-antes-del-2611)).
 
