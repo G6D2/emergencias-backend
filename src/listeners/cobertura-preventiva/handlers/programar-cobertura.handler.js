@@ -3,6 +3,7 @@ const { ValidationError } = require('../../../errors/app-errors');
 const { secureLog } = require('../../../security/secure-log');
 const { buildEmergencyCreatedEvent } = require('../../../services/emergency-events');
 const { severityForType } = require('../../../domain/severity');
+const { CONTEXTO_TIPO, ORIGEN_ESPACIOS } = require('../../../domain/contexto-zona');
 
 const PROGRAMAR_COBERTURA = 'ProgramarCobertura';
 const CAUSA_TIPO = 'EVENTO_PUBLICO';
@@ -19,6 +20,23 @@ function emergenciaCreadaTopic() {
   return process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico';
 }
 
+// Contexto de zona del evento comunitario (uno por eventoId). Dado de baja es
+// la marca de que Espacios canceló el evento: la deja DarDeBajaContextoZona
+// (regla 02 de EventoCancelado) en la misma transacción que CancelarCobertura,
+// aunque todavía no exista ni la cobertura ni el contexto.
+function contextoDelEvento(eventoId) {
+  return { tipo: CONTEXTO_TIPO.EVENTO_ESPACIO_PUBLICO, origen: ORIGEN_ESPACIOS, referenciaBase: eventoId };
+}
+
+// Publicación (o ActividadCreada) y cancelación llegan por tópicos distintos y
+// el consumer procesa varias particiones a la vez (issue #88). Las dos
+// transacciones toman el mismo advisory lock antes de mirar la cobertura: la
+// cancelación ve la cobertura ya creada, o la publicación ve la marca de
+// baja. Es el mismo esquema que la alerta climática.
+function bloquearEvento(contextoZonaRepository, client, eventoId) {
+  return contextoZonaRepository.bloquearGrupo(client, contextoDelEvento(eventoId));
+}
+
 // Crea una emergencia PREVENTIVA de origen externo para un evento comunitario
 // o una reserva de espacio de Espacios que superó el umbral de personas.
 // `eventoId` es el id de la causa (eventoId o reservaId) y `causaTipo` dice
@@ -30,11 +48,19 @@ function emergenciaCreadaTopic() {
 // cambian los inscriptos, así que hay una sola cobertura por eventoId (lo
 // garantiza también el índice único de V23).
 //
+// Un evento comunitario que ya se canceló (la cancelación llegó antes) no
+// programa nada. Una RESERVA no tiene cancelación que la frene.
+//
 // Sin ubicación queda requires_manual_validation=true para que el dispatcher
 // la revise. El correlationId de Espacios (evento-<id>) no es un UUID; en ese
 // caso la emergencia usa el propio id y el vínculo queda en causaId.
-function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenciaCreadaTopic() }) {
+function createProgramarCoberturaHandler({
+  emergencyRepository,
+  contextoZonaRepository,
+  topic = emergenciaCreadaTopic(),
+}) {
   if (!emergencyRepository) throw new Error('createProgramarCoberturaHandler requiere emergencyRepository');
+  if (!contextoZonaRepository) throw new Error('createProgramarCoberturaHandler requiere contextoZonaRepository');
 
   return async function programarCobertura(client, payload) {
     const { eventoId, titulo, latitud, longitud, direccion, barrio, capacidad, correlationId } = payload || {};
@@ -42,6 +68,14 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
     const causaTipo = payload.causaTipo ?? CAUSA_TIPO;
     if (!CAUSAS_PERMITIDAS.has(causaTipo)) {
       throw new ValidationError(`ProgramarCobertura no admite causaTipo ${causaTipo}`);
+    }
+
+    if (causaTipo === CAUSA_TIPO) {
+      await bloquearEvento(contextoZonaRepository, client, eventoId);
+      if (await contextoZonaRepository.grupoDadoDeBaja(client, contextoDelEvento(eventoId))) {
+        secureLog('info', 'Evento comunitario ya cancelado: no se programa cobertura', { eventoId });
+        return { emergencyId: null, created: false, cancelado: true };
+      }
     }
 
     const existing = await emergencyRepository.findByCausa(client, {
@@ -97,4 +131,10 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
   };
 }
 
-module.exports = { PROGRAMAR_COBERTURA, CAUSA_TIPO, EMERGENCY_TYPE, createProgramarCoberturaHandler };
+module.exports = {
+  PROGRAMAR_COBERTURA,
+  CAUSA_TIPO,
+  EMERGENCY_TYPE,
+  bloquearEvento,
+  createProgramarCoberturaHandler,
+};
