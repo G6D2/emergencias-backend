@@ -25,7 +25,7 @@ const MAX_PROBLEM_DESCRIPTION_LENGTH = 280;
 function normalizeReason(reason) {
   if (reason === undefined || reason === null) return null;
   if (typeof reason !== 'string') {
-    throw new ValidationError('reason must be a string');
+    throw new ValidationError('reason tiene que ser texto');
   }
   return scrubFreeText(reason, { maxLength: MAX_REASON_LENGTH }) || null;
 }
@@ -33,7 +33,7 @@ function normalizeReason(reason) {
 function normalizeProblemDescription(description) {
   if (description === undefined || description === null) return null;
   if (typeof description !== 'string') {
-    throw new ValidationError('descripcionProblema must be a string');
+    throw new ValidationError('descripcionProblema tiene que ser texto');
   }
   return scrubFreeText(description, { maxLength: MAX_PROBLEM_DESCRIPTION_LENGTH }) || null;
 }
@@ -45,7 +45,7 @@ function parseDateFilter(name, value) {
   const match = typeof value === 'string' ? ISO_DATE_RE.exec(value) : null;
   const day = match && new Date(`${match[1]}T00:00:00Z`);
   if (!match || Number.isNaN(Date.parse(value)) || day.toISOString().slice(0, 10) !== match[1]) {
-    throw new ValidationError(`${name} must be an ISO 8601 date`);
+    throw new ValidationError(`${name} tiene que ser una fecha ISO 8601`);
   }
   return value;
 }
@@ -71,13 +71,13 @@ function forOfficer(emergency, officerId) {
 function parseOfficerScope(scope, { isOfficerOnly, statuses }) {
   if (scope === undefined || scope === '') return undefined;
   if (!OFFICER_SCOPES.includes(scope)) {
-    throw new ValidationError(`scope must be one of: ${OFFICER_SCOPES.join(', ')}`);
+    throw new ValidationError(`scope tiene que ser uno de: ${OFFICER_SCOPES.join(', ')}`);
   }
   if (!isOfficerOnly) {
-    throw new ValidationError('scope is only available to officers');
+    throw new ValidationError('scope solo está disponible para oficiales');
   }
   if (statuses.length > 0) {
-    throw new ValidationError('Use either scope or status, not both');
+    throw new ValidationError('Usá scope o status, no los dos');
   }
   return scope;
 }
@@ -108,7 +108,7 @@ class EmergencyController {
     // lista vacía en vez de 400.
     for (const name of ['severity', 'priority']) {
       if (query[name] && !isValidSeverity(query[name])) {
-        throw new ValidationError(`${name} must be one of: ${SEVERITY_LEVELS.join(', ')}`);
+        throw new ValidationError(`${name} tiene que ser uno de: ${SEVERITY_LEVELS.join(', ')}`);
       }
     }
     const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
@@ -120,7 +120,7 @@ class EmergencyController {
     // Un status desconocido daba 200 con la lista vacía; un from/to que no es
     // fecha llegaba a Postgres y volvía 500. Los dos son 400.
     if (!statuses.every(isValidStatus)) {
-      throw new ValidationError(`status must be a comma-separated list of: ${EMERGENCY_STATUSES.join(', ')}`);
+      throw new ValidationError(`status tiene que ser una lista separada por comas de: ${EMERGENCY_STATUSES.join(', ')}`);
     }
     const officerScope = parseOfficerScope(query.scope, { isOfficerOnly, statuses });
     const from = parseDateFilter('from', query.from);
@@ -193,7 +193,7 @@ class EmergencyController {
     const detail = await this.emergencyRepository.findDetailById(id);
 
     if (!detail || !canViewEmergency(user, detail)) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     if (audit) {
@@ -244,12 +244,12 @@ class EmergencyController {
     const emergency = await this.emergencyRepository.findById(id);
 
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'VALIDATED');
     if (emergency.status !== fromStatus) {
-      throw new ConflictError(`Emergency ${id} is ${emergency.status}, expected ${fromStatus}`);
+      throw new ConflictError(`La emergencia ${id} está en ${emergency.status}, se esperaba ${fromStatus}`);
     }
 
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
@@ -299,13 +299,13 @@ class EmergencyController {
     const normalizedReason = normalizeReason(reason);
 
     if (!normalizedReason) {
-      throw new ValidationError('A discard reason is required');
+      throw new ValidationError('Para descartar hace falta un motivo (reason)');
     }
 
     const emergency = await this.emergencyRepository.findById(id);
 
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'DISCARDED');
@@ -343,14 +343,14 @@ class EmergencyController {
     const emergency = await this.emergencyRepository.findById(id);
 
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     // Emergencia ajena: 404 (no 403) para no revelar que el id existe, misma
     // regla que GET /api/emergencies/:id. Un no-citizen ya cortó con 403 en la
     // ruta (requireCitizen), así que acá solo llega un citizen que no es dueño.
     if (!canCancelEmergency(user, emergency)) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'CANCELLED');
@@ -388,12 +388,12 @@ class EmergencyController {
     const normalizedOfficerId = typeof officerId === 'string' ? officerId.trim() : '';
 
     if (!normalizedOfficerId) {
-      throw new ValidationError('officerId is required');
+      throw new ValidationError('officerId es obligatorio');
     }
 
     const emergency = await this.emergencyRepository.findById(id);
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'DISPATCHED');
@@ -429,7 +429,7 @@ class EmergencyController {
     const actor = user.sub;
     const emergency = await this.emergencyRepository.findById(id);
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'CLOSED');
@@ -479,14 +479,14 @@ class EmergencyController {
     const actor = user.sub;
     const emergency = await this.emergencyRepository.findById(id);
     if (!emergency || !canAdvanceEmergencyStatus(user, emergency)) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, newStatus);
 
     if (!Array.isArray(causasRelacionadas)
       || causasRelacionadas.some((cause) => !RELATED_CAUSES.has(cause))) {
-      throw new ValidationError('causasRelacionadas must be an array containing only VIA, ESPACIO_PUBLICO, or RESIDUOS');
+      throw new ValidationError('causasRelacionadas tiene que ser una lista con solo VIA, ESPACIO_PUBLICO o RESIDUOS');
     }
 
     const normalizedProblemDescription = newStatus === 'RESOLVED'
@@ -495,10 +495,10 @@ class EmergencyController {
     if (newStatus === 'RESOLVED') {
       const causeIsVia = causasRelacionadas.includes('VIA');
       if (causeIsVia && !normalizedProblemDescription) {
-        throw new ValidationError('descripcionProblema is required when causasRelacionadas includes VIA');
+        throw new ValidationError('descripcionProblema es obligatoria cuando causasRelacionadas incluye VIA');
       }
       if (!causeIsVia && normalizedProblemDescription) {
-        throw new ValidationError('descripcionProblema is only allowed when causasRelacionadas includes VIA');
+        throw new ValidationError('descripcionProblema solo se acepta cuando causasRelacionadas incluye VIA');
       }
     }
 

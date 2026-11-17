@@ -11,11 +11,11 @@ function createLocalTokenIssuer(privateKey, config) {
     has_antipanic_button: hasAntipanicButton,
   }) {
     if (typeof sub !== 'string' || sub.trim().length === 0) {
-      throw new ValidationError('sub is required');
+      throw new ValidationError('sub es obligatorio');
     }
 
     if (!Array.isArray(groups)) {
-      throw new ValidationError('groups must be an array');
+      throw new ValidationError('groups tiene que ser una lista');
     }
 
     const normalizedGroups = groups.filter((g) => typeof g === 'string');

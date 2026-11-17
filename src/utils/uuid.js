@@ -13,7 +13,7 @@ const { ValidationError } = require('../errors/app-errors');
  * @param {string} id
  * @param {string} [message]
  */
-function assertUuid(id, message = 'Emergency id must be a valid UUID') {
+function assertUuid(id, message = 'El id de la emergencia tiene que ser un UUID válido') {
   if (!isUuid(id)) {
     throw new ValidationError(message);
   }

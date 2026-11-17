@@ -59,20 +59,20 @@ class PanicButtonController {
    */
   async triggerPanicButton(payload, user, { idempotencyKey = null } = {}) {
     if (!payload.location) {
-      throw new ValidationError('Missing required fields: location');
+      throw new ValidationError('Falta el campo obligatorio location');
     }
 
     const { latitude, longitude } = payload.location;
     if (typeof latitude !== 'number' || typeof longitude !== 'number'
       || Number.isNaN(latitude) || Number.isNaN(longitude)) {
-      throw new ValidationError('location.latitude and location.longitude must be numbers');
+      throw new ValidationError('location.latitude y location.longitude tienen que ser números');
     }
 
     if (latitude < MIN_LATITUDE || latitude > MAX_LATITUDE) {
-      throw new ValidationError(`location.latitude must be between ${MIN_LATITUDE} and ${MAX_LATITUDE}`);
+      throw new ValidationError(`location.latitude tiene que estar entre ${MIN_LATITUDE} y ${MAX_LATITUDE}`);
     }
     if (longitude < MIN_LONGITUDE || longitude > MAX_LONGITUDE) {
-      throw new ValidationError(`location.longitude must be between ${MIN_LONGITUDE} and ${MAX_LONGITUDE}`);
+      throw new ValidationError(`location.longitude tiene que estar entre ${MIN_LONGITUDE} y ${MAX_LONGITUDE}`);
     }
 
     // Catálogo cerrado (tarea #44): un valor inválido corta con 400. Si el

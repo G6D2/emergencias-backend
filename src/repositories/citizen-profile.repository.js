@@ -164,7 +164,7 @@ class CitizenProfileRepository {
     const count = countResult.rows[0]?.count ?? 0;
     if (count >= MAX_SAVED_LOCATIONS_PER_USER) {
       throw new ConflictError(
-        `Maximum ${MAX_SAVED_LOCATIONS_PER_USER} saved locations allowed`
+        `Llegaste al máximo de ${MAX_SAVED_LOCATIONS_PER_USER} ubicaciones guardadas`
       );
     }
 

@@ -29,7 +29,7 @@ function createMockEmergencyRepository() {
     recordAccess: async () => ({ id: 1 }),
     updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
       const current = emergencies.get(id);
-      if (!current) throw new NotFoundError(`Emergency with ID ${id} not found`);
+      if (!current) throw new NotFoundError(`No se encontró la emergencia ${id}`);
       const updated = { ...current, status: newStatus, updatedAt: new Date().toISOString() };
       emergencies.set(id, updated);
       return {
@@ -39,7 +39,7 @@ function createMockEmergencyRepository() {
     },
     assignOfficer: async (id, { officerId }) => {
       const current = emergencies.get(id);
-      if (!current) throw new NotFoundError(`Emergency with ID ${id} not found`);
+      if (!current) throw new NotFoundError(`No se encontró la emergencia ${id}`);
       const updated = {
         ...current,
         status: 'DISPATCHED',

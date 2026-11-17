@@ -118,7 +118,7 @@ describe('Máquina de estados de emergencias', () => {
     });
 
     it('usa un mensaje claro para el salto de flujo', () => {
-      expect(() => assertTransition('PENDING', 'RESOLVED')).toThrow('Invalid transition PENDING → RESOLVED');
+      expect(() => assertTransition('PENDING', 'RESOLVED')).toThrow('Transición inválida: PENDING → RESOLVED');
     });
 
     it('los estados terminales no admiten ninguna transición', () => {
@@ -128,7 +128,7 @@ describe('Máquina de estados de emergencias', () => {
           expect(() => assertTransition(from, to)).toThrow(
             expect.objectContaining({
               name: 'ConflictError',
-              message: `Emergency in terminal status ${from} cannot transition to ${to}`,
+              message: `La emergencia está en un estado final (${from}) y no puede pasar a ${to}`,
             })
           );
         });
@@ -140,10 +140,10 @@ describe('Máquina de estados de emergencias', () => {
       expect(canTransition('PENDING', 'ON_SITE')).toBe(false);
       expect(canTransition('PENDING', null)).toBe(false);
       expect(() => assertTransition('PENDING', null)).toThrow(
-        expect.objectContaining({ name: 'ConflictError', message: 'Unknown emergency status null' })
+        expect.objectContaining({ name: 'ConflictError', message: 'Estado de emergencia desconocido: null' })
       );
       expect(() => assertTransition('CREATED', 'VALIDATED')).toThrow(
-        expect.objectContaining({ name: 'ConflictError', message: 'Unknown emergency status CREATED' })
+        expect.objectContaining({ name: 'ConflictError', message: 'Estado de emergencia desconocido: CREATED' })
       );
     });
   });

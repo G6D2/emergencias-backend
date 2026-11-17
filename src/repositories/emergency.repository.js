@@ -1224,24 +1224,24 @@ class EmergencyRepository {
       [id]
     );
     if (current.rows.length === 0) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
     const previousStatus = current.rows[0].status;
     const assignedOfficerId = current.rows[0].assigned_officer_id;
     if (requireAssignedOfficerId !== null && assignedOfficerId !== requireAssignedOfficerId) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
     // La expiración no sigue la tabla de transiciones de los endpoints: tiene
     // la suya (expirationTarget) y solo la usa el job del sistema.
     if (expiration) {
       if (expirationTarget(previousStatus) !== newStatus) {
-        throw new ConflictError(`Emergency ${id} is ${previousStatus}: cannot expire to ${newStatus}`);
+        throw new ConflictError(`La emergencia ${id} está en ${previousStatus}: no puede expirar a ${newStatus}`);
       }
     } else {
       assertTransition(previousStatus, newStatus);
     }
     if (requireStatus !== null && previousStatus !== requireStatus) {
-      throw new ConflictError(`Emergency ${id} is ${previousStatus}, expected ${requireStatus}`);
+      throw new ConflictError(`La emergencia ${id} está en ${previousStatus}, se esperaba ${requireStatus}`);
     }
 
     // closed_at marca el fin de la emergencia en cualquier estado terminal
@@ -1407,7 +1407,7 @@ class EmergencyRepository {
         [id]
       );
       if (current.rows.length === 0) {
-        throw new NotFoundError(`Emergency with ID ${id} not found`);
+        throw new NotFoundError(`No se encontró la emergencia ${id}`);
       }
 
       const previousStatus = current.rows[0].status;
@@ -1418,11 +1418,11 @@ class EmergencyRepository {
         [officerId]
       );
       if (officerResult.rows.length === 0) {
-        throw new NotFoundError(`Officer with ID ${officerId} not found`);
+        throw new NotFoundError(`No se encontró el oficial ${officerId}`);
       }
       const officerRow = officerResult.rows[0];
       if (officerRow.status !== 'disponible') {
-        throw new ConflictError(`Officer ${officerId} is not available`);
+        throw new ConflictError(`El oficial ${officerId} no está disponible`);
       }
 
       const previousOfficerId = current.rows[0].assigned_officer_id;

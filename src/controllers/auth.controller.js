@@ -50,7 +50,7 @@ class AuthController {
 
   async register(body = {}) {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-      throw new ValidationError('Body must be a JSON object');
+      throw new ValidationError('El cuerpo del pedido tiene que ser un objeto JSON');
     }
 
     const email = normalizeEmail(body.email);
@@ -58,10 +58,10 @@ class AuthController {
     const displayName = resolveDisplayName(body);
 
     if (!email || !EMAIL_RE.test(email)) {
-      throw new ValidationError('email must be a valid email address');
+      throw new ValidationError('El correo no es válido');
     }
     if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
-      throw new ValidationError(`password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+      throw new ValidationError(`La contraseña tiene que tener al menos ${MIN_PASSWORD_LENGTH} caracteres`);
     }
 
     const existing = await this.authUserRepository.findByEmail(email);
@@ -97,14 +97,14 @@ class AuthController {
 
   async login(body = {}) {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-      throw new ValidationError('Body must be a JSON object');
+      throw new ValidationError('El cuerpo del pedido tiene que ser un objeto JSON');
     }
 
     const email = normalizeEmail(body.email);
     const password = body.password;
 
     if (!email || typeof password !== 'string') {
-      throw new ValidationError('email and password are required');
+      throw new ValidationError('El correo y la contraseña son obligatorios');
     }
 
     const found = await this.authUserRepository.findByEmail(email);

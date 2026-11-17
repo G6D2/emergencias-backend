@@ -46,14 +46,14 @@ function isDevLoginStrict(env = process.env) {
 function resolveDevLoginClaims(body = {}, env = process.env) {
   const sub = typeof body.sub === 'string' ? body.sub.trim() : '';
   if (!sub) {
-    throw new ValidationError('sub is required');
+    throw new ValidationError('sub es obligatorio');
   }
 
   if (isDevLoginStrict(env)) {
     const entry = DEV_LOGIN_ALLOWLIST[sub];
     if (!entry) {
       throw new ValidationError(
-        'Demo subject not allowed. Use a seeded demo sub or AUTH_MODE=idp.'
+        'Sub de demo no habilitado. Usá uno de los sub de demo o AUTH_MODE=idp.'
       );
     }
     return {

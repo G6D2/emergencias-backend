@@ -26,7 +26,7 @@ function createMockEmergencyRepository() {
     recordAccess: async () => ({ id: 1 }),
     updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
       const current = emergencies.get(id);
-      if (!current) throw new NotFoundError(`Emergency with ID ${id} not found`);
+      if (!current) throw new NotFoundError(`No se encontró la emergencia ${id}`);
       const updated = { ...current, status: newStatus, updatedAt: new Date().toISOString() };
       emergencies.set(id, updated);
       return {
@@ -211,10 +211,10 @@ describe('GET /api/emergencies', () => {
     });
 
     it.each([
-      ['un scope desconocido', OFFICER_1, 'scope=todas', 'scope must be one of: active, history'],
-      ['scope junto con status', OFFICER_1, 'scope=history&status=CLOSED', 'Use either scope or status, not both'],
-      ['un dispatcher', DISPATCHER, 'scope=history', 'scope is only available to officers'],
-      ['un citizen', CITIZEN_A, 'scope=active', 'scope is only available to officers'],
+      ['un scope desconocido', OFFICER_1, 'scope=todas', 'scope tiene que ser uno de: active, history'],
+      ['scope junto con status', OFFICER_1, 'scope=history&status=CLOSED', 'Usá scope o status, no los dos'],
+      ['un dispatcher', DISPATCHER, 'scope=history', 'scope solo está disponible para oficiales'],
+      ['un citizen', CITIZEN_A, 'scope=active', 'scope solo está disponible para oficiales'],
     ])('400 con %s', async (_label, user, query, message) => {
       const repo = repoReturning([]);
 

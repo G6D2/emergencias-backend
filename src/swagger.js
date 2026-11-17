@@ -509,8 +509,17 @@ const options = {
         ErrorResponse: {
           type: 'object',
           properties: {
-            error: { type: 'string', example: 'ValidationError' },
-            message: { type: 'string' },
+            error: {
+              type: 'string',
+              example: 'NotFoundError',
+              description: 'Código del error, para máquinas: no cambia. Para distinguir casos, '
+                + 'comparar el status HTTP y este campo, no el texto de message.',
+            },
+            message: {
+              type: 'string',
+              example: 'No se encontró la emergencia 8e03978e-40d5-43e8-bc93-6894a57f9324',
+              description: 'Texto para mostrar, en castellano. Puede cambiar.',
+            },
           },
         },
         OutboxStatus: {

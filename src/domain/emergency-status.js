@@ -95,16 +95,16 @@ function canTransition(from, to) {
  */
 function assertTransition(from, to) {
   if (!isValidStatus(to)) {
-    throw new ConflictError(`Unknown emergency status ${String(to)}`);
+    throw new ConflictError(`Estado de emergencia desconocido: ${String(to)}`);
   }
   if (!isValidStatus(from)) {
-    throw new ConflictError(`Unknown emergency status ${String(from)}`);
+    throw new ConflictError(`Estado de emergencia desconocido: ${String(from)}`);
   }
   if (isTerminal(from)) {
-    throw new ConflictError(`Emergency in terminal status ${from} cannot transition to ${to}`);
+    throw new ConflictError(`La emergencia está en un estado final (${from}) y no puede pasar a ${to}`);
   }
   if (!canTransition(from, to)) {
-    throw new ConflictError(`Invalid transition ${from} → ${to}`);
+    throw new ConflictError(`Transición inválida: ${from} → ${to}`);
   }
 }
 

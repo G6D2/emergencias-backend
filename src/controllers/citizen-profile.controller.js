@@ -14,7 +14,7 @@ function readOptionalString(body, key) {
     return undefined;
   }
   if (typeof body[key] !== 'string') {
-    throw new ValidationError(`${key} must be a string`);
+    throw new ValidationError(`${key} tiene que ser texto`);
   }
   return body[key];
 }
@@ -28,7 +28,7 @@ function parseOptionalCoord(raw, fieldName) {
   }
   const value = Number(raw);
   if (Number.isNaN(value)) {
-    throw new ValidationError(`${fieldName} must be a number`);
+    throw new ValidationError(`${fieldName} tiene que ser un número`);
   }
   return { present: true, value };
 }
@@ -45,7 +45,7 @@ class CitizenProfileController {
 
   async upsertProfile(user, body = {}) {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-      throw new ValidationError('Body must be a JSON object');
+      throw new ValidationError('El cuerpo del pedido tiene que ser un objeto JSON');
     }
 
     const payload = {};
@@ -73,13 +73,13 @@ class CitizenProfileController {
 
   async addSavedLocation(user, body = {}) {
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-      throw new ValidationError('Body must be a JSON object');
+      throw new ValidationError('El cuerpo del pedido tiene que ser un objeto JSON');
     }
 
     const label = typeof body.label === 'string' ? body.label.trim() : '';
     const address = typeof body.address === 'string' ? body.address.trim() : '';
     if (!label || !address) {
-      throw new ValidationError('label and address are required');
+      throw new ValidationError('label y address son obligatorios');
     }
 
     const lat = parseOptionalCoord(body.lat, 'lat');
@@ -95,9 +95,9 @@ class CitizenProfileController {
   }
 
   async updateSavedLocation(user, id, body = {}) {
-    assertUuid(id, 'Saved location id must be a valid UUID');
+    assertUuid(id, 'El id de la ubicación guardada tiene que ser un UUID válido');
     if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-      throw new ValidationError('Body must be a JSON object');
+      throw new ValidationError('El cuerpo del pedido tiene que ser un objeto JSON');
     }
 
     const changes = {};
@@ -111,16 +111,16 @@ class CitizenProfileController {
 
     const entry = await this.repo.updateSavedLocation(user.sub, id, changes);
     if (!entry) {
-      throw new NotFoundError('Saved location not found');
+      throw new NotFoundError('No se encontró la ubicación guardada');
     }
     return { data: entry };
   }
 
   async removeSavedLocation(user, id) {
-    assertUuid(id, 'Saved location id must be a valid UUID');
+    assertUuid(id, 'El id de la ubicación guardada tiene que ser un UUID válido');
     const ok = await this.repo.removeSavedLocation(user.sub, id);
     if (!ok) {
-      throw new NotFoundError('Saved location not found');
+      throw new NotFoundError('No se encontró la ubicación guardada');
     }
     return { data: { id } };
   }
