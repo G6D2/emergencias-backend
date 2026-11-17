@@ -183,9 +183,9 @@ const options = {
               nullable: true,
               description: 'Incidente al que fue agrupada esta emergencia (motor de detección de '
                 + 'incidentes, corre cada 60s), o null si todavía no fue agrupada a ninguno. '
-                + 'Solo viene en el listado y el detalle. En el listado (GET /api/emergencies) se le '
-                + 'recorta al citizen; el detalle (GET /api/emergencies/{id} y GET /api/panic-button/{id}) '
-                + 'lo devuelve también al citizen dueño.',
+                + 'Solo viene en el listado y el detalle. Lo reciben el dispatcher y el officer (en su '
+                + 'listado, que es lo único que ve); al citizen se lo recortan el listado y el detalle '
+                + '(GET /api/emergencies/{id} y GET /api/panic-button/{id}).',
             },
             effectivePriority: {
               type: 'string',
@@ -202,13 +202,14 @@ const options = {
                 + 'la emergencia se creó dentro del radio de un contexto de zona que sigue en curso, por '
                 + 'ejemplo un evento en un espacio público. Se calcula al leer: cuando el contexto vence o se da '
                 + 'de baja vuelve a ser igual a effectivePriority. No sube en emergencias PREVENTIVA ni '
-                + 'en estados terminales. sortBy=priority ordena por este valor. Solo para el dispatcher.',
+                + 'en estados terminales. sortBy=priority ordena por este valor. Para el dispatcher y el '
+                + 'officer (en su listado); el citizen no lo recibe.',
             },
             priorityContext: {
               type: 'object',
               nullable: true,
               description: 'Contexto de zona que eleva dispatchPriority, o null si no hay ninguno '
-                + 'vigente. Solo para el dispatcher.',
+                + 'vigente. Para el dispatcher y el officer (en su listado); el citizen no lo recibe.',
               properties: {
                 tipo: { type: 'string', enum: ['EVENTO_ESPACIO_PUBLICO', 'ALERTA_CLIMATICA'] },
                 latitud: { type: 'number', example: -34.5711, description: 'Punto del contexto (ubicación del evento).' },

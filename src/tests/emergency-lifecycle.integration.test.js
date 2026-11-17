@@ -302,3 +302,28 @@ describe('rama return: el dispatcher devuelve una DISPATCHED para reasignar', ()
     expect(await h.officerStatus(OFFICER_ID)).toBe('ocupado');
   });
 });
+
+describe('listado del oficial: la prioridad de despacho de lo que tiene asignado', () => {
+  it('el oficial la recibe con su motivo y el incidente; el ciudadano dueño, no', async () => {
+    const id = await h.createDispatched(OFFICER_ID);
+
+    const asOfficer = expectStatus(
+      await h.call('get', '/api/emergencies?scope=active&sortBy=priority&limit=100', 'officer'), 200, 'listado oficial'
+    );
+    const mine = asOfficer.body.data.find((emergency) => emergency.id === id);
+    expect(mine).toMatchObject({ status: 'DISPATCHED', returned: false });
+    // Sin incidente ni contexto de zona: la de despacho es la severidad.
+    expect(mine.dispatchPriority).toBe(mine.severity);
+    expect(mine.effectivePriority).toBe(mine.severity);
+    expect(mine).toHaveProperty('priorityContext', null);
+    expect(mine).toHaveProperty('incident', null);
+
+    const asCitizen = expectStatus(
+      await h.call('get', '/api/emergencies?limit=100', 'citizen'), 200, 'listado ciudadano'
+    );
+    const own = asCitizen.body.data.find((emergency) => emergency.id === id);
+    for (const field of ['incident', 'effectivePriority', 'dispatchPriority', 'priorityContext']) {
+      expect(own).not.toHaveProperty(field);
+    }
+  });
+});

@@ -57,13 +57,14 @@ function withoutOperationalFields({ incident, effectivePriority, dispatchPriorit
   return rest;
 }
 
-// Lo que recibe el oficial: sin campos operativos y con `returned`, que marca
-// las que le devolvieron (scope=history). Esas ya no son suyas: no se muestra
-// a quién quedaron asignadas.
+// Lo que recibe el oficial: la emergencia con los campos operativos (la
+// prioridad de despacho, su motivo y el resumen del incidente, que no trae
+// datos de ciudadanos; el front la muestra en /oficial, Frontend#91) y con
+// `returned`, que marca las que le devolvieron (scope=history). Esas ya no
+// son suyas: no se muestra a quién quedaron asignadas.
 function forOfficer(emergency, officerId) {
-  const view = withoutOperationalFields(emergency);
-  if (view.assignedOfficerId === officerId) return { ...view, returned: false };
-  return { ...view, returned: true, assignedOfficerId: null, assignedOfficer: null };
+  if (emergency.assignedOfficerId === officerId) return { ...emergency, returned: false };
+  return { ...emergency, returned: true, assignedOfficerId: null, assignedOfficer: null };
 }
 
 // scope=active|history (issue #17): solo para el oficial, y sin status,
@@ -142,7 +143,7 @@ class EmergencyController {
     const userId = restrictToOwn ? user.sub : undefined;
     const assignedOfficerId = isOfficerOnly ? user.sub : query.assignedOfficerId;
     // El repository calcula incident/effectivePriority igual para todos (un
-    // solo JOIN); para officer y citizen se recortan acá (withoutOperationalFields).
+    // solo JOIN); para el citizen se recortan acá (withoutOperationalFields).
     // `priority` es un alias de `severity` en el filtro (ver findPage más
     // abajo), así que se valida igual: antes ?priority=xyz daba 200 con la
     // lista vacía en vez de 400.
