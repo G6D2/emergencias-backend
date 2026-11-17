@@ -31,9 +31,9 @@ function emergenciaCreadaTopic() {
 // garantiza también el índice único de V23).
 //
 // Sin ubicación queda requires_manual_validation=true para que el dispatcher
-// la revise. El correlationId de Espacios (evento-<id>, act-<id>) se
-// conserva aunque no sea UUID (correlationIdExterno); si no viene o no sirve,
-// la emergencia usa el propio id. El vínculo con la causa queda en causaId.
+// la revise. El correlationId de Espacios (evento-<id>, act-<id>) se conserva
+// aunque no sea UUID (correlationIdExterno); si no viene o no sirve, en ese
+// caso la emergencia usa el propio id y el vínculo queda en causaId.
 function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenciaCreadaTopic() }) {
   if (!emergencyRepository) throw new Error('createProgramarCoberturaHandler requiere emergencyRepository');
 
