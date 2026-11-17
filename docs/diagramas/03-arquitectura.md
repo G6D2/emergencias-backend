@@ -140,8 +140,9 @@ flowchart TB
 > primaria y `RuleBasedGrouper` como fallback determinístico. `detectGroups` cae a `fallback`
 > **solo** ante una excepción de `primary` — nunca porque el resultado sea un array vacío, que es
 > una respuesta válida. La estrategia que corrió queda en `algorithmVersion` (`dbscan-v1` o
-> `rule-based-v1`). Pendiente: calibrar los parámetros de DBSCAN con el dataset sintético de
-> `scripts/demo-dbscan.js` contra casos reales.
+> `rule-based-v1`). Los parámetros están calibrados con un dataset sintético en
+> [`../ml/calibracion-dbscan.md`](../ml/calibracion-dbscan.md) (`scripts/calibrar-dbscan.js`): los
+> defaults actuales quedan; falta contrastarlos con casos reales.
 
 ## Leyenda
 
