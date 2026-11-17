@@ -13,6 +13,11 @@ services:
     # Sin auto-deploy: el CD (.github/workflows/cd.yml) migra Neon y después
     # dispara el deploy hook.
     autoDeployTrigger: "off"
+    # Health check de Render (cargado en el dashboard el 17/11/2026). /health
+    # responde 200 si el proceso atiende, sin mirar la base ni Kafka, y está
+    # excluido del redirect a HTTPS: un deploy que no levanta no reemplaza a la
+    # instancia que anda, y Render reinicia si deja de responder.
+    healthCheckPath: /health
     envVars:
       # Producción corre con NODE_ENV=production desde el 17/11/2026 (antes no
       # mandaba Strict-Transport-Security). Prende HSTS + redirect a HTTPS
