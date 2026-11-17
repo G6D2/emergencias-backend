@@ -133,17 +133,39 @@ describe('createProgramarCoberturaHandler', () => {
     });
   });
 
-  it('usa el correlationId del evento solo si es un UUID', async () => {
+  it('conserva el correlationId del evento aunque no sea UUID (#77)', async () => {
     const emergencyRepository = buildRepository();
     const handler = createProgramarCoberturaHandler({ emergencyRepository });
 
     await handler(client, payload);
-    const conTextoLibre = emergencyRepository.create.mock.calls[0][0];
-    expect(conTextoLibre.correlationId).toBe(conTextoLibre.id);
+    expect(emergencyRepository.create.mock.calls[0][0].correlationId).toBe('evento-ev-77');
 
     const uuid = '6f1c9a4e-3c2b-4a5d-9e11-2b7d5c8a1f30';
     await handler(client, { ...payload, correlationId: uuid });
     expect(emergencyRepository.create.mock.calls[1][0].correlationId).toBe(uuid);
+
+    // Llega hasta el EmergenciaCreada que se encola.
+    const input = emergencyRepository.create.mock.calls[0][0];
+    const event = input.outboxEvent.payload({ ...input, createdAt: '2026-11-05T12:00:00.000Z' }, 'evt-1');
+    expect(event.correlationId).toBe('evento-ev-77');
+    expect(event.data.correlationId).toBe('evento-ev-77');
+  });
+
+  it.each([
+    ['no viene', undefined],
+    ['es null', null],
+    ['está vacío', ''],
+    ['tiene solo espacios', '   '],
+    ['no es string', 12345],
+    ['tiene un salto de línea', 'evento-1\nFAKE'],
+    ['supera los 128 caracteres', 'e'.repeat(129)],
+  ])('sin un correlationId usable (%s) usa el id propio, como antes', async (_caso, correlationId) => {
+    const emergencyRepository = buildRepository();
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
+
+    await handler(client, { ...payload, correlationId });
+    const input = emergencyRepository.create.mock.calls[0][0];
+    expect(input.correlationId).toBe(input.id);
   });
 
   it('sin coordenadas queda para validación manual', async () => {

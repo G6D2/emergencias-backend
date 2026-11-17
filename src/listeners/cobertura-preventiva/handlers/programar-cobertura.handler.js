@@ -3,6 +3,7 @@ const { ValidationError } = require('../../../errors/app-errors');
 const { secureLog } = require('../../../security/secure-log');
 const { buildEmergencyCreatedEvent } = require('../../../services/emergency-events');
 const { severityForType } = require('../../../domain/severity');
+const { correlationIdExterno } = require('../../../domain/correlation-id');
 
 const PROGRAMAR_COBERTURA = 'ProgramarCobertura';
 const CAUSA_TIPO = 'EVENTO_PUBLICO';
@@ -11,7 +12,6 @@ const CAUSA_TIPO = 'EVENTO_PUBLICO';
 const CAUSAS_PERMITIDAS = new Set([CAUSA_TIPO, 'RESERVA']);
 const EMERGENCY_TYPE = 'PREVENTIVA';
 const MAX_DESCRIPTION_LENGTH = 200;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Mismo topic que el alta del botón de pánico: la cobertura sale como
 // cualquier EmergenciaCreada.
@@ -31,7 +31,8 @@ function emergenciaCreadaTopic() {
 // garantiza también el índice único de V23).
 //
 // Sin ubicación queda requires_manual_validation=true para que el dispatcher
-// la revise. El correlationId de Espacios (evento-<id>) no es un UUID; en ese
+// la revise. El correlationId de Espacios (evento-<id>, act-<id>) se conserva
+// aunque no sea UUID (correlationIdExterno); si no viene o no sirve, en ese
 // caso la emergencia usa el propio id y el vínculo queda en causaId.
 function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenciaCreadaTopic() }) {
   if (!emergencyRepository) throw new Error('createProgramarCoberturaHandler requiere emergencyRepository');
@@ -66,7 +67,7 @@ function createProgramarCoberturaHandler({ emergencyRepository, topic = emergenc
     await emergencyRepository.create({
       client,
       id: emergencyId,
-      correlationId: UUID_PATTERN.test(correlationId || '') ? correlationId : emergencyId,
+      correlationId: correlationIdExterno(correlationId) ?? emergencyId,
       userId: null,
       latitude: hasLocation ? latitud : null,
       longitude: hasLocation ? longitud : null,

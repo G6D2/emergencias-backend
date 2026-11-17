@@ -122,8 +122,8 @@ describe('cobertura preventiva (integration)', () => {
       requires_manual_validation: false,
     });
     expect(rows[0].location_encrypted).not.toBeNull();
-    // El correlationId de Espacios no es UUID: la emergencia usa su propio id.
-    expect(rows[0].correlation_id).toBe(rows[0].id);
+    // El correlationId de Espacios se conserva aunque no sea UUID (#77).
+    expect(rows[0].correlation_id).toBe('evento-ev-1500');
   });
 
   it('encola EmergenciaCreada con el contrato del #48 en la misma transacción', async () => {
