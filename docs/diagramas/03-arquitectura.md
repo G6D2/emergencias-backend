@@ -166,3 +166,4 @@ flowchart TB
 - `render.yaml` (backend), `Frontend/render.yaml`, `Frontend/app/api/backend/[...path]/route.js`, `Frontend/app/api/geocode/route.js`, `Frontend/lib/geocode-server.js`
 - `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/workflows/keep-warm.yml`, `.github/workflows/activate-backup.yml` (backend) y sus equivalentes en `Frontend/.github/workflows/`
 - `sonar-project.properties` (backend y frontend)
+- Plan para partir `src/repositories/emergency.repository.js` (~1.500 líneas) en módulos más chicos: [`../plan-partir-emergency-repository.md`](../plan-partir-emergency-repository.md)
