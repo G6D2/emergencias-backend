@@ -3,6 +3,8 @@ const {
   TRANSITIONS,
   TERMINAL_STATUSES,
   ACTIVE_STATUSES,
+  OFFICER_SCOPE_STATUSES,
+  OFFICER_SCOPES,
   isValidStatus,
   isTerminal,
   canTransition,
@@ -173,5 +175,19 @@ describe('expiración (solo sistema)', () => {
   it('no abre atajos en los endpoints: cancelar lo despachado sigue sin ser una transición válida', () => {
     expect(canTransition('DISPATCHED', 'CANCELLED')).toBe(false);
     expect(canTransition('ON_SCENE', 'CANCELLED')).toBe(false);
+  });
+});
+
+describe('OFFICER_SCOPE_STATUSES (vista del oficial, issue #17)', () => {
+  it('reparte sin solaparse los estados en los que una emergencia puede tener oficial', () => {
+    expect(OFFICER_SCOPES).toEqual(['active', 'history']);
+    const { active, history } = OFFICER_SCOPE_STATUSES;
+    expect(active.filter((status) => history.includes(status))).toEqual([]);
+    // En curso: lo que el oficial todavía puede avanzar.
+    expect(active.every((status) => ACTIVE_STATUSES.includes(status) && status !== 'RESOLVED')).toBe(true);
+    // PENDING, VALIDATED y DISCARDED nunca tienen oficial asignado.
+    expect([...active, ...history].sort()).toEqual(
+      EMERGENCY_STATUSES.filter((status) => !['PENDING', 'VALIDATED', 'DISCARDED'].includes(status)).sort()
+    );
   });
 });

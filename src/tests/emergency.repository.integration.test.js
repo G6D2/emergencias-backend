@@ -374,6 +374,85 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     await repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' });
   });
 
+  describe('findPage con officerScope (vista del oficial, issue #17)', () => {
+    // Oficiales propios: los del seed los usan otros tests y pueden quedar
+    // con emergencias asignadas.
+    const officerA = `of-it17-a-${randomUUID().slice(0, 8)}`;
+    const officerB = `of-it17-b-${randomUUID().slice(0, 8)}`;
+
+    beforeAll(async () => {
+      await getPool().query(
+        `INSERT INTO officers (id, name, badge_number) VALUES ($1, 'Oficial A', 'IT-A'), ($2, 'Oficial B', 'IT-B')`,
+        [officerA, officerB]
+      );
+    });
+
+    afterAll(async () => {
+      await getPool().query('DELETE FROM officers WHERE id = ANY($1)', [[officerA, officerB]]);
+    });
+
+    // Un oficial con una RESOLVED sigue ocupado hasta el cierre: se libera a
+    // mano para poder darle otra.
+    async function dispatchedTo(officerId) {
+      await getPool().query(`UPDATE officers SET status = 'disponible' WHERE id = $1`, [officerId]);
+      const input = buildEmergency();
+      await repository.create(input);
+      await repository.updateStatus(input.id, { newStatus: 'VALIDATED', actor: 'operador-1' });
+      await repository.assignOfficer(input.id, { officerId, actor: 'operador-1' });
+      return input.id;
+    }
+
+    async function advance(id, statuses) {
+      for (const newStatus of statuses) {
+        await repository.updateStatus(id, { newStatus, actor: 'oficial' });
+      }
+    }
+
+    async function idsFor(officerId, officerScope) {
+      const { emergencies, total } = await repository.findPage({
+        statuses: [], assignedOfficerId: officerId, officerScope, page: 1, limit: 100, sortBy: 'createdAt', order: 'desc',
+      });
+      expect(total).toBe(emergencies.length);
+      return emergencies.map((emergency) => emergency.id).sort();
+    }
+
+    it('active trae lo que tiene en curso; history, lo terminado y lo que le devolvieron', async () => {
+      // Resuelta por A y cerrada después: en el historial de A.
+      const closed = await dispatchedTo(officerA);
+      await advance(closed, ['EN_ROUTE', 'ON_SCENE', 'RESOLVED', 'CLOSED']);
+      // Devuelta a A y reasignada a B: historial de A, en curso para B.
+      const returned = await dispatchedTo(officerA);
+      await repository.updateStatus(returned, { newStatus: 'VALIDATED', actor: 'operador-1', reason: 'Reasignar' });
+      await repository.assignOfficer(returned, { officerId: officerB, actor: 'operador-1' });
+      // Resuelta por A (el dispatcher todavía no la cerró): historial de A.
+      const resolved = await dispatchedTo(officerA);
+      await advance(resolved, ['EN_ROUTE', 'ON_SCENE', 'RESOLVED']);
+      // Devuelta a A y reasignada a A otra vez: en curso, no en el historial.
+      const reassigned = await dispatchedTo(officerA);
+      await repository.updateStatus(reassigned, { newStatus: 'VALIDATED', actor: 'operador-1' });
+      await repository.assignOfficer(reassigned, { officerId: officerA, actor: 'operador-1' });
+
+      expect(await idsFor(officerA, 'active')).toEqual([reassigned]);
+      expect(await idsFor(officerA, 'history')).toEqual([closed, returned, resolved].sort());
+      expect(await idsFor(officerB, 'active')).toEqual([returned]);
+      expect(await idsFor(officerB, 'history')).toEqual([]);
+    });
+
+    it('V34 guarda el oficial en cada fila de asignación del historial', async () => {
+      const id = await dispatchedTo(officerB);
+
+      const { rows } = await getPool().query(
+        'SELECT new_status, officer_id FROM emergency_status_history WHERE emergency_id = $1 ORDER BY id',
+        [id]
+      );
+
+      expect(rows).toEqual([
+        { new_status: 'VALIDATED', officer_id: null },
+        { new_status: 'DISPATCHED', officer_id: officerB },
+      ]);
+    });
+  });
+
   it('findDetailById devuelve la emergencia con su historial de estados (tarea #32)', async () => {
     const input = buildEmergency({ emergencyType: 'medical' });
     await repository.create(input);

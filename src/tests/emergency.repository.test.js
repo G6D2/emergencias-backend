@@ -837,6 +837,54 @@ describe('EmergencyRepository.findPage', () => {
 
     await expect(repo.findPage(baseArgs)).rejects.toThrow('count caído');
   });
+
+  describe('officerScope (vista del oficial, issue #17)', () => {
+    function recordingRepo() {
+      const calls = [];
+      const pool = createPool({
+        query: async (sql, params) => {
+          calls.push({ sql, params });
+          if (sql.includes('AS total')) return { rows: [{ total: 0 }] };
+          return { rows: [] };
+        },
+      });
+      return { calls, repo: new EmergencyRepository(pool, { locationCrypto: fakeCrypto }) };
+    }
+
+    it('active: solo las suyas en DISPATCHED, EN_ROUTE u ON_SCENE, sin mirar el historial', async () => {
+      const { calls, repo } = recordingRepo();
+
+      await repo.findPage({ ...baseArgs, assignedOfficerId: 'of-1', officerScope: 'active' });
+
+      const count = calls.find(({ sql }) => sql.includes('AS total'));
+      expect(count.sql).toMatch(/e\.assigned_officer_id = \$1 AND e\.status = ANY\(\$2\)/);
+      expect(count.sql).not.toMatch(/emergency_status_history/);
+      expect(count.params).toEqual(['of-1', ['DISPATCHED', 'EN_ROUTE', 'ON_SCENE']]);
+    });
+
+    it('history: las suyas terminadas o las que le devolvieron (asignación en el historial)', async () => {
+      const { calls, repo } = recordingRepo();
+
+      await repo.findPage({
+        ...baseArgs, assignedOfficerId: 'of-1', officerScope: 'history', page: 2, limit: 10,
+      });
+
+      const select = calls.find(({ sql }) => !sql.includes('AS total'));
+      expect(select.sql).toMatch(/e\.assigned_officer_id = \$1 AND e\.status = ANY\(\$2\)/);
+      expect(select.sql).toMatch(/e\.assigned_officer_id IS DISTINCT FROM \$1 AND EXISTS/);
+      expect(select.sql).toMatch(/h\.emergency_id = e\.id AND h\.officer_id = \$1/);
+      expect(select.sql).toMatch(/LIMIT \$3 OFFSET \$4/);
+      expect(select.params).toEqual(['of-1', ['RESOLVED', 'CLOSED', 'CANCELLED'], 10, 10]);
+    });
+
+    it('sin assignedOfficerId no consulta: el scope siempre va atado a un oficial', async () => {
+      const { calls, repo } = recordingRepo();
+
+      await expect(repo.findPage({ ...baseArgs, officerScope: 'history' }))
+        .rejects.toThrow('officerScope requires assignedOfficerId');
+      expect(calls).toHaveLength(0);
+    });
+  });
 });
 
 describe('EmergencyRepository.findOutboxPage', () => {
@@ -1129,6 +1177,18 @@ describe('EmergencyRepository.assignOfficer', () => {
     expect(result.emergency.assignedOfficer).toBe('Ana');
     expect(client.calls.some((c) => c.sql.includes('INSERT INTO outbox_events'))).toBe(true);
     expect(client.calls.some((c) => c.sql === 'COMMIT')).toBe(true);
+  });
+
+  it('guarda el oficial en la fila del historial (officer_id), además del reason', async () => {
+    const client = createClient(baseHandler());
+    const pool = createPool({ client });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.assignOfficer('e-1', { officerId: 'o-1', actor: 'dispatcher-1' });
+
+    const insert = client.calls.find((c) => c.sql.includes('INSERT INTO emergency_status_history'));
+    expect(insert.sql).toMatch(/reason, officer_id\)/);
+    expect(insert.params).toEqual(['e-1', 'VALIDATED', 'dispatcher-1', 'Assigned officer o-1', 'o-1']);
   });
 });
 

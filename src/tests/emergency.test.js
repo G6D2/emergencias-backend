@@ -157,6 +157,73 @@ describe('GET /api/emergencies', () => {
     expect(res.body.data[0].id).toBe(mine);
     expect(res.body.data[0]).not.toHaveProperty('effectivePriority');
   });
+
+  describe('?scope=active|history (vista del oficial, issue #17)', () => {
+    // El filtro real vive en el repository (ver emergency.repository tests);
+    // acá se prueba qué le pide el controller y cómo arma la respuesta.
+    function repoReturning(rows) {
+      const repo = createMockEmergencyRepository();
+      repo.findPage = jest.fn(async () => ({ emergencies: rows, total: rows.length }));
+      return repo;
+    }
+
+    it('history: pide el scope con el oficial del token y marca las devueltas sin mostrar a quién quedaron', async () => {
+      const repo = repoReturning([
+        { id: 'e-own', status: 'CLOSED', assignedOfficerId: 'of-001', assignedOfficer: 'Ana', effectivePriority: 'high' },
+        { id: 'e-ret', status: 'DISPATCHED', assignedOfficerId: 'of-002', assignedOfficer: 'Beto' },
+      ]);
+
+      const res = await request(createTestApp(OFFICER_1, repo))
+        .get('/api/emergencies?scope=history&assignedOfficerId=of-002')
+        .expect(200);
+
+      expect(repo.findPage).toHaveBeenCalledWith(expect.objectContaining({
+        assignedOfficerId: OFFICER_1.sub,
+        officerScope: 'history',
+        statuses: [],
+      }));
+      expect(res.body.data).toEqual([
+        { id: 'e-own', status: 'CLOSED', assignedOfficerId: 'of-001', assignedOfficer: 'Ana', returned: false },
+        { id: 'e-ret', status: 'DISPATCHED', assignedOfficerId: null, assignedOfficer: null, returned: true },
+      ]);
+    });
+
+    it('active: pasa el scope al repository', async () => {
+      const repo = repoReturning([]);
+
+      await request(createTestApp(OFFICER_1, repo)).get('/api/emergencies?scope=active').expect(200);
+
+      expect(repo.findPage).toHaveBeenCalledWith(expect.objectContaining({
+        assignedOfficerId: OFFICER_1.sub,
+        officerScope: 'active',
+      }));
+    });
+
+    it('sin scope el oficial lista como antes (officerScope undefined)', async () => {
+      const repo = repoReturning([]);
+
+      await request(createTestApp(OFFICER_1, repo)).get('/api/emergencies?status=CLOSED').expect(200);
+
+      expect(repo.findPage).toHaveBeenCalledWith(expect.objectContaining({
+        officerScope: undefined,
+        statuses: ['CLOSED'],
+      }));
+    });
+
+    it.each([
+      ['un scope desconocido', OFFICER_1, 'scope=todas', 'scope must be one of: active, history'],
+      ['scope junto con status', OFFICER_1, 'scope=history&status=CLOSED', 'Use either scope or status, not both'],
+      ['un dispatcher', DISPATCHER, 'scope=history', 'scope is only available to officers'],
+      ['un citizen', CITIZEN_A, 'scope=active', 'scope is only available to officers'],
+    ])('400 con %s', async (_label, user, query, message) => {
+      const repo = repoReturning([]);
+
+      const res = await request(createTestApp(user, repo)).get(`/api/emergencies?${query}`).expect(400);
+
+      expect(res.body).toMatchObject({ error: 'ValidationError', message });
+      expect(repo.findPage).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

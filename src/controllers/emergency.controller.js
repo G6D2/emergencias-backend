@@ -8,7 +8,9 @@ const {
 const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
-const { assertTransition, isValidStatus, EMERGENCY_STATUSES } = require('../domain/emergency-status');
+const {
+  assertTransition, isValidStatus, EMERGENCY_STATUSES, OFFICER_SCOPES,
+} = require('../domain/emergency-status');
 const { buildEmergencyUpdatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { isValidSeverity, SEVERITY_LEVELS } = require('../domain/severity');
@@ -55,6 +57,31 @@ function withoutOperationalFields({ incident, effectivePriority, dispatchPriorit
   return rest;
 }
 
+// Lo que recibe el oficial: sin campos operativos y con `returned`, que marca
+// las que le devolvieron (scope=history). Esas ya no son suyas: no se muestra
+// a quién quedaron asignadas.
+function forOfficer(emergency, officerId) {
+  const view = withoutOperationalFields(emergency);
+  if (view.assignedOfficerId === officerId) return { ...view, returned: false };
+  return { ...view, returned: true, assignedOfficerId: null, assignedOfficer: null };
+}
+
+// scope=active|history (issue #17): solo para el oficial, y sin status,
+// porque el scope ya elige los estados (ver OFFICER_SCOPE_STATUSES).
+function parseOfficerScope(scope, { isOfficerOnly, statuses }) {
+  if (scope === undefined || scope === '') return undefined;
+  if (!OFFICER_SCOPES.includes(scope)) {
+    throw new ValidationError(`scope must be one of: ${OFFICER_SCOPES.join(', ')}`);
+  }
+  if (!isOfficerOnly) {
+    throw new ValidationError('scope is only available to officers');
+  }
+  if (statuses.length > 0) {
+    throw new ValidationError('Use either scope or status, not both');
+  }
+  return scope;
+}
+
 class EmergencyController {
   constructor(emergencyRepository) {
     this.emergencyRepository = emergencyRepository;
@@ -95,6 +122,7 @@ class EmergencyController {
     if (!statuses.every(isValidStatus)) {
       throw new ValidationError(`status must be a comma-separated list of: ${EMERGENCY_STATUSES.join(', ')}`);
     }
+    const officerScope = parseOfficerScope(query.scope, { isOfficerOnly, statuses });
     const from = parseDateFilter('from', query.from);
     const to = parseDateFilter('to', query.to);
     const sortBy = query.sortBy === 'priority' ? 'priority' : 'createdAt';
@@ -106,6 +134,7 @@ class EmergencyController {
       from,
       to,
       assignedOfficerId,
+      officerScope,
       // Acepta canónico o alias del front (medical → MEDICA); inválido → 400.
       // `type` se mantiene por compatibilidad con clientes existentes.
       emergencyType: assertEmergencyType(query.emergencyType || query.type),
@@ -115,7 +144,12 @@ class EmergencyController {
       order,
     });
 
-    const data = isDispatcher ? emergencies : emergencies.map(withoutOperationalFields);
+    let data = emergencies;
+    if (isOfficerOnly) {
+      data = emergencies.map((emergency) => forOfficer(emergency, user.sub));
+    } else if (!isDispatcher) {
+      data = emergencies.map(withoutOperationalFields);
+    }
 
     return {
       data,

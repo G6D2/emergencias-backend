@@ -44,6 +44,19 @@ const ACTIVE_STATUSES = Object.freeze(
   EMERGENCY_STATUSES.filter((status) => !TERMINAL_STATUSES.includes(status))
 );
 
+// Vista del oficial (GET /api/emergencies?scope=active|history, issue #17):
+// en curso es lo que todavía tiene que atender; en el historial quedan las
+// que resolvió, las que cerró el dispatcher y las que expiraron con él
+// asignado. Las que le devolvieron (DISPATCHED → VALIDATED) también van al
+// historial, pero no salen de un estado: el repository las busca por las
+// asignaciones del historial de estados.
+const OFFICER_SCOPE_STATUSES = Object.freeze({
+  active: Object.freeze(['DISPATCHED', 'EN_ROUTE', 'ON_SCENE']),
+  history: Object.freeze(['RESOLVED', 'CLOSED', 'CANCELLED']),
+});
+
+const OFFICER_SCOPES = Object.freeze(Object.keys(OFFICER_SCOPE_STATUSES));
+
 // Expiración (solo el sistema, nunca un endpoint): una emergencia abierta que
 // pasa el plazo de retención sin cambios de estado termina sola. Lo resuelto
 // se cierra; todo lo demás se cancela, incluso lo ya despachado, que por la
@@ -100,6 +113,8 @@ module.exports = {
   TRANSITIONS,
   TERMINAL_STATUSES,
   ACTIVE_STATUSES,
+  OFFICER_SCOPE_STATUSES,
+  OFFICER_SCOPES,
   EXPIRATION_TARGETS,
   expirationTarget,
   isValidStatus,

@@ -24,6 +24,8 @@ function createEmergenciesRoutes(emergencyRepository, authenticate) {
    *       que tiene asignadas (se fuerza `assignedOfficerId` = sub del JWT); citizen solo las propias
    *       (se fuerza el filtro por el sub del JWT). Officer y citizen las reciben sin `incident` ni
    *       `effectivePriority`.
+   *       El officer recibe además `returned`: true en las que el dispatcher le devolvió (solo salen
+   *       con `scope=history`), sin el oficial al que quedaron asignadas.
    *       Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
    *       Un filtro inválido responde 400 (no una lista vacía ni un 500).
    *     security:
@@ -36,6 +38,15 @@ function createEmergenciesRoutes(emergencyRepository, authenticate) {
    *         description: |
    *           Lista de statuses separados por coma (ej. PENDING,VALIDATED). Valores válidos:
    *           PENDING, VALIDATED, DISPATCHED, EN_ROUTE, ON_SCENE, RESOLVED, CLOSED, CANCELLED, DISCARDED.
+   *       - in: query
+   *         name: scope
+   *         schema:
+   *           type: string
+   *           enum: [active, history]
+   *         description: |
+   *           Solo officer, y no se combina con status (400). `active`: las suyas en DISPATCHED,
+   *           EN_ROUTE u ON_SCENE. `history`: las suyas en RESOLVED, CLOSED o CANCELLED, más las que
+   *           le devolvieron (aunque hoy estén con otro oficial).
    *       - in: query
    *         name: severity
    *         schema:
@@ -97,7 +108,8 @@ function createEmergenciesRoutes(emergencyRepository, authenticate) {
    *       400:
    *         description: |
    *           Filtro inválido: status desconocido, severity, priority o emergencyType fuera del catálogo,
-   *           o from/to que no son una fecha ISO 8601
+   *           from/to que no son una fecha ISO 8601, o scope desconocido, pedido por alguien que no es
+   *           officer o junto con status
    *         content:
    *           application/json:
    *             schema:
