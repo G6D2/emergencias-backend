@@ -44,6 +44,18 @@ listeners/
    (outbox e historial incluidos), nunca con SQL directo sobre `emergencies`.
    Los handlers se registran en `src/index.js`.
 
+`EmergenciaBicicleta` de Movilidad tiene un listener independiente de
+`EmergenciaSolicitada`: crea una emergencia médica por `data.emergenciaId`,
+deduplica además por la causa única `MOVILIDAD_BICICLETA`, y conserva ese ID
+externo como `correlationId`. Los campos personales de `data.usuario` y
+`actorSub` no se persisten.
+
+`ReservaCreada` de Espacios (`cobertura-preventiva/reserva-creada`) reusa el
+handler `ProgramarCobertura` con `causaTipo = RESERVA`: una reserva de espacio
+de 500 personas o más (`UMBRAL_PERSONAS_COBERTURA_RESERVA`) programa una
+`PREVENTIVA` por `reservaId`. Es opt-in: sin `EDA_TOPIC_RESERVA_CREADA` el
+consumer no se suscribe, porque un topic inexistente frenaría a todos.
+
 ## Errores
 
 `error-classifier.js` decide:
@@ -65,9 +77,10 @@ marca transitorios: si no consigue conexion, o si ni el `ROLLBACK` anda.
 
 ## Conexion al bus
 
-- `group.id`: `com.citypass.emergencias.<Listener>` por default
-  (`KAFKA_CONSUMER_GROUP_PREFIX` lo cambia, pero tiene que empezar con
-  `com.citypass.emergencias.`: el broker solo acepta ese prefijo).
+- `group.id`: `com.citypass.emergencias.eventos` por default, uno solo para
+  todos los listeners (`event-consumer.js`). `KAFKA_CONSUMER_GROUP_PREFIX`
+  cambia el prefijo, pero tiene que empezar con `com.citypass.emergencias.`:
+  el broker solo acepta ese prefijo.
 - SASL/OAUTHBEARER con el token client-credentials del Login Federado
   (`EDA_OAUTH_*`, ver `KafkaService`). Sin secreto se conecta sin SASL.
 - `KAFKA_SSL=true` en produccion (SASL_SSL).

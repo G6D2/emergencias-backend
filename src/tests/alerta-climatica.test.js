@@ -207,7 +207,6 @@ describe('listeners de alerta climática', () => {
     const outcomes = await listener.handle({ eventId: EVENT_ID, occurredAt: '2026-11-12T20:00:00Z', data: alerta() });
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0].payload.causationId).toBe(EVENT_ID);
-    expect(listener.groupId).toBe('com.citypass.emergencias.AlertaClimaticaConfirmadaListener');
   });
 });
 

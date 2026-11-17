@@ -99,32 +99,49 @@ class OutboxPublisher {
     }
   }
 
-  async markPublished(id, result = null) {
+  // markPublished, markSkipped y markFailed solo tocan la fila si sigue siendo
+  // de este reclamo: status PROCESSING y el mismo attempts que devolvió
+  // claimBatch. Cada reclamo incrementa attempts, así que si el lock venció
+  // (> 1 min) y otro proceso la volvió a reclamar, attempts ya no coincide y
+  // el UPDATE no hace nada. Sin esto, un proceso lento pisaba el PUBLISHED del
+  // otro con PENDING y el evento salía dos veces al bus.
+  // Devuelven true si actualizaron la fila.
+  warnLostClaim(id, attempts, action) {
+    secureLog('warn', 'Outbox: la fila ya no es de este reclamo, no se actualiza', {
+      id, attempts, action,
+    });
+  }
+
+  async markPublished(id, attempts, result = null) {
     // result opcional: GatewayPublisher devuelve { eventId, payloadHash } del
     // response 2xx del gateway. KafkaService devuelve true/false — no hay
     // eventId ni payloadHash y los campos quedan NULL (comportamiento previo).
     // Las columnas payload_hash y gateway_event_id vienen de la migracion V24.
     const payloadHash = result && result.payloadHash ? result.payloadHash : null;
     const gatewayEventId = result && result.eventId ? result.eventId : null;
-    await this.pool.query(
+    const { rowCount } = await this.pool.query(
       `UPDATE outbox_events
        SET status = 'PUBLISHED', published_at = now(), locked_at = NULL, last_error = NULL,
            payload_hash = COALESCE($2, payload_hash),
            gateway_event_id = COALESCE($3::uuid, gateway_event_id)
-       WHERE id = $1`,
-      [id, payloadHash, gatewayEventId]
+       WHERE id = $1 AND status = 'PROCESSING' AND attempts = $4`,
+      [id, payloadHash, gatewayEventId, attempts]
     );
+    if (rowCount === 0) this.warnLostClaim(id, attempts, 'PUBLISHED');
+    return rowCount > 0;
   }
 
   // Tipo que el publisher no saca al bus (EmergenciaPriorizada con el
   // gateway): queda SKIPPED y no se reintenta.
-  async markSkipped(id) {
-    await this.pool.query(
+  async markSkipped(id, attempts) {
+    const { rowCount } = await this.pool.query(
       `UPDATE outbox_events
        SET status = 'SKIPPED', locked_at = NULL, last_error = 'tipo fuera del contrato del bus'
-       WHERE id = $1`,
-      [id]
+       WHERE id = $1 AND status = 'PROCESSING' AND attempts = $2`,
+      [id, attempts]
     );
+    if (rowCount === 0) this.warnLostClaim(id, attempts, 'SKIPPED');
+    return rowCount > 0;
   }
 
   async markFailed(id, attempts, error) {
@@ -142,13 +159,15 @@ class OutboxPublisher {
     } else {
       backoffMs = Math.min(30_000 * (2 ** Math.max(attempts - 1, 0)), this.maxBackoffMs);
     }
-    await this.pool.query(
+    const { rowCount } = await this.pool.query(
       `UPDATE outbox_events
        SET status = $2, available_at = now() + ($3::double precision * interval '1 millisecond'),
            locked_at = NULL, last_error = $4
-       WHERE id = $1`,
-      [id, failed ? 'FAILED' : 'PENDING', backoffMs, String(error.message || error).slice(0, 2000)]
+       WHERE id = $1 AND status = 'PROCESSING' AND attempts = $5`,
+      [id, failed ? 'FAILED' : 'PENDING', backoffMs, String(error.message || error).slice(0, 2000), attempts]
     );
+    if (rowCount === 0) this.warnLostClaim(id, attempts, failed ? 'FAILED' : 'PENDING');
+    return rowCount > 0;
   }
 
   async purgePublished() {
@@ -186,13 +205,13 @@ class OutboxPublisher {
           const sent = await this.publisher.publishEvent(event.topic, event.payload);
           if (!sent) throw new Error('Publisher disabled or not connected');
           if (typeof sent === 'object' && sent.skipped) {
-            await this.markSkipped(event.id);
+            await this.markSkipped(event.id, event.attempts);
             continue;
           }
           // GatewayPublisher devuelve { eventId, payloadHash }; KafkaService
           // devuelve true. markPublished tolera ambos.
           const result = typeof sent === 'object' ? sent : null;
-          await this.markPublished(event.id, result);
+          await this.markPublished(event.id, event.attempts, result);
           published += 1;
         } catch (error) {
           await this.markFailed(event.id, event.attempts, error);

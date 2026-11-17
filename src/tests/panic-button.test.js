@@ -702,9 +702,28 @@ describe('Emergencies API', () => {
     expect(calls[0].userId).toBeUndefined();
   });
 
-  it('un usuario sin grupo citizen ni dispatcher recibe 403 al listar', async () => {
-    const otherApp = createTestApp({ sub: 'X1', groups: ['officer'] });
+  it('un usuario sin grupo citizen, dispatcher ni officer recibe 403 al listar', async () => {
+    const otherApp = createTestApp({ sub: 'X1', groups: ['auditor'] });
     await request(otherApp).get('/api/emergencies').expect(403);
+  });
+
+  it('un officer lista solo lo asignado a él (assignedOfficerId sale del sub)', async () => {
+    const calls = [];
+    const officerApp = createTestApp(
+      { sub: 'of-001', groups: ['officer'] },
+      {
+        ...createMockEmergencyRepository(),
+        findPage: async (filters) => {
+          calls.push(filters);
+          return { emergencies: [], total: 0 };
+        },
+      }
+    );
+
+    await request(officerApp).get('/api/emergencies?assignedOfficerId=of-002').expect(200);
+
+    expect(calls[0].assignedOfficerId).toBe('of-001');
+    expect(calls[0].userId).toBeUndefined();
   });
 
   it('rejects an invalid severity filter', async () => {
@@ -718,6 +737,35 @@ describe('Emergencies API', () => {
       .expect(400);
 
     expect(response.body.error).toBe('ValidationError');
+  });
+
+  it('rejects an invalid priority filter instead of returning an empty list', async () => {
+    const repository = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, repository);
+
+    for (const value of ['xyz', 'CRITICAL', 'critical&priority=low']) {
+      const response = await request(dispatcherApp)
+        .get(`/api/emergencies?priority=${value}`)
+        .expect(400);
+
+      expect(response.body.error).toBe('ValidationError');
+      expect(response.body.message).toBe('priority must be one of: low, medium, high, critical');
+    }
+    // También cuando severity viene bien: priority se valida por su cuenta.
+    await request(dispatcherApp).get('/api/emergencies?severity=high&priority=xyz').expect(400);
+
+    expect(repository.findPageCalls).toHaveLength(0);
+  });
+
+  it('a valid priority filter reaches the repository as severity; empty means no filter', async () => {
+    const repository = createMockEmergencyRepository();
+    const dispatcherApp = createTestApp({ sub: 'U000999', groups: ['dispatcher'] }, repository);
+
+    await request(dispatcherApp).get('/api/emergencies?priority=high').expect(200);
+    await request(dispatcherApp).get('/api/emergencies?priority=').expect(200);
+    await request(dispatcherApp).get('/api/emergencies?severity=low&priority=high').expect(200);
+
+    expect(repository.findPageCalls.map((filters) => filters.severity)).toEqual(['high', '', 'low']);
   });
 
   it('allows a dispatcher to inspect outbox status without exposing payload', async () => {

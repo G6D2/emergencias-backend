@@ -2,7 +2,6 @@ const {
   SEVERITY_LEVELS,
   compareSeverity,
   isValidSeverity,
-  normalizeSeverity,
   severityForType,
   SEVERITY_BY_TYPE,
   effectivePriority,
@@ -16,11 +15,9 @@ describe('severity domain', () => {
     expect(compareSeverity('medium', 'high')).toBeLessThan(0);
   });
 
-  it('validates and defaults severity', () => {
+  it('validates severity', () => {
     expect(isValidSeverity('high')).toBe(true);
     expect(isValidSeverity('urgent-now')).toBe(false);
-    expect(normalizeSeverity(undefined)).toBe('critical');
-    expect(normalizeSeverity('urgent-now')).toBeNull();
   });
 });
 

@@ -2,7 +2,6 @@ const {
   EMERGENCY_TYPES,
   EMERGENCY_TYPE_ALIASES,
   normalizeEmergencyType,
-  isValidEmergencyType,
   assertEmergencyType,
 } = require('../domain/emergency-type');
 
@@ -73,15 +72,6 @@ describe('emergency-type domain', () => {
       expect(normalizeEmergencyType(42)).toBeNull();
       expect(normalizeEmergencyType({ type: 'fire' })).toBeNull();
       expect(normalizeEmergencyType(['fire'])).toBeNull();
-    });
-  });
-
-  describe('isValidEmergencyType', () => {
-    it('es true para canónicos y alias, false para el resto', () => {
-      expect(isValidEmergencyType('INCENDIO')).toBe(true);
-      expect(isValidEmergencyType('fire')).toBe(true);
-      expect(isValidEmergencyType('flood')).toBe(false);
-      expect(isValidEmergencyType(null)).toBe(false);
     });
   });
 

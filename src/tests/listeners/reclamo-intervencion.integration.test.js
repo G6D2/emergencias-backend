@@ -3,6 +3,10 @@
 // externa TRANSITO con causa RECLAMO, y un ReclamoActualizado en estado final
 // la cancela si todavía no fue despachada.
 //
+// Es el camino directo (plan B del caso): corre con el disparador en `ambos`.
+// El camino de diseño, por la EmergenciaSolicitada de Movilidad, está en
+// emergencia-solicitada.integration.test.js.
+//
 // Kafka no corre: se llama a EventListener.onMessage() con el mensaje
 // serializado. Postgres es real (levantado por global-setup.js).
 
@@ -98,7 +102,7 @@ beforeAll(() => {
   const factory = new OutcomeFactory(pool, { dedupRepo: new EventosProcesadosRepository(pool) });
   factory.register(CREAR_INTERVENCION, createCrearIntervencionHandler({ emergencyRepository, topic: CREATED_TOPIC }));
   factory.register(CERRAR_INTERVENCION, createCerrarIntervencionHandler({ emergencyRepository, topic: UPDATED_TOPIC }));
-  creado = new ReclamoCreadoListener(fakeKafka(), { factory });
+  creado = new ReclamoCreadoListener(fakeKafka(), { factory, disparador: 'ambos' });
   actualizado = new ReclamoActualizadoListener(fakeKafka(), { factory });
 });
 

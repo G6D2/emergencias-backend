@@ -7,9 +7,9 @@ const {
   createPanicButtonIpRateLimiter,
 } = require('../security/rate-limit');
 
-function createPanicButtonRoutes(kafkaService, emergencyRepository, authenticate) {
+function createPanicButtonRoutes(emergencyRepository, authenticate) {
   const router = express.Router();
-  const controller = new PanicButtonController(kafkaService, emergencyRepository);
+  const controller = new PanicButtonController(emergencyRepository);
 
   /**
    * @openapi

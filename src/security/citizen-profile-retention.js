@@ -1,4 +1,5 @@
 const { secureLog } = require('./secure-log');
+const { schedulePeriodicJob } = require('../utils/periodic-job');
 
 /**
  * Job de minimización PII del perfil ciudadano:
@@ -53,24 +54,8 @@ function startCitizenProfileRetentionJob(citizenProfileRepository, options = {})
     }
   }
 
-  const initialTimeout = setTimeout(() => {
-    runOnce();
-  }, Math.min(intervalMs, 20_000));
-
-  const timer = setInterval(() => {
-    runOnce();
-  }, intervalMs);
-
-  if (typeof timer.unref === 'function') timer.unref();
-  if (typeof initialTimeout.unref === 'function') initialTimeout.unref();
-
-  return {
-    runOnce,
-    stop() {
-      clearTimeout(initialTimeout);
-      clearInterval(timer);
-    },
-  };
+  // Primera pasada diferida para no bloquear el boot.
+  return schedulePeriodicJob(runOnce, { intervalMs, firstRunDelayMs: 20_000 });
 }
 
 module.exports = { startCitizenProfileRetentionJob };

@@ -28,11 +28,6 @@ class OfficerRepository {
     const result = await this.pool.query(sql, values);
     return result.rows.map(mapOfficer);
   }
-
-  async findById(id) {
-    const result = await this.pool.query('SELECT * FROM officers WHERE id = $1', [id]);
-    return mapOfficer(result.rows[0]);
-  }
 }
 
 module.exports = { OfficerRepository, mapOfficer };

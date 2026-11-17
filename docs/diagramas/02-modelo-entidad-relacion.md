@@ -1,7 +1,7 @@
 # Modelo entidad-relación
 
-Para qué sirve: mostrar el schema real de Postgres tal como queda después de aplicar las
-migraciones Flyway hasta **V26** (`db/migrations/`; producción está en V24; la V25 queda reservada para el barrio), con tipos, PK/FK y
+Para qué sirve: mostrar el schema de Postgres tal como queda después de aplicar las
+migraciones Flyway hasta **V32** (`db/migrations/`), con tipos, PK/FK y
 los `CHECK` que importan para entender las reglas de negocio. Las versiones V17 a V20 no
 existen en el repo: la numeración salta de V16 a V21.
 
@@ -15,7 +15,7 @@ erDiagram
 
     EMERGENCIES {
         uuid id PK
-        uuid correlation_id "trazabilidad de eventos, = id si no viene (V9)"
+        text correlation_id "correlación externa o = id si no viene (V9 + V32)"
         text user_id "sub del JWT, sin FK. NULL solo si source=EXTERNAL (V23)"
         double latitude "NULL desde V3 (viaja cifrado)"
         double longitude "NULL desde V3 (viaja cifrado)"
@@ -31,7 +31,7 @@ erDiagram
         timestamptz closed_at "en CLOSED, CANCELLED y DISCARDED (V13 + V26)"
         text source "CHECK INTERNAL|EXTERNAL, default INTERNAL (V23)"
         boolean requires_manual_validation "default false; true si la externa llego sin ubicacion (V23)"
-        text causa_tipo "CHECK EVENTO_CLIMATICO|RECLAMO|INCIDENTE_VIAL|EVENTO_PUBLICO|RESERVA (V23)"
+        text causa_tipo "CHECK incluye MOVILIDAD_BICICLETA (V23 + V32)"
         text causa_id "id en el modulo de origen; va junto con causa_tipo (V23)"
         timestamptz created_at
         timestamptz updated_at

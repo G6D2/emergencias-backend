@@ -1,4 +1,5 @@
 const { secureLog } = require('./secure-log');
+const { schedulePeriodicJob } = require('../utils/periodic-job');
 
 /**
  * Job de retención: anonimiza ubicaciones cifradas después de N horas.
@@ -41,24 +42,7 @@ function startLocationRetentionJob(emergencyRepository, options = {}) {
   }
 
   // Primera pasada diferida para no bloquear el boot.
-  const initialTimeout = setTimeout(() => {
-    runOnce();
-  }, Math.min(intervalMs, 15_000));
-
-  const timer = setInterval(() => {
-    runOnce();
-  }, intervalMs);
-
-  if (typeof timer.unref === 'function') timer.unref();
-  if (typeof initialTimeout.unref === 'function') initialTimeout.unref();
-
-  return {
-    runOnce,
-    stop() {
-      clearTimeout(initialTimeout);
-      clearInterval(timer);
-    },
-  };
+  return schedulePeriodicJob(runOnce, { intervalMs });
 }
 
 module.exports = { startLocationRetentionJob };

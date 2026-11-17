@@ -290,13 +290,6 @@ describe('EmergencyRepository lecturas', () => {
     expect(await repo.findById('missing')).toBeNull();
   });
 
-  it('findAll mapea todas las filas', async () => {
-    const pool = createPool({ query: async () => ({ rows: [{ id: 'e-1' }, { id: 'e-2' }] }) });
-    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
-    const all = await repo.findAll();
-    expect(all.map((e) => e.id)).toEqual(['e-1', 'e-2']);
-  });
-
   it('findHistoryByEmergencyId mapea el historial', async () => {
     const pool = createPool({
       query: async () => ({ rows: [{ id: 1, emergency_id: 'e-1', previous_status: 'PENDING', new_status: 'VALIDATED' }] }),
@@ -460,13 +453,6 @@ describe('EmergencyRepository lecturas', () => {
     const audit = await repo.recordAccess({ emergencyId: 'e-1', actorSub: 'sub-1', action: 'view' });
     expect(audit.actorSub).toBe('sub-1');
   });
-
-  it('findAccessAuditByEmergencyId mapea filas', async () => {
-    const pool = createPool({ query: async () => ({ rows: [{ id: 1, emergency_id: 'e-1', actor_sub: 's', action: 'view' }] }) });
-    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
-    const audits = await repo.findAccessAuditByEmergencyId('e-1');
-    expect(audits).toHaveLength(1);
-  });
 });
 
 describe('EmergencyRepository.backfillBarrios', () => {
@@ -616,6 +602,41 @@ describe('EmergencyRepository.anonymizeExpiredLocations', () => {
   });
 });
 
+describe('EmergencyRepository.scrubOutboxBusCoordinates', () => {
+  it('sin ids no consulta la base', async () => {
+    const pool = createPool();
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    await expect(repo.scrubOutboxBusCoordinates([])).resolves.toEqual({ scrubbedCount: 0 });
+    await expect(repo.scrubOutboxBusCoordinates(null)).resolves.toEqual({ scrubbedCount: 0 });
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  // El efecto sobre el JSON se prueba contra Postgres real en
+  // emergency.repository.integration.test.js; acá, la forma de la consulta.
+  it('limpia las coordenadas cifradas de ubicacion y las aproximadas en claro de la raíz', async () => {
+    const pool = createPool({ query: async () => ({ rowCount: 3, rows: [] }) });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await expect(repo.scrubOutboxBusCoordinates(['e-1', 'e-2'])).resolves.toEqual({ scrubbedCount: 3 });
+
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(params).toEqual([['e-1', 'e-2']]);
+    expect(sql).toMatch(/UPDATE outbox_events/);
+    expect(sql).toContain("'{data,ubicacion,latitud}', 'null'::jsonb, true");
+    expect(sql).toContain("'{data,ubicacion,longitud}', 'null'::jsonb, true");
+    // Raíz con create_missing = false: no agrega las claves a payloads viejos.
+    expect(sql).toContain("'{data,latitud}', 'null'::jsonb, false");
+    expect(sql).toContain("'{data,longitud}', 'null'::jsonb, false");
+    // Solo filas de esas emergencias que tengan algo para limpiar.
+    expect(sql).toContain("payload->'data'->>'emergenciaId' = ANY($1::text[])");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,ubicacion,latitud}') = 'string'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,ubicacion,longitud}') = 'string'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,latitud}') = 'number'");
+    expect(sql).toContain("jsonb_typeof(payload#>'{data,longitud}') = 'number'");
+  });
+});
+
 describe('EmergencyRepository.anonymizeUndecryptableLocations', () => {
   it('devuelve vacío si no hay candidatos indescifrables', async () => {
     const crypto = { decryptLocation: () => ({ latitude: 1, longitude: 1 }) };
@@ -740,6 +761,87 @@ describe('EmergencyRepository.findPage', () => {
 
     expect(calls[0].sql).not.toMatch(/WHERE/);
     expect(calls[1].sql).toMatch(/DESC/);
+  });
+
+  it('lanza el COUNT y la página en paralelo, sin esperar una para pedir la otra', async () => {
+    const pending = [];
+    const pool = createPool({
+      query: (sql) => new Promise((resolve) => {
+        pending.push({ sql, resolve });
+      }),
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const page = repo.findPage(baseArgs);
+    // Ninguna respondió todavía y las dos ya están pedidas.
+    expect(pool.query).toHaveBeenCalledTimes(2);
+
+    // Responden en el orden inverso al que se pidieron: el resultado no cambia.
+    const select = pending.find(({ sql }) => !sql.includes('AS total'));
+    const count = pending.find(({ sql }) => sql.includes('AS total'));
+    select.resolve({ rows: [{ id: 'e-1' }] });
+    count.resolve({ rows: [{ total: 7 }] });
+
+    const result = await page;
+    expect(result.total).toBe(7);
+    expect(result.emergencies.map((emergency) => emergency.id)).toEqual(['e-1']);
+    expect(Object.keys(result)).toEqual(['emergencies', 'total']);
+  });
+
+  it('el COUNT recibe solo los filtros; limit y offset van únicamente a la página', async () => {
+    const calls = [];
+    const pool = createPool({
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        if (sql.includes('AS total')) return { rows: [{ total: 45 }] };
+        return { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.findPage({ ...baseArgs, userId: 'u-1', severity: 'high', page: 3, limit: 20 });
+
+    const count = calls.find(({ sql }) => sql.includes('AS total'));
+    const select = calls.find(({ sql }) => !sql.includes('AS total'));
+    expect(count.params).toEqual(['u-1', 'high']);
+    expect(select.params).toEqual(['u-1', 'high', 20, 40]);
+    // Arreglos distintos: en paralelo, compartirlo le mandaría al COUNT dos
+    // parámetros que su SQL no usa.
+    expect(select.params).not.toBe(count.params);
+    expect(select.sql).toMatch(/LIMIT \$3 OFFSET \$4/);
+    expect(count.sql).not.toMatch(/LIMIT|OFFSET|ORDER BY/);
+  });
+
+  it.each([
+    ['createdAt', 'desc', /ORDER BY e\.created_at DESC, e\.created_at ASC, e\.id ASC\s+LIMIT/],
+    ['createdAt', 'asc', /ORDER BY e\.created_at ASC, e\.created_at ASC, e\.id ASC\s+LIMIT/],
+    ['priority', 'desc', /ORDER BY LEAST\(.*\) DESC, e\.created_at ASC, e\.id ASC\s+LIMIT/],
+  ])('sortBy=%s order=%s: e.id es el último criterio del ORDER BY (desempate)', async (sortBy, order, expected) => {
+    const calls = [];
+    const pool = createPool({
+      query: async (sql, params) => {
+        calls.push({ sql, params });
+        if (sql.includes('AS total')) return { rows: [{ total: 0 }] };
+        return { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.findPage({ ...baseArgs, sortBy, order });
+
+    expect(calls.find(({ sql }) => !sql.includes('AS total')).sql).toMatch(expected);
+  });
+
+  it('si una de las dos consultas falla, propaga ese error', async () => {
+    const pool = createPool({
+      query: async (sql) => {
+        if (sql.includes('AS total')) throw new Error('count caído');
+        return { rows: [] };
+      },
+    });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await expect(repo.findPage(baseArgs)).rejects.toThrow('count caído');
   });
 });
 
@@ -1231,5 +1333,212 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0].id).toBe('e4');
+  });
+});
+
+describe('EmergencyRepository.expireStaleEmergencies', () => {
+  const ROW = {
+    id: 'e-1', status: 'PENDING', latitude: null, longitude: null, location_encrypted: 'blob',
+    barrio: null, location_anonymized_at: null,
+  };
+
+  // Simula lo que ve cada transacción: la fila tomada con SKIP LOCKED y, a
+  // partir de ahí, las queries de anonimizar y de applyStatusUpdate.
+  function txClient(row, { assignedOfficerId = null, failOn = null } = {}) {
+    return createClient(async (sql, params) => {
+      if (failOn && sql.includes(failOn)) throw new Error('boom');
+      if (sql.includes('FOR UPDATE OF e SKIP LOCKED')) return { rows: row ? [row] : [] };
+      if (sql.includes('SET location_encrypted = NULL')) return { rowCount: 1, rows: [{ id: params[0] }] };
+      if (sql.startsWith('SELECT status, assigned_officer_id')) {
+        return { rows: [{ status: row.status, assigned_officer_id: assignedOfficerId }] };
+      }
+      if (sql.includes('UPDATE emergencies') && sql.includes('SET status = $1')) {
+        return { rows: [{ id: row.id, status: params[0], barrio: 'PALERMO', location_anonymized_at: '2026-11-12' }] };
+      }
+      if (sql.includes('INSERT INTO emergency_status_history')) {
+        return { rows: [{ id: 1, emergency_id: params[0], previous_status: params[1], new_status: params[2], actor: params[3], reason: params[4] }] };
+      }
+      return { rowCount: 1, rows: [] };
+    });
+  }
+
+  function poolFor(candidateIds, clients) {
+    const queue = [...clients];
+    const queries = [];
+    const pool = {
+      queries,
+      query: jest.fn(async (sql, params) => {
+        queries.push({ sql, params });
+        if (sql.includes('FROM emergencies e') && sql.includes('LIMIT $3')) {
+          return { rows: candidateIds.map((id) => ({ id })) };
+        }
+        return { rowCount: 1, rows: [] };
+      }),
+      connect: jest.fn(async () => queue.shift()),
+    };
+    return pool;
+  }
+
+  it('rechaza un plazo no positivo', async () => {
+    const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+    await expect(repo.expireStaleEmergencies(0)).rejects.toThrow('hours must be a positive number');
+    await expect(repo.expireStaleEmergencies('nope')).rejects.toThrow('hours must be a positive number');
+  });
+
+  it('sin candidatas no abre transacciones', async () => {
+    const pool = poolFor([], []);
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await expect(repo.expireStaleEmergencies(72)).resolves.toEqual({ expiredCount: 0, failedCount: 0, expired: [] });
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it('busca solo emergencias abiertas, por último cambio de estado y con tope', async () => {
+    const pool = poolFor([], []);
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    await repo.expireStaleEmergencies(48, { limit: 10 });
+
+    const { sql, params } = pool.queries[0];
+    expect(sql).toMatch(/emergency_status_history/);
+    expect(sql).toMatch(/GREATEST\(/);
+    expect(sql).not.toMatch(/updated_at/);
+    expect(params[0]).toBe(48);
+    expect(params[1]).toEqual(['PENDING', 'VALIDATED', 'DISPATCHED', 'EN_ROUTE', 'ON_SCENE', 'RESOLVED']);
+    expect(params[2]).toBe(10);
+  });
+
+  it('anonimiza y cancela una PENDING en una transacción, con historial y evento, y limpia el outbox', async () => {
+    const client = txClient(ROW);
+    const pool = poolFor(['e-1'], [client]);
+    const decryptLocation = jest.fn(() => ({ latitude: -34.5735, longitude: -58.4233 }));
+    const repo = new EmergencyRepository(pool, { locationCrypto: { ...fakeCrypto, decryptLocation } });
+    const payload = jest.fn(() => ({ type: 'EmergenciaActualizada' }));
+
+    const result = await repo.expireStaleEmergencies(72, {
+      actor: 'sistema:expiracion', reason: 'Expirada', outboxEvent: { topic: 't', payload },
+    });
+
+    expect(result).toEqual({
+      expiredCount: 1, failedCount: 0, expired: [{ id: 'e-1', previousStatus: 'PENDING', newStatus: 'CANCELLED' }],
+    });
+    const sqls = client.calls.map((c) => c.sql);
+    expect(sqls[0]).toBe('BEGIN');
+    expect(sqls.at(-1)).toBe('COMMIT');
+    const order = (fragment) => sqls.findIndex((sql) => sql.includes(fragment));
+    // Primero se borra la ubicación y después cambia el estado: el evento sale sin coordenadas.
+    expect(order('SET location_encrypted = NULL')).toBeLessThan(order('SET status = $1'));
+    expect(client.calls[order('SET location_encrypted = NULL')].params).toEqual(['e-1', 'PALERMO']);
+    const update = client.calls[order('SET status = $1')];
+    expect(update.params[0]).toBe('CANCELLED');
+    expect(update.params[2]).toBe(true);
+    const history = client.calls[order('INSERT INTO emergency_status_history')];
+    expect(history.params).toEqual(['e-1', 'PENDING', 'CANCELLED', 'sistema:expiracion', 'Expirada']);
+    expect(payload).toHaveBeenCalledTimes(1);
+    expect(payload.mock.calls[0][0].emergency).toMatchObject({ status: 'CANCELLED', latitude: null, locationAnonymized: true });
+    expect(client.release).toHaveBeenCalled();
+    expect(pool.queries.some((q) => q.sql.includes('DELETE FROM emergencia_contexto_zona'))).toBe(true);
+    const scrub = pool.queries.find((q) => q.sql.includes('UPDATE outbox_events'));
+    expect(scrub.params[0]).toEqual(['e-1']);
+  });
+
+  it('una RESOLVED se cierra y una despachada se cancela liberando al oficial', async () => {
+    const resolved = txClient({ ...ROW, id: 'e-res', status: 'RESOLVED' }, { assignedOfficerId: 'of-001' });
+    const dispatched = txClient({ ...ROW, id: 'e-dis', status: 'EN_ROUTE' }, { assignedOfficerId: 'of-002' });
+    const pool = poolFor(['e-res', 'e-dis'], [resolved, dispatched]);
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const result = await repo.expireStaleEmergencies(72);
+
+    expect(result.expired).toEqual([
+      { id: 'e-res', previousStatus: 'RESOLVED', newStatus: 'CLOSED' },
+      { id: 'e-dis', previousStatus: 'EN_ROUTE', newStatus: 'CANCELLED' },
+    ]);
+    for (const [client, officer] of [[resolved, 'of-001'], [dispatched, 'of-002']]) {
+      const release = client.calls.find((c) => c.sql.includes("UPDATE officers SET status = 'disponible'"));
+      expect(release.params).toEqual([officer]);
+    }
+  });
+
+  it('sin ubicación (o ya anonimizada) cambia el estado y no toca el outbox', async () => {
+    const sinUbicacion = txClient({ ...ROW, id: 'e-a', location_encrypted: null });
+    const yaAnonimizada = txClient({ ...ROW, id: 'e-b', location_anonymized_at: '2026-11-01' });
+    const pool = poolFor(['e-a', 'e-b'], [sinUbicacion, yaAnonimizada]);
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    const result = await repo.expireStaleEmergencies(72);
+
+    expect(result.expiredCount).toBe(2);
+    for (const client of [sinUbicacion, yaAnonimizada]) {
+      expect(client.calls.some((c) => c.sql.includes('SET location_encrypted = NULL'))).toBe(false);
+    }
+    expect(pool.queries.some((q) => q.sql.includes('UPDATE outbox_events'))).toBe(false);
+  });
+
+  it('si otra transacción ya la cambió o la tiene tomada, la saltea', async () => {
+    const client = txClient(null);
+    const pool = poolFor(['e-1'], [client]);
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await expect(repo.expireStaleEmergencies(72)).resolves.toEqual({ expiredCount: 0, failedCount: 0, expired: [] });
+    expect(client.calls.map((c) => c.sql).at(-1)).toBe('ROLLBACK');
+    expect(client.release).toHaveBeenCalled();
+  });
+
+  it('una que falla hace ROLLBACK, se cuenta y no frena a la siguiente', async () => {
+    const broken = txClient(ROW, { failOn: 'INSERT INTO emergency_status_history' });
+    const fine = txClient({ ...ROW, id: 'e-2' });
+    const pool = poolFor(['e-1', 'e-2'], [broken, fine]);
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await repo.expireStaleEmergencies(72);
+    errorSpy.mockRestore();
+
+    expect(result).toEqual({
+      expiredCount: 1, failedCount: 1, expired: [{ id: 'e-2', previousStatus: 'PENDING', newStatus: 'CANCELLED' }],
+    });
+    expect(broken.calls.map((c) => c.sql).at(-1)).toBe('ROLLBACK');
+    expect(broken.release).toHaveBeenCalled();
+    // La que se revirtió no se cuenta como anonimizada.
+    expect(pool.queries.find((q) => q.sql.includes('UPDATE outbox_events')).params[0]).toEqual(['e-2']);
+  });
+});
+
+describe('EmergencyRepository.updateStatus con expiration', () => {
+  function clientIn(status) {
+    return createClient(async (sql, params) => {
+      if (sql.startsWith('SELECT status, assigned_officer_id')) return { rows: [{ status, assigned_officer_id: null }] };
+      if (sql.includes('UPDATE emergencies')) return { rows: [{ id: 'e-1', status: params[0] }] };
+      if (sql.includes('INSERT INTO emergency_status_history')) return { rows: [{ id: 1, new_status: params[2] }] };
+      return { rows: [] };
+    });
+  }
+
+  it('permite la transición del sistema que los endpoints no tienen (despachada → cancelada)', async () => {
+    const client = clientIn('DISPATCHED');
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    const result = await repo.updateStatus('e-1', { newStatus: 'CANCELLED', expiration: true });
+
+    expect(result.emergency.status).toBe('CANCELLED');
+    expect(client.calls.map((c) => c.sql).at(-1)).toBe('COMMIT');
+  });
+
+  it('sin expiration esa transición sigue rechazada', async () => {
+    const client = clientIn('DISPATCHED');
+    const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
+
+    await expect(repo.updateStatus('e-1', { newStatus: 'CANCELLED' })).rejects.toThrow(ConflictError);
+  });
+
+  it('con expiration solo acepta el estado terminal que le corresponde', async () => {
+    const repo = (status) => new EmergencyRepository(createPool({ client: clientIn(status) }), { locationCrypto: fakeCrypto });
+
+    await expect(repo('RESOLVED').updateStatus('e-1', { newStatus: 'CANCELLED', expiration: true }))
+      .rejects.toThrow('cannot expire to CANCELLED');
+    await expect(repo('CLOSED').updateStatus('e-1', { newStatus: 'CANCELLED', expiration: true }))
+      .rejects.toThrow(ConflictError);
+    await expect(repo('PENDING').updateStatus('e-1', { newStatus: 'VALIDATED', expiration: true }))
+      .rejects.toThrow(ConflictError);
   });
 });

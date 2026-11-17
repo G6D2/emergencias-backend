@@ -84,10 +84,6 @@ describe('EventListener', () => {
     expect(() => new EventListener(buildKafka().kafka, { topic: 't' })).toThrow(/abstracto/);
   });
 
-  it('requiere una instancia de Kafka', () => {
-    expect(() => new TestListener(null, { topic: 't' })).toThrow(/Kafka/);
-  });
-
   it('una subclase sin rulesDir ni rules() falla al evaluar un evento', async () => {
     class SinRules extends EventListener {}
     const listener = new SinRules(buildKafka().kafka, { topic: 't' });
@@ -107,79 +103,10 @@ describe('EventListener', () => {
     expect(listener.rules()).toBe(listener.rules());
   });
 
-  it('start falla sin conectar si una regla de rulesDir es invalida', async () => {
-    const path = require('path');
-    class Rota extends EventListener {}
-    const { kafka } = buildKafka();
-    const listener = new Rota(kafka, { topic: 't', rulesDir: path.join(__dirname, 'fixtures', 'rules-invalidas') });
+  it('onMessage parsea el JSON y delega en handle', async () => {
+    const listener = new TestListener(buildKafka().kafka, { topic: 't' });
 
-    await expect(listener.start()).rejects.toThrow(/BusinessRule/);
-    expect(kafka.consumer).not.toHaveBeenCalled();
-  });
-
-  it('usa un groupId por listener con el prefijo del namespace por default', () => {
-    expect(new TestListener(buildKafka().kafka, { topic: 't' }).groupId)
-      .toBe('com.citypass.emergencias.TestListener');
-    expect(new TestListener(buildKafka().kafka, { topic: 't', groupId: 'com.citypass.emergencias.g' }).groupId)
-      .toBe('com.citypass.emergencias.g');
-  });
-
-  it('el prefijo del groupId se puede cambiar por env, pero tiene que empezar con el namespace', () => {
-    process.env.KAFKA_CONSUMER_GROUP_PREFIX = 'com.citypass.emergencias.staging';
-    try {
-      expect(new TestListener(buildKafka().kafka, { topic: 't' }).groupId)
-        .toBe('com.citypass.emergencias.staging.TestListener');
-      process.env.KAFKA_CONSUMER_GROUP_PREFIX = 'emergencias-backend';
-      expect(() => new TestListener(buildKafka().kafka, { topic: 't' })).toThrow(/tiene que empezar con com\.citypass\.emergencias\./);
-    } finally {
-      delete process.env.KAFKA_CONSUMER_GROUP_PREFIX;
-    }
-    expect(() => new TestListener(buildKafka().kafka, { topic: 't', groupId: 'g' })).toThrow(/group\.id/);
-  });
-
-  it('start conecta, se suscribe al topic y corre el consumer', async () => {
-    const { kafka, consumer } = buildKafka();
-    const listener = new TestListener(kafka, { topic: 'espacios.evento' });
-
-    await expect(listener.start()).resolves.toBe(true);
-
-    expect(kafka.consumer).toHaveBeenCalledWith({ groupId: 'com.citypass.emergencias.TestListener' });
-    expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 'espacios.evento', fromBeginning: true });
-    expect(consumer.run).toHaveBeenCalledTimes(1);
-  });
-
-  it('start es idempotente', async () => {
-    const { kafka } = buildKafka();
-    const listener = new TestListener(kafka, { topic: 't' });
-    await listener.start();
-    await expect(listener.start()).resolves.toBe(true);
-    expect(kafka.consumer).toHaveBeenCalledTimes(1);
-  });
-
-  it('start sin topic no crea consumer', async () => {
-    const { kafka } = buildKafka();
-    const listener = new TestListener(kafka, {});
-    await expect(listener.start()).resolves.toBe(false);
-    expect(kafka.consumer).not.toHaveBeenCalled();
-  });
-
-  it('start desconecta y relanza si el consumer falla', async () => {
-    const { kafka, consumer } = buildKafka();
-    consumer.connect.mockRejectedValue(new Error('no broker'));
-    const listener = new TestListener(kafka, { topic: 't' });
-
-    await expect(listener.start()).rejects.toThrow('no broker');
-    expect(consumer.disconnect).toHaveBeenCalled();
-    expect(listener.consumer).toBeNull();
-  });
-
-  it('eachMessage parsea el JSON y delega en handle', async () => {
-    const { kafka, consumer } = buildKafka();
-    const listener = new TestListener(kafka, { topic: 't' });
-    await listener.start();
-
-    const { eachMessage } = consumer.run.mock.calls[0][0];
-    await eachMessage({ topic: 't', message: toMessage({ metadata: { eventId: 'e1' } }) });
+    await listener.onMessage(toMessage({ metadata: { eventId: 'e1' } }));
 
     expect(listener.handled).toEqual([{ metadata: { eventId: 'e1' } }]);
   });
@@ -255,68 +182,6 @@ describe('EventListener', () => {
     await expect(otro.onMessage({ value: Buffer.from([0]) })).resolves.toBeNull();
     expect(otro.handled).toHaveLength(0);
   });
-
-  it('stop desconecta el consumer y es seguro sin start', async () => {
-    const { kafka, consumer } = buildKafka();
-    const listener = new TestListener(kafka, { topic: 't' });
-    await expect(listener.stop()).resolves.toBeUndefined();
-
-    await listener.start();
-    await listener.stop();
-    expect(consumer.disconnect).toHaveBeenCalledTimes(1);
-    expect(listener.consumer).toBeNull();
-    expect(listener.status().running).toBe(false);
-  });
-
-  describe('estado para /health', () => {
-    it('status(): no corre antes de start, corre después y cada fetch marca lastPollAt', async () => {
-      const { kafka, consumer } = buildKafka();
-      const listener = new TestListener(kafka, { topic: 't' });
-      expect(listener.status()).toEqual({ name: 'TestListener', running: false, lastPollAt: null });
-
-      await listener.start();
-      expect(listener.status().running).toBe(true);
-      expect(listener.status().lastPollAt).toBeNull();
-
-      consumer.emit(consumer.events.FETCH_START, {});
-      expect(Date.parse(listener.status().lastPollAt)).not.toBeNaN();
-    });
-
-    it('si start falla, no queda marcado como corriendo', async () => {
-      const { kafka, consumer } = buildKafka();
-      consumer.connect.mockRejectedValue(new Error('no broker'));
-      const listener = new TestListener(kafka, { topic: 't' });
-
-      await expect(listener.start()).rejects.toThrow('no broker');
-      expect(listener.status().running).toBe(false);
-    });
-
-    it('un CRASH sin restart lo marca caído, suelta el consumer y avisa por onCrash', async () => {
-      const { kafka, consumer } = buildKafka();
-      const listener = new TestListener(kafka, { topic: 't' });
-      listener.onCrash = jest.fn();
-      await listener.start();
-
-      const error = new Error('Topic authorization failed');
-      consumer.emit(consumer.events.CRASH, { error, restart: false });
-
-      expect(listener.status().running).toBe(false);
-      expect(listener.consumer).toBeNull();
-      expect(listener.onCrash).toHaveBeenCalledWith(error);
-    });
-
-    it('un CRASH con restart lo deja en manos de kafkajs (sigue corriendo)', async () => {
-      const { kafka, consumer } = buildKafka();
-      const listener = new TestListener(kafka, { topic: 't' });
-      listener.onCrash = jest.fn();
-      await listener.start();
-
-      consumer.emit(consumer.events.CRASH, { error: new Error('KafkaJSNumberOfRetriesExceeded'), restart: true });
-
-      expect(listener.status().running).toBe(true);
-      expect(listener.onCrash).not.toHaveBeenCalled();
-    });
-  });
 });
 
 describe('EventListener: arranque sin offset y piso EDA_CONSUMER_SINCE', () => {
@@ -341,11 +206,9 @@ describe('EventListener: arranque sin offset y piso EDA_CONSUMER_SINCE', () => {
     expect(new TestListener(buildKafka().kafka, { topic: 't' }).fromBeginning).toBe(true);
   });
 
-  it('EDA_CONSUMER_FROM_BEGINNING=false vuelve a arrancar en el final del topic', async () => {
+  it('EDA_CONSUMER_FROM_BEGINNING=false vuelve a arrancar en el final del topic', () => {
     process.env.EDA_CONSUMER_FROM_BEGINNING = 'false';
-    const { kafka, consumer } = buildKafka();
-    await new TestListener(kafka, { topic: 't' }).start();
-    expect(consumer.subscribe).toHaveBeenCalledWith({ topic: 't', fromBeginning: false });
+    expect(new TestListener(buildKafka().kafka, { topic: 't' }).fromBeginning).toBe(false);
   });
 
   it('la opción del constructor pisa a la variable de entorno', () => {

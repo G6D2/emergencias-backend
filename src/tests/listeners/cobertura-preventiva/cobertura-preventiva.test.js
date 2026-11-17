@@ -5,6 +5,8 @@ const { EventListener, createListeners } = require('../../../listeners');
 const {
   EventoComunitarioPublicadoListener,
   EventoCanceladoListener,
+  ActividadCreadaListener,
+  ReservaCreadaListener,
 } = require('../../../listeners/cobertura-preventiva');
 
 const kafka = { consumer: jest.fn() };
@@ -16,6 +18,7 @@ describe('listeners/cobertura-preventiva', () => {
     jest.clearAllMocks();
     process.env.EDA_TOPIC_EVENTO_PUBLICADO = 'espacios.EventoComunitarioPublicado';
     process.env.EDA_TOPIC_EVENTO_CANCELADO = 'espacios.EventoCancelado';
+    process.env.EDA_TOPIC_ACTIVIDAD_CREADA = 'espacios.ActividadCreada.v3';
   });
 
   afterAll(() => {
@@ -24,9 +27,10 @@ describe('listeners/cobertura-preventiva', () => {
 
   it('createListeners instancia los listeners de cada subpaquete', () => {
     const listeners = createListeners(kafka);
-    expect(listeners.map((l) => l.constructor).slice(0, 2)).toEqual([
+    expect(listeners.map((l) => l.constructor).slice(0, 3)).toEqual([
       EventoComunitarioPublicadoListener,
       EventoCanceladoListener,
+      ActividadCreadaListener,
     ]);
     listeners.forEach((l) => expect(l).toBeInstanceOf(EventListener));
   });
@@ -74,6 +78,75 @@ describe('listeners/cobertura-preventiva', () => {
       eventId: 'e1',
       outcomes: [],
     });
+  });
+
+  it('ActividadCreadaListener toma su topic del env y carga sus reglas', () => {
+    const path = require('path');
+    const listener = new ActividadCreadaListener(kafka);
+    expect(listener.topic).toBe('espacios.ActividadCreada.v3');
+    expect(listener.rulesDir).toBe(
+      path.join(__dirname, '../../../listeners/cobertura-preventiva', 'actividad-creada', 'rules')
+    );
+    expect(listener.rules()).toHaveLength(1);
+  });
+
+  it('ActividadCreadaListener usa ActividadCreada.v3 por defecto si no hay variable', () => {
+    delete process.env.EDA_TOPIC_ACTIVIDAD_CREADA;
+    expect(new ActividadCreadaListener(kafka).topic).toBe('com.citypass.espacios.ActividadCreada.v3');
+  });
+
+  it('ActividadCreadaListener dispara ProgramarCobertura con el actividadId como eventoId', async () => {
+    const evento = {
+      metadata: { eventId: 'e4' },
+      data: {
+        actividadId: 'act-1',
+        titulo: 'Festival',
+        capacidad: 1200,
+        estado: 'PROGRAMADA',
+        ubicacion: { lat: -34.5994, lng: -58.3988 },
+      },
+    };
+    const outcomes = await new ActividadCreadaListener(kafka).handle(evento);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0].type).toBe('ProgramarCobertura');
+    expect(outcomes[0].payload).toMatchObject({ eventoId: 'act-1', latitud: -34.5994, longitud: -58.3988 });
+  });
+
+  it('ActividadCreadaListener no dispara por debajo del umbral de 500', async () => {
+    const evento = { metadata: { eventId: 'e5' }, data: { actividadId: 'act-2', capacidad: 499 } };
+    await expect(new ActividadCreadaListener(kafka).handle(evento)).resolves.toEqual([]);
+  });
+
+  it('ReservaCreadaListener es opt-in: sin EDA_TOPIC_RESERVA_CREADA no tiene topic', () => {
+    delete process.env.EDA_TOPIC_RESERVA_CREADA;
+    expect(new ReservaCreadaListener(kafka).topic).toBeUndefined();
+    process.env.EDA_TOPIC_RESERVA_CREADA = 'com.citypass.espacios.ReservaCreada';
+    expect(new ReservaCreadaListener(kafka).topic).toBe('com.citypass.espacios.ReservaCreada');
+  });
+
+  it('createListeners incluye ReservaCreadaListener con sus reglas', () => {
+    const path = require('path');
+    const listener = createListeners(kafka).find((l) => l instanceof ReservaCreadaListener);
+    expect(listener).toBeDefined();
+    expect(listener.rulesDir).toBe(path.join(__dirname, '../../../listeners/cobertura-preventiva', 'reserva-creada', 'rules'));
+  });
+
+  it('ReservaCreadaListener dispara ProgramarCobertura con causa RESERVA para una reserva grande de espacio', async () => {
+    const evento = {
+      metadata: { eventId: 'e4' },
+      data: { reservaId: 'res-1', tipoReserva: 'ESPACIO', cantidadPersonas: 600, categoria: 'PLAZA' },
+    };
+    const outcomes = await new ReservaCreadaListener(kafka).handle(evento);
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({ type: 'ProgramarCobertura', payload: { eventoId: 'res-1', causaTipo: 'RESERVA' } });
+  });
+
+  it('ReservaCreadaListener no dispara para una inscripcion a un evento', async () => {
+    const evento = {
+      metadata: { eventId: 'e5' },
+      data: { reservaId: 'res-2', tipoReserva: 'EVENTO', cantidadPersonas: 600 },
+    };
+    await expect(new ReservaCreadaListener(kafka).handle(evento)).resolves.toEqual([]);
   });
 
   it('options.topic pisa el del env', () => {

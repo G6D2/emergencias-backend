@@ -12,17 +12,22 @@ const { assertBusLocationCryptoAtBoot } = require('./security/bus-location-crypt
 const { startLocationRetentionJob } = require('./security/location-retention');
 const { startCitizenProfileRetentionJob } = require('./security/citizen-profile-retention');
 const { startIncidentDetectionJob } = require('./services/incident-detection-job');
+const { startEmergencyExpirationJob } = require('./services/emergency-expiration-job');
 const { startKeepWarmJob } = require('./jobs/keep-warm');
 const { secureLog } = require('./security/secure-log');
 const { OutboxPublisher, isOutboxPublisherEnabled } = require('./services/outbox-publisher');
 const { GatewayPublisher } = require('./services/gateway-publisher');
-const { createListeners, superviseListener, OutcomeFactory } = require('./listeners');
+const { createListeners, superviseListener, OutcomeFactory, EventConsumer } = require('./listeners');
 const { createEventDecoder, registryFromEnv } = require('./listeners/event-decoder');
 const { EventosProcesadosRepository } = require('./repositories/eventos-procesados.repository');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('./listeners/cobertura-preventiva/handlers/cancelar-cobertura.handler');
 const { CREAR_INTERVENCION, createCrearIntervencionHandler } = require('./listeners/reclamo-intervencion/handlers/crear-intervencion.handler');
 const { CERRAR_INTERVENCION, createCerrarIntervencionHandler } = require('./listeners/reclamo-intervencion/handlers/cerrar-intervencion.handler');
+const {
+  CREAR_EMERGENCIA_BICICLETA,
+  createCrearEmergenciaBicicletaHandler,
+} = require('./listeners/movilidad-bicicleta/handlers/crear-emergencia-bicicleta.handler');
 const {
   REGISTRAR_CONTEXTO_ZONA,
   DAR_DE_BAJA_CONTEXTO_ZONA,
@@ -31,11 +36,16 @@ const {
 } = require('./listeners/cobertura-preventiva/handlers/contexto-zona.handler');
 const { ContextoZonaRepository } = require('./repositories/contexto-zona.repository');
 const { gracefulShutdown, closeServer } = require('./utils/graceful-shutdown');
+const { installProcessSafetyNet } = require('./utils/process-safety-net');
 
 const PORT = process.env.PORT || 3000;
 // Tope del apagado ordenado. Render espera 30 s (default) entre el SIGTERM y
 // el SIGKILL, así que sobra margen.
 const SHUTDOWN_TIMEOUT_MS = 10_000;
+
+// Antes de arrancar nada: process.on('unhandledRejection') loguea y sigue,
+// process.on('uncaughtException') loguea y sale con código 1.
+installProcessSafetyNet();
 
 async function start() {
   // Valida la key al boot (falla temprano si falta o es inválida).
@@ -88,6 +98,10 @@ async function start() {
   outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository }));
   outcomeFactory.register(CREAR_INTERVENCION, createCrearIntervencionHandler({ emergencyRepository }));
   outcomeFactory.register(CERRAR_INTERVENCION, createCerrarIntervencionHandler({ emergencyRepository }));
+  outcomeFactory.register(
+    CREAR_EMERGENCIA_BICICLETA,
+    createCrearEmergenciaBicicletaHandler({ emergencyRepository })
+  );
   // Contexto de zona: mientras dura un evento comunitario, las emergencias
   // que se crean dentro de su radio suben un nivel de prioridad de despacho;
   // mientras dura una alerta climática, las emergencias abiertas de sus
@@ -102,11 +116,17 @@ async function start() {
       decoder: createEventDecoder({ registry: registryFromEnv(process.env, { authClient: edaAuthClient }) }),
     })
     : [];
-  // Si un listener no arranca (o se cae sin que kafkajs lo reinicie), se
-  // reintenta con backoff en vez de quedar muerto hasta el próximo deploy.
-  const listenerHandles = listeners.map((listener) => superviseListener(listener));
+  // Un solo consumer de Kafka para todos los listeners (un group.id, 2
+  // conexiones al broker en total; EDA limita a 10 por IP). Si no arranca, o
+  // se cae sin que kafkajs lo reinicie, se reintenta con backoff en vez de
+  // quedar muerto hasta el próximo deploy.
+  const eventConsumer = listeners.length > 0 ? new EventConsumer(kafkaService.kafka, listeners) : null;
+  const consumerHandle = eventConsumer ? superviseListener(eventConsumer) : null;
+  const listenerStatuses = () => (eventConsumer ? eventConsumer.listenerStatuses(consumerHandle.status()) : []);
 
   const retentionJob = startLocationRetentionJob(emergencyRepository);
+  // Las abiertas que nadie tocó en el plazo de retención expiran (y se anonimizan).
+  const expirationJob = startEmergencyExpirationJob(emergencyRepository);
   const citizenPiiRetentionJob = startCitizenProfileRetentionJob(citizenProfileRepository);
   const incidentDetectionJob = startIncidentDetectionJob(emergencyRepository, incidentRepository, { pool });
   // Mantiene despiertos backend y frontend en horario de clase (Render free).
@@ -118,7 +138,7 @@ async function start() {
     // GET /health: estado en memoria, sin conectar nada.
     health: () => kafkaHealth(kafkaService, {
       outbox: outboxPublisher.health(),
-      listeners: listenerHandles.map((handle) => handle.status()),
+      listeners: listenerStatuses(),
     }),
     officerRepository,
     incidentRepository,
@@ -146,6 +166,7 @@ async function start() {
     shuttingDown = true;
     secureLog('info', `${signal} recibido: apagando`);
     retentionJob.stop();
+    expirationJob.stop();
     citizenPiiRetentionJob.stop();
     incidentDetectionJob.stop();
     keepWarmJob.stop();
@@ -154,7 +175,7 @@ async function start() {
     // pool se cierra al final, cuando ya nadie lo usa.
     const exitCode = await gracefulShutdown([
       { name: 'el servidor HTTP', run: () => closeServer(server) },
-      { name: 'los listeners', run: () => Promise.all(listenerHandles.map((handle) => handle.stop())) },
+      { name: 'el consumer de Kafka', run: () => (consumerHandle ? consumerHandle.stop() : Promise.resolve()) },
       { name: 'el producer de Kafka', run: () => kafkaService.disconnect() },
       { name: 'el pool de Postgres', run: () => closePool() },
     ], { timeoutMs: SHUTDOWN_TIMEOUT_MS });

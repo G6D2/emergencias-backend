@@ -7,15 +7,14 @@ contenedores) y después abrir el backend en sus componentes internos.
 
 ```mermaid
 flowchart TB
-    ciudadano(["Ciudadano / Dispatcher (browser)"]):::actor
-    oficial(["Oficial (Swagger / Postman)"]):::actor
+    ciudadano(["Ciudadano / Dispatcher / Oficial (browser)"]):::actor
 
     subgraph rfe["Render · Frontend"]
         bff["Next.js 16 (BFF)<br/>/api/auth/*, /api/backend/[...path], /api/geocode"]
     end
 
     subgraph rbe["Render · Backend (Docker, plan free)"]
-        api["Express API<br/>/api/*, /auth/* (solo AUTH_MODE=local)<br/>+ listeners Kafka en el mismo proceso"]
+        api["Express API<br/>/api/*, /auth/* (AUTH_MODE=local o hybrid)<br/>+ listeners Kafka en el mismo proceso"]
     end
 
     neon[("Neon Postgres<br/>(pooled, sslmode=require)")]
@@ -26,7 +25,7 @@ flowchart TB
     end
 
     login["Login Federado Grupo 2<br/>token de servicio del bus"]
-    idp["IdP Grupo 2 para usuarios<br/>(previsto, AUTH_MODE=idp)"]:::planned
+    idp["Login Federado Grupo 2 para el personal<br/>(AUTH_MODE=hybrid, en producción)"]
 
     subgraph geo["Geocodificación externa"]
         bdc["BigDataCloud<br/>(primario)"]
@@ -44,14 +43,13 @@ flowchart TB
     backup["Backend backup (otra cuenta Render)<br/>activate-backup.yml, manual"]:::backup
 
     ciudadano -->|HTTPS| bff
-    oficial -->|"HTTPS + Bearer (officer)"| api
     bff -->|"Bearer JWT (cookie httpOnly server-side) + retry 502/503/504"| api
     api -->|"pg pool, DB_POOL_MAX"| neon
     kafka -->|"consume EventoComunitarioPublicado / EventoCancelado"| api
     api -->|"decodifica Avro (Bearer)"| registry
     api -->|"client-credentials"| login
     api -->|"outbox -> GatewayPublisher (EDA_PUBLISHER_MODE=gateway)"| kafka
-    api -.->|"verify RS256 via JWKS (previsto)"| idp
+    api -->|"verify RS256 via JWKS (tokens del personal)"| idp
     bff -->|"GET reverse-geocode"| bdc
     bff -.->|"respaldo si BigDataCloud falla"| nom
     ci --> cd
@@ -94,7 +92,7 @@ flowchart TB
     ruleGrouper["rule-based-grouper<br/>(estrategia fallback, Union-Find + Haversine)"]:::incident
     repositories["repositories<br/>emergency, officer, incident, citizen-profile, auth-user, eventos-procesados"]
     services["services<br/>emergency-events, kafka.service, outbox-publisher, eda-auth-client"]
-    listeners["listeners<br/>EventListener + cobertura-preventiva<br/>(reglas, OutcomeFactory con dedup)"]:::consumer
+    listeners["listeners<br/>EventListener + cobertura-preventiva + reclamo-intervencion<br/>(reglas, OutcomeFactory con dedup)"]:::consumer
     detectionJob["incident-detection-job<br/>cada 60s, pg_try_advisory_lock"]:::incident
     security["security<br/>location-crypto, location-retention, cors, rate-limit, secure-log, security-headers"]
     jobs["jobs / procesos en background<br/>OutboxPublisher (apagado en prod), location-retention,<br/>citizen-profile-retention, incident-detection-job, keep-warm"]
@@ -149,7 +147,7 @@ flowchart TB
 | Línea punteada | Deshabilitado, previsto o de respaldo (no es el camino feliz actual) |
 | `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) para consumir: los listeners de cobertura preventiva leen los eventos de Espacios. Los eventos propios salen por HTTP al gateway (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`), no por el producer de Kafka (ver `06-eventos.md`) |
 | `Login Federado` | En uso solo para el token client-credentials del bus (`EDA_OAUTH_*`, `src/services/eda-auth-client.js`) |
-| `IdP Grupo 2` | Previsto para usuarios: hoy corre `AUTH_MODE=local` (JWT propio con el mismo contrato de claims que usaría el IdP real, ver `src/auth/setup.js`) |
+| `IdP Grupo 2` | En uso desde el 12/11/2026: producción corre `AUTH_MODE=hybrid`. Los tokens del personal se validan contra el JWKS del Login Federado y los de ciudadanos y atajos de demo contra la clave local, según el `iss` (ver `src/auth/setup.js` y `src/auth/hybrid-verifier.js`) |
 | Render free | El backend duerme sin tráfico; mientras duerme no consume. Al despertar, el consumer group sigue desde su último offset confirmado |
 | SonarCloud | Corre en los dos repos (secret `SONAR_TOKEN` cargado en backend y, desde el 21/09, en `Frontend`); sigue siendo `continue-on-error: true`, no bloquea el pipeline |
 | Stack de backup | Confirmado en el código por `.github/workflows/activate-backup.yml` (PR #38); manual, sin failover automático (ver nota arriba) |

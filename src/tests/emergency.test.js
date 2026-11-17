@@ -34,9 +34,10 @@ function createMockEmergencyRepository() {
         history: { previousStatus: current.status, newStatus, actor, reason },
       };
     },
-    findPage: async ({ userId } = {}) => {
-      const all = [...emergencies.values()];
-      const filtered = userId ? all.filter((e) => e.userId === userId) : all;
+    findPage: async ({ userId, assignedOfficerId } = {}) => {
+      const filtered = [...emergencies.values()]
+        .filter((e) => !userId || e.userId === userId)
+        .filter((e) => !assignedOfficerId || e.assignedOfficerId === assignedOfficerId);
       return { emergencies: filtered, total: filtered.length };
     },
   };
@@ -58,6 +59,7 @@ function createTestApp(user, repository = createMockEmergencyRepository()) {
 const DISPATCHER = { sub: 'DISP-001', groups: ['dispatcher'] };
 const CITIZEN_A = { sub: 'CIT-001', groups: ['citizen'] };
 const CITIZEN_B = { sub: 'CIT-002', groups: ['citizen'] };
+const OFFICER_1 = { sub: 'of-001', groups: ['officer'] };
 const FAKE_UUID = '00000000-0000-0000-0000-000000000000';
 
 async function createEmergency(app) {
@@ -136,6 +138,24 @@ describe('GET /api/emergencies', () => {
 
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].userId).toBe(CITIZEN_A.sub);
+  });
+
+  it('an officer only gets the emergencies assigned to them, and ?assignedOfficerId= cannot widen it', async () => {
+    const repo = createMockEmergencyRepository();
+    const citizenApp = createTestApp(CITIZEN_A, repo);
+    const mine = await createEmergency(citizenApp);
+    const other = await createEmergency(citizenApp);
+    await createEmergency(citizenApp);
+    repo.create({ ...(await repo.findById(mine)), assignedOfficerId: OFFICER_1.sub });
+    repo.create({ ...(await repo.findById(other)), assignedOfficerId: 'of-002' });
+
+    const res = await request(createTestApp(OFFICER_1, repo))
+      .get('/api/emergencies?assignedOfficerId=of-002')
+      .expect(200);
+
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].id).toBe(mine);
+    expect(res.body.data[0]).not.toHaveProperty('effectivePriority');
   });
 });
 

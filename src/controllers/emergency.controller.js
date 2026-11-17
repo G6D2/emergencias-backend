@@ -11,7 +11,7 @@ const { GROUPS } = require('../auth/groups');
 const { assertTransition, isValidStatus, EMERGENCY_STATUSES } = require('../domain/emergency-status');
 const { buildEmergencyUpdatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
-const { isValidSeverity } = require('../domain/severity');
+const { isValidSeverity, SEVERITY_LEVELS } = require('../domain/severity');
 const { scrubFreeText } = require('../security/pii-scrub');
 const { secureLog } = require('../security/secure-log');
 const { assertUuid } = require('../utils/uuid');
@@ -56,25 +56,33 @@ function withoutOperationalFields({ incident, effectivePriority, dispatchPriorit
 }
 
 class EmergencyController {
-  constructor(kafkaService, emergencyRepository) {
-    this.kafkaService = kafkaService;
+  constructor(emergencyRepository) {
     this.emergencyRepository = emergencyRepository;
   }
 
   /**
-   * Lista paginada de emergencias. Endpoint dispatcher-only (ver requireDispatcher en la ruta).
+   * Lista paginada de emergencias (citizen, dispatcher u officer; ver la ruta).
    * @param {object} query
    */
   async listEmergencies(query, user = null) {
-    // Un citizen solo ve lo suyo: se ignora cualquier userId del query y se
-    // usa el sub del token. Dispatcher (y futuros roles operativos) ven todo.
-    const restrictToOwn = Boolean(user) && !userHasGroup(user, GROUPS.DISPATCHER);
-    const userId = restrictToOwn ? user.sub : undefined;
-    // El repository calcula incident/effectivePriority igual para todos (un
-    // solo JOIN); para un citizen se recortan acá (withoutOperationalFields).
+    // Dispatcher ve todo. Un officer solo ve lo que tiene asignado: el
+    // assignedOfficerId sale del sub del token (mismo id que compara
+    // canAdvanceEmergencyStatus). Un citizen solo ve lo suyo: se ignora
+    // cualquier userId del query y se usa el sub del token.
     const isDispatcher = userHasGroup(user, GROUPS.DISPATCHER);
-    if (query.severity && !isValidSeverity(query.severity)) {
-      throw new ValidationError('severity must be one of: low, medium, high, critical');
+    const isOfficerOnly = Boolean(user) && !isDispatcher && userHasGroup(user, GROUPS.OFFICER);
+    const restrictToOwn = Boolean(user) && !isDispatcher && !isOfficerOnly;
+    const userId = restrictToOwn ? user.sub : undefined;
+    const assignedOfficerId = isOfficerOnly ? user.sub : query.assignedOfficerId;
+    // El repository calcula incident/effectivePriority igual para todos (un
+    // solo JOIN); para officer y citizen se recortan acá (withoutOperationalFields).
+    // `priority` es un alias de `severity` en el filtro (ver findPage más
+    // abajo), así que se valida igual: antes ?priority=xyz daba 200 con la
+    // lista vacía en vez de 400.
+    for (const name of ['severity', 'priority']) {
+      if (query[name] && !isValidSeverity(query[name])) {
+        throw new ValidationError(`${name} must be one of: ${SEVERITY_LEVELS.join(', ')}`);
+      }
     }
     const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(query.limit, 10) || 20, 1), 100);
@@ -97,7 +105,7 @@ class EmergencyController {
       severity: query.severity || query.priority,
       from,
       to,
-      assignedOfficerId: query.assignedOfficerId,
+      assignedOfficerId,
       // Acepta canónico o alias del front (medical → MEDICA); inválido → 400.
       // `type` se mantiene por compatibilidad con clientes existentes.
       emergencyType: assertEmergencyType(query.emergencyType || query.type),
@@ -128,10 +136,12 @@ class EmergencyController {
    * existe. Un grupo que no sea citizen/dispatcher ya cortó con 403 en el
    * middleware requireCitizenOrDispatcher de la ruta.
    *
-   * TODO(#13): cuando exista el grupo `officer`, debe ver solo las
-   * emergencias que tiene asignadas (emergency.assignedOfficerId === user.sub).
-   * Agregar la regla en canViewEmergency (src/auth/authorize.js) y sumar el
-   * grupo al middleware de la ruta; este método no necesita cambios.
+   * TODO(#13): el grupo `officer` ya existe y lista lo que tiene asignado
+   * (GET /api/emergencies), pero todavía no entra al detalle. Cuando entre,
+   * debe ver solo las emergencias que tiene asignadas
+   * (emergency.assignedOfficerId === user.sub): agregar la regla en
+   * canViewEmergency (src/auth/authorize.js) y sumar el grupo al middleware
+   * de la ruta; este método no necesita cambios.
    *
    * Con `audit: true` (GET /api/emergencies/:id) la lectura ya autorizada
    * queda en emergency_access_audit. GET /api/panic-button/:id delega acá sin

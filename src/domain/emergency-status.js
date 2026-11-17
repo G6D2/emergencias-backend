@@ -44,6 +44,24 @@ const ACTIVE_STATUSES = Object.freeze(
   EMERGENCY_STATUSES.filter((status) => !TERMINAL_STATUSES.includes(status))
 );
 
+// Expiración (solo el sistema, nunca un endpoint): una emergencia abierta que
+// pasa el plazo de retención sin cambios de estado termina sola. Lo resuelto
+// se cierra; todo lo demás se cancela, incluso lo ya despachado, que por la
+// tabla de arriba no tiene salida directa a un estado terminal.
+const EXPIRATION_TARGETS = Object.freeze({
+  PENDING: 'CANCELLED',
+  VALIDATED: 'CANCELLED',
+  DISPATCHED: 'CANCELLED',
+  EN_ROUTE: 'CANCELLED',
+  ON_SCENE: 'CANCELLED',
+  RESOLVED: 'CLOSED',
+});
+
+/** Estado terminal al que expira una emergencia en `status`; null si ya terminó. */
+function expirationTarget(status) {
+  return EXPIRATION_TARGETS[status] || null;
+}
+
 function isValidStatus(status) {
   return typeof status === 'string' && EMERGENCY_STATUSES.includes(status);
 }
@@ -82,6 +100,8 @@ module.exports = {
   TRANSITIONS,
   TERMINAL_STATUSES,
   ACTIVE_STATUSES,
+  EXPIRATION_TARGETS,
+  expirationTarget,
   isValidStatus,
   isTerminal,
   canTransition,

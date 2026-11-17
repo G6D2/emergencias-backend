@@ -166,6 +166,32 @@ describe('createProgramarCoberturaHandler', () => {
     expect(emergencyRepository.create).not.toHaveBeenCalled();
   });
 
+  it('con causaTipo RESERVA deduplica y crea la cobertura con esa causa', async () => {
+    const emergencyRepository = buildRepository();
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
+
+    await handler(client, { ...payload, eventoId: 'res-9', causaTipo: 'RESERVA', titulo: 'Reserva de espacio (PLAZA)' });
+
+    expect(emergencyRepository.findByCausa).toHaveBeenCalledWith(client, {
+      causaTipo: 'RESERVA',
+      causaId: 'res-9',
+      emergencyType: 'PREVENTIVA',
+    });
+    const input = emergencyRepository.create.mock.calls[0][0];
+    expect(input).toMatchObject({ causaTipo: 'RESERVA', causaId: 'res-9', emergencyType: 'PREVENTIVA' });
+    expect(input.description).toBe('Cobertura preventiva — Reserva de espacio (PLAZA) (2000 asistentes esperados)');
+
+    const event = input.outboxEvent.payload({ ...input, createdAt: '2026-11-16T12:00:00.000Z' }, 'evt-9');
+    expect(event.data).toMatchObject({ causaTipo: 'RESERVA', causaId: 'res-9', categoria: 'PREVENTIVA' });
+  });
+
+  it('rechaza un causaTipo que no es de cobertura preventiva', async () => {
+    const emergencyRepository = buildRepository();
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
+    await expect(handler(client, { ...payload, causaTipo: 'RECLAMO' })).rejects.toThrow(/causaTipo RECLAMO/);
+    expect(emergencyRepository.findByCausa).not.toHaveBeenCalled();
+  });
+
   it('falla sin eventoId', async () => {
     const handler = createProgramarCoberturaHandler({ emergencyRepository: buildRepository() });
     await expect(handler(client, { ...payload, eventoId: undefined })).rejects.toThrow(/eventoId/);

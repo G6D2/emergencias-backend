@@ -6,11 +6,12 @@ const {
   requireDispatcher,
   requireOfficer,
   requireCitizenOrDispatcher,
+  requireCitizenDispatcherOrOfficer,
 } = require('../auth/authorize');
 
-function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate) {
+function createEmergenciesRoutes(emergencyRepository, authenticate) {
   const router = express.Router();
-  const controller = new EmergencyController(kafkaService, emergencyRepository);
+  const controller = new EmergencyController(emergencyRepository);
 
   /**
    * @openapi
@@ -19,8 +20,10 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *     tags: [Emergencies]
    *     summary: Lista emergencias paginadas
    *     description: |
-   *       Requiere grupo `citizen` o `dispatcher`. Dispatcher ve todas; citizen solo las propias
-   *       (se fuerza el filtro por el sub del JWT) y sin `incident` ni `effectivePriority`.
+   *       Requiere grupo `citizen`, `dispatcher` u `officer`. Dispatcher ve todas; officer solo las
+   *       que tiene asignadas (se fuerza `assignedOfficerId` = sub del JWT); citizen solo las propias
+   *       (se fuerza el filtro por el sub del JWT). Officer y citizen las reciben sin `incident` ni
+   *       `effectivePriority`.
    *       Soporta filtros por status, severity, rango de fechas, oficial asignado y tipo de emergencia.
    *       Un filtro inválido responde 400 (no una lista vacía ni un 500).
    *     security:
@@ -38,6 +41,12 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *         schema:
    *           type: string
    *           enum: [low, medium, high, critical]
+   *       - in: query
+   *         name: priority
+   *         schema:
+   *           type: string
+   *           enum: [low, medium, high, critical]
+   *         description: Alias de severity (se usa si no viene severity). Inválido → 400.
    *       - in: query
    *         name: from
    *         schema:
@@ -87,7 +96,7 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *         description: Página de emergencias
    *       400:
    *         description: |
-   *           Filtro inválido: status desconocido, severity o emergencyType fuera del catálogo,
+   *           Filtro inválido: status desconocido, severity, priority o emergencyType fuera del catálogo,
    *           o from/to que no son una fecha ISO 8601
    *         content:
    *           application/json:
@@ -98,9 +107,10 @@ function createEmergenciesRoutes(kafkaService, emergencyRepository, authenticate
    *       403:
    *         description: Grupo insuficiente
    */
-  // Dispatcher: todas. Citizen: solo las propias (el filtro por user_id se
-  // fuerza en el controller a partir del sub del JWT, no del query string).
-  router.get('/', authenticate, requireCitizenOrDispatcher, asyncHandler(async (req, res) => {
+  // Dispatcher: todas. Officer: solo las asignadas a él. Citizen: solo las
+  // propias. Los filtros de officer/citizen se fuerzan en el controller a
+  // partir del sub del JWT, no del query string.
+  router.get('/', authenticate, requireCitizenDispatcherOrOfficer, asyncHandler(async (req, res) => {
     const result = await controller.listEmergencies(req.query, req.user);
     res.json(result);
   }));

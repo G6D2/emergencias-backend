@@ -64,23 +64,4 @@ describe('OfficerRepository', () => {
     expect(pool.queries[0].sql).toMatch(/WHERE status = \$1/);
     expect(pool.queries[0].params).toEqual(['ocupado']);
   });
-
-  it('findById devuelve null si no existe', async () => {
-    const pool = createPool([]);
-    const repo = new OfficerRepository(pool);
-
-    const officer = await repo.findById('missing');
-
-    expect(officer).toBeNull();
-    expect(pool.queries[0].params).toEqual(['missing']);
-  });
-
-  it('findById mapea la fila encontrada', async () => {
-    const pool = createPool([{ id: 'o-3', name: 'Leo', status: 'disponible' }]);
-    const repo = new OfficerRepository(pool);
-
-    const officer = await repo.findById('o-3');
-
-    expect(officer.id).toBe('o-3');
-  });
 });

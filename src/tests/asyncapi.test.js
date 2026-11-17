@@ -18,6 +18,9 @@ const { EMERGENCY_TYPES } = require('../domain/emergency-type');
 const { ProgramarCoberturaPreventivaRule } = require('../listeners/cobertura-preventiva/evento-comunitario-publicado/rules/01-programar-cobertura.rule');
 const { RegistrarContextoClimaRule } = require('../listeners/alerta-climatica/alerta-climatica-confirmada/rules/01-registrar-contexto-clima.rule');
 const { normalizarEnvelope } = require('../listeners/alerta-climatica/envelope');
+const { ProgramarCoberturaActividadRule } = require('../listeners/cobertura-preventiva/actividad-creada/rules/01-programar-cobertura.rule');
+const { CrearEmergenciaBicicletaRule } = require('../listeners/movilidad-bicicleta/emergencia-bicicleta/rules/01-crear-emergencia-bicicleta.rule');
+const { ProgramarCoberturaReservaRule } = require('../listeners/cobertura-preventiva/reserva-creada/rules/01-programar-cobertura-reserva.rule');
 
 const SPEC_PATH = path.join(__dirname, '..', '..', 'asyncapi.yaml');
 
@@ -55,7 +58,9 @@ describe('asyncapi.yaml', () => {
     expect(send).toEqual(expect.arrayContaining(['publicarEmergenciaCreada', 'publicarEmergenciaActualizada']));
     expect(receive).toEqual(expect.arrayContaining([
       'recibirEventoComunitarioPublicado', 'recibirEventoCancelado',
-      'recibirReclamoCreado', 'recibirReclamoActualizado',
+      'recibirReclamoCreado', 'recibirReclamoActualizado', 'recibirEmergenciaSolicitada',
+      'recibirActividadCreada',
+      'recibirEmergenciaBicicleta', 'recibirReservaCreada',
       'recibirAlertaClimaticaConfirmada', 'recibirAlertaClimaticaFinalizada',
     ]));
   });
@@ -164,9 +169,87 @@ describe('asyncapi.yaml', () => {
       expect(new ProgramarCoberturaPreventivaRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
     });
 
+    it('una ActividadCreada válida según el spec dispara la regla', () => {
+      const data = {
+        actividadId: 'act-1',
+        titulo: 'Festival de Primavera',
+        capacidad: 1200,
+        ubicacion: { lat: -34.5994, lng: -58.3988 },
+        direccion: 'Av. Córdoba 2100',
+        estado: 'PROGRAMADA',
+        correlationId: 'act-1',
+        fechaHoraInicio: Date.now() + 60 * 60 * 1000,
+        fechaHoraFinalizacion: Date.now() + 3 * 60 * 60 * 1000,
+      };
+      expect(validate('ActividadCreadaData', data)).toBe(true);
+      expect(new ProgramarCoberturaActividadRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
+      expect(() => validate('ActividadCreadaData', { titulo: 'sin id' })).toThrow();
+    });
+
+    it('un ReservaCreada válido según el spec dispara la regla de reserva', () => {
+      const data = {
+        reservaId: 'res-1',
+        tipoReserva: 'ESPACIO',
+        recursoId: 'esp-1',
+        espacioId: 'esp-1',
+        categoria: 'PLAZA',
+        zona: 'Palermo',
+        latitud: -34.58,
+        longitud: -58.42,
+        fechaHora: '2099-01-01T18:00:00Z',
+        fechaFin: '2099-01-01T23:00:00Z',
+        cantidadPersonas: 800,
+        cupoMaximo: 1000,
+        organizadorId: null,
+        createdAt: '2026-11-16T12:00:00Z',
+        correlationId: 'res-1',
+      };
+      expect(validate('ReservaCreadaData', data)).toBe(true);
+      expect(new ProgramarCoberturaReservaRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
+      expect(() => validate('ReservaCreadaData', { ...data, tipoReserva: 'OTRO' })).toThrow();
+    });
+
     it('EventoCancelado requiere eventoId', () => {
       expect(validate('EventoCanceladoData', { eventoId: 'evt-espacios-1', motivo: 'lluvia', canceladoEn: '2026-11-03T10:00:00Z' })).toBe(true);
       expect(() => validate('EventoCanceladoData', { motivo: 'lluvia' })).toThrow();
+    });
+
+    it('EmergenciaBicicleta valida el schema y conserva emergenciaId para el outcome', () => {
+      const data = {
+        emergenciaId: 'EMG-20261115-12345',
+        actorSub: 'usuario-demo',
+        reportadaEn: 1763218800000,
+        ubicacion: { latitud: -34.6037, longitud: -58.3816, precisionMetros: 12.5 },
+        triage: {
+          respondido: true,
+          puedeMoverse: false,
+          estaSangrando: true,
+          vehiculoInvolucrado: true,
+          prioridadSugerida: 'P1',
+        },
+        viaje: {
+          viajeId: 101,
+          iniciadoEn: 1763217900000,
+          estacionOrigenId: 7,
+          estacionOrigenNombre: 'Estación Ejemplo',
+          bicicletaId: 55,
+          bicicletaCodigo: 'BIKE-0055',
+        },
+        usuario: { usuarioId: 42, nombre: 'Usuario', apellido: 'Demo', email: 'demo@example.invalid' },
+      };
+      const rule = new CrearEmergenciaBicicletaRule();
+
+      expect(validate('EmergenciaBicicletaData', data)).toBe(true);
+      expect(rule.apply({ data })).toMatchObject({
+        type: 'CrearEmergenciaBicicleta',
+        payload: {
+          emergenciaId: 'EMG-20261115-12345',
+          latitud: -34.6037,
+          longitud: -58.3816,
+          prioridadSugerida: 'P1',
+        },
+      });
+      expect(rule.apply({ data }).payload).not.toHaveProperty('usuario');
     });
 
     it('el ejemplo de AlertaClimaticaConfirmada del spec dispara la regla y eleva', () => {

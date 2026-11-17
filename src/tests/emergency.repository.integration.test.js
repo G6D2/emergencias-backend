@@ -2,7 +2,12 @@ const { randomUUID } = require('crypto');
 const { getPool, closePool } = require('../db/pool');
 const { EmergencyRepository } = require('../repositories/emergency.repository');
 const { IncidentRepository } = require('../repositories/incident.repository');
-const { buildEmergencyCreatedEvent } = require('../services/emergency-events');
+const {
+  buildEmergencyCreatedEvent,
+  buildEmergencyUpdatedEvent,
+  buildEmergencyPrioritizedEvent,
+} = require('../services/emergency-events');
+const { createBusLocationCrypto } = require('../security/bus-location-crypto');
 
 // Mismo outboxEvent que arma PanicButtonController: el builder real del
 // contrato del #48, no un payload inventado.
@@ -304,16 +309,6 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(found).toBeNull();
   });
 
-  it('lista emergencias existentes', async () => {
-    const input = buildEmergency();
-    await repository.create(input);
-
-    const all = await repository.findAll();
-
-    expect(Array.isArray(all)).toBe(true);
-    expect(all.some((emergency) => emergency.id === input.id)).toBe(true);
-  });
-
   it('actualiza el estado y registra el historial de forma atómica', async () => {
     const input = buildEmergency();
     await repository.create(input);
@@ -433,9 +428,11 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
       action: 'emergency:read',
     });
 
-    const audit = await repository.findAccessAuditByEmergencyId(input.id);
-    expect(audit).toHaveLength(1);
-    expect(audit[0].actorSub).toBe('U000999');
+    const audit = await getPool().query(
+      'SELECT actor_sub, action FROM emergency_access_audit WHERE emergency_id = $1',
+      [input.id]
+    );
+    expect(audit.rows).toEqual([{ actor_sub: 'U000999', action: 'emergency:read' }]);
 
     await getPool().query(
       `UPDATE emergencies SET closed_at = now() - interval '100 hours' WHERE id = $1`,
@@ -449,6 +446,186 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(found.latitude).toBeNull();
     expect(found.longitude).toBeNull();
     expect(found.locationAnonymized).toBe(true);
+  });
+
+  // El outbox guarda el payload de cada evento más allá de las 72 h (los
+  // PUBLISHED hasta su purga; SKIPPED, FAILED y PENDING sin plazo). Al
+  // anonimizar una emergencia no puede quedar ahí ninguna coordenada suya: ni
+  // la exacta cifrada (data.ubicacion) ni la aproximada en claro de la raíz
+  // (data.latitud / data.longitud, desde el #92).
+  describe('retención: coordenadas en los payloads del outbox', () => {
+    const TOPIC = `test.retencion.outbox.${randomUUID().slice(0, 8)}`;
+    // Clave solo de este test: hace falta una para que el builder real cifre.
+    const busCrypto = createBusLocationCrypto({
+      keys: { bus1: Buffer.alloc(32, 9).toString('base64') },
+      activeKeyId: 'bus1',
+    });
+
+    afterEach(async () => {
+      await getPool().query('DELETE FROM outbox_events WHERE topic = $1', [TOPIC]);
+    });
+
+    // build recibe el id de la fila, que es el eventId del payload.
+    async function insertOutboxRow(build, status) {
+      const id = randomUUID();
+      const payload = build(id);
+      await getPool().query(
+        `INSERT INTO outbox_events (id, topic, payload, status) VALUES ($1, $2, $3::jsonb, $4)`,
+        [id, TOPIC, JSON.stringify(payload), status]
+      );
+      // Ida y vuelta por JSON: así se compara contra lo que devuelve Postgres.
+      return { id, payload: JSON.parse(JSON.stringify(payload)) };
+    }
+
+    async function payloadOf(id) {
+      const { rows } = await getPool().query('SELECT payload FROM outbox_events WHERE id = $1', [id]);
+      return rows[0].payload;
+    }
+
+    async function closeHoursAgo(emergencyId, hours) {
+      await getPool().query(
+        `UPDATE emergencies SET closed_at = now() - ($2::double precision * interval '1 hour') WHERE id = $1`,
+        [emergencyId, hours]
+      );
+    }
+
+    function withoutCoordinates(payload) {
+      return {
+        ...payload,
+        data: {
+          ...payload.data,
+          latitud: null,
+          longitud: null,
+          ubicacion: { ...payload.data.ubicacion, latitud: null, longitud: null },
+        },
+      };
+    }
+
+    it('pone en null las aproximadas de la raíz y las cifradas de ubicacion, conserva el barrio y no toca otra emergencia', async () => {
+      const expired = await repository.create(buildEmergency());
+      const recent = await repository.create(buildEmergency());
+      const closing = { previousStatus: 'RESOLVED', newStatus: 'CLOSED' };
+
+      const creada = await insertOutboxRow(
+        (eventId) => buildEmergencyCreatedEvent(expired, eventId, { busCrypto }),
+        'PUBLISHED'
+      );
+      const actualizada = await insertOutboxRow(
+        (eventId) => buildEmergencyUpdatedEvent(
+          { emergency: expired, history: closing, actor: 'U000999', reason: null, eventId },
+          { busCrypto }
+        ),
+        'SKIPPED'
+      );
+      // Sin clave de bus la exacta ya sale en null y solo viaja la aproximada.
+      const sinClaveDeBus = await insertOutboxRow(
+        (eventId) => buildEmergencyCreatedEvent(expired, eventId, { busCrypto: null }),
+        'FAILED'
+      );
+      const deOtraEmergencia = await insertOutboxRow(
+        (eventId) => buildEmergencyCreatedEvent(recent, eventId, { busCrypto }),
+        'PENDING'
+      );
+
+      // El punto de partida es el del contrato: número en la raíz, ciphertext anidado.
+      expect(expired.barrio).toEqual(expect.any(String));
+      for (const { payload } of [creada, actualizada, deOtraEmergencia]) {
+        expect(payload.data).toMatchObject({
+          latitud: -34.604,
+          longitud: -58.382,
+          ubicacion: { latitud: expect.any(String), longitud: expect.any(String) },
+        });
+      }
+      expect(sinClaveDeBus.payload.data).toMatchObject({
+        latitud: -34.604,
+        longitud: -58.382,
+        ubicacion: { latitud: null, longitud: null },
+      });
+
+      await closeHoursAgo(expired.id, 100);
+      await closeHoursAgo(recent.id, 1);
+
+      const result = await repository.anonymizeExpiredLocations(72);
+      expect(result.ids).toContain(expired.id);
+      expect(result.ids).not.toContain(recent.id);
+
+      for (const event of [creada, actualizada, sinClaveDeBus]) {
+        const after = await payloadOf(event.id);
+        expect(after.data.latitud).toBeNull();
+        expect(after.data.longitud).toBeNull();
+        expect(after.data.ubicacion.latitud).toBeNull();
+        expect(after.data.ubicacion.longitud).toBeNull();
+        expect(after.data.barrio).toBe(expired.barrio);
+        expect(after.data.ubicacion.barrio).toBe(expired.barrio);
+        // Nada más cambia en el payload.
+        expect(after).toEqual(withoutCoordinates(event.payload));
+      }
+
+      expect(await payloadOf(deOtraEmergencia.id)).toEqual(deOtraEmergencia.payload);
+    });
+
+    it('un payload sin data.ubicacion: limpia la raíz y no le crea ubicacion', async () => {
+      const expired = await repository.create(buildEmergency());
+      const sinUbicacion = await insertOutboxRow((eventId) => {
+        const event = buildEmergencyCreatedEvent(expired, eventId, { busCrypto });
+        delete event.data.ubicacion;
+        return event;
+      }, 'PUBLISHED');
+      expect(sinUbicacion.payload.data.latitud).toBe(-34.604);
+
+      await closeHoursAgo(expired.id, 100);
+      await repository.anonymizeExpiredLocations(72);
+
+      const after = await payloadOf(sinUbicacion.id);
+      expect(after).toEqual({
+        ...sinUbicacion.payload,
+        data: { ...sinUbicacion.payload.data, latitud: null, longitud: null },
+      });
+      expect(after.data).not.toHaveProperty('ubicacion');
+    });
+
+    it('no agrega claves a payloads anteriores al #92 ni toca los que no llevan coordenadas', async () => {
+      const expired = await repository.create(buildEmergency());
+
+      // #82 a #92: coordenadas cifradas en ubicacion, sin latitud/longitud en la raíz.
+      const sinRaiz = await insertOutboxRow((eventId) => {
+        const event = buildEmergencyCreatedEvent(expired, eventId, { busCrypto });
+        delete event.data.latitud;
+        delete event.data.longitud;
+        return event;
+      }, 'SKIPPED');
+      // Antes del #82: latitud/longitud null en la raíz y ubicacion solo con barrio.
+      const soloBarrio = await insertOutboxRow((eventId) => {
+        const event = buildEmergencyCreatedEvent(expired, eventId, { busCrypto: null });
+        event.data.latitud = null;
+        event.data.longitud = null;
+        event.data.ubicacion = { barrio: expired.barrio };
+        return event;
+      }, 'SKIPPED');
+      const priorizada = await insertOutboxRow((eventId) => buildEmergencyPrioritizedEvent({
+        emergencyId: expired.id,
+        correlationId: expired.id,
+        incidentId: randomUUID(),
+        priorityIndividual: 'critical',
+        incidentPriority: 'critical',
+        priority: 'critical',
+        score: 90,
+        reasonCodes: ['TEST'],
+        algorithmVersion: 'test',
+        eventId,
+      }), 'SKIPPED');
+
+      await closeHoursAgo(expired.id, 100);
+      await repository.anonymizeExpiredLocations(72);
+
+      const afterSinRaiz = await payloadOf(sinRaiz.id);
+      expect(afterSinRaiz.data.ubicacion).toEqual({ barrio: expired.barrio, latitud: null, longitud: null });
+      expect(afterSinRaiz.data).not.toHaveProperty('latitud');
+      expect(afterSinRaiz.data).not.toHaveProperty('longitud');
+
+      expect(await payloadOf(soloBarrio.id)).toEqual(soloBarrio.payload);
+      expect(await payloadOf(priorizada.id)).toEqual(priorizada.payload);
+    });
   });
 
   it('findPage devuelve latitude/longitude desencriptadas, no null', async () => {
@@ -470,6 +647,62 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
     expect(found.longitude).not.toBeNull();
     expect(Number(found.latitude)).toBeCloseTo(input.latitude);
     expect(Number(found.longitude)).toBeCloseTo(input.longitude);
+  });
+
+  describe('findPage: orden determinístico entre filas empatadas', () => {
+    const MISMO_INSTANTE = '2026-11-10T15:00:00.000Z';
+    let userId;
+    let idsAscendentes;
+
+    // Seis emergencias del mismo usuario, misma severity y mismo created_at:
+    // lo único que las distingue es el id. Se insertan de mayor a menor id
+    // para que el orden físico de la tabla sea el contrario al esperado.
+    beforeEach(async () => {
+      userId = `user-empate-${randomUUID()}`;
+      idsAscendentes = Array.from({ length: 6 }, () => randomUUID()).sort();
+      for (const id of [...idsAscendentes].reverse()) {
+        await repository.create(buildEmergency({ id, userId, severity: 'high' }));
+      }
+      await getPool().query(
+        'UPDATE emergencies SET created_at = $1 WHERE user_id = $2',
+        [MISMO_INSTANTE, userId]
+      );
+    });
+
+    async function recorrerPaginas({ sortBy, order }) {
+      const ids = [];
+      let total;
+      for (let page = 1; page <= 3; page += 1) {
+        const result = await repository.findPage({ userId, statuses: [], page, limit: 2, sortBy, order });
+        ids.push(...result.emergencies.map((emergency) => emergency.id));
+        total = result.total;
+      }
+      return { ids, total };
+    }
+
+    it.each([
+      ['createdAt', 'desc'],
+      ['createdAt', 'asc'],
+      ['priority', 'desc'],
+      ['priority', 'asc'],
+    ])('sortBy=%s order=%s: desempata por id y ninguna fila se repite ni falta al paginar', async (sortBy, order) => {
+      const { ids, total } = await recorrerPaginas({ sortBy, order });
+
+      expect(total).toBe(6);
+      expect(ids).toEqual(idsAscendentes);
+    });
+
+    it('el desempate no pisa el criterio principal: created_at sigue mandando', async () => {
+      const [masNueva] = idsAscendentes.slice(-1);
+      await getPool().query(
+        "UPDATE emergencies SET created_at = $1::timestamptz + interval '1 minute' WHERE id = $2",
+        [MISMO_INSTANTE, masNueva]
+      );
+
+      const { ids } = await recorrerPaginas({ sortBy: 'createdAt', order: 'desc' });
+
+      expect(ids).toEqual([masNueva, ...idsAscendentes.slice(0, -1)]);
+    });
   });
 
   it('una fila con ciphertext indescifrable no tumba el listado y se puede sanear', async () => {

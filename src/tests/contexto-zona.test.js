@@ -433,24 +433,12 @@ describe('ContextoZonaRepository', () => {
     expect(values).toEqual([row.tipo, row.origen, row.referencia_externa, null, row.source_updated_at]);
   });
 
-  it('darDeBaja y findByReferencia usan el pool si no hay executor', async () => {
+  it('darDeBaja usa el pool si no hay executor', async () => {
     const pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
     const repository = new ContextoZonaRepository(pool);
     const referencia = { tipo: row.tipo, origen: row.origen, referenciaExterna: row.referencia_externa };
 
     await expect(repository.darDeBaja(null, referencia)).resolves.toBeNull();
-    await expect(repository.findByReferencia(null, referencia)).resolves.toBeNull();
-    expect(pool.query).toHaveBeenCalledTimes(2);
-  });
-
-  it('findByReferencia busca por tipo, origen y referencia', async () => {
-    const executor = { query: jest.fn().mockResolvedValue({ rows: [row] }) };
-    const repository = new ContextoZonaRepository({ query: jest.fn() });
-
-    const result = await repository.findByReferencia(executor, {
-      tipo: row.tipo, origen: row.origen, referenciaExterna: row.referencia_externa,
-    });
-    expect(result.referenciaExterna).toBe('ev-1');
-    expect(executor.query.mock.calls[0][1]).toEqual([row.tipo, row.origen, row.referencia_externa]);
+    expect(pool.query).toHaveBeenCalledTimes(1);
   });
 });

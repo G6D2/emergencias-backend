@@ -17,6 +17,7 @@ const { EventosProcesadosRepository } = require('../../repositories/eventos-proc
 const { OutcomeFactory } = require('../../listeners/outcome-factory');
 const { createEventDecoder, registryFromEnv, MAGIC_BYTE } = require('../../listeners/event-decoder');
 const { EventoComunitarioPublicadoListener } = require('../../listeners/cobertura-preventiva/evento-comunitario-publicado/evento-comunitario-publicado.listener');
+const { ActividadCreadaListener } = require('../../listeners/cobertura-preventiva/actividad-creada/actividad-creada.listener');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler } = require('../../listeners/cobertura-preventiva/handlers/contexto-zona.handler');
 const { ContextoZonaRepository } = require('../../repositories/contexto-zona.repository');
@@ -28,6 +29,8 @@ const CREATED_TOPIC = 'test.avro.emergencias.creada';
 const SCHEMA_ID_OK = 4711;
 const SCHEMA_ID_NOT_FOUND = 4040;
 const SCHEMA_ID_UNAVAILABLE = 5030;
+// schemaId real de ActividadCreada.v3 en el registry del gateway.
+const SCHEMA_ID_ACTIVIDAD_V3 = 91;
 
 const EVENTO_COMUNITARIO_PUBLICADO_SCHEMA = {
   type: 'record',
@@ -66,13 +69,78 @@ const EVENTO_COMUNITARIO_PUBLICADO_SCHEMA = {
   ],
 };
 
+// ActividadCreada.v3: el record `data` es el que registra Espacios en
+// scripts/register-event-types.ts (copiado tal cual, namespace
+// com.citypass.espacios; correlationId, actorSub y categoria son uniones con
+// null, el resto obligatorio, fechas long/timestamp-millis). El sobre con
+// metadata es el mismo que usa el resto de esta suite.
+const ACTIVIDAD_CREADA_V3_DATA = {
+  type: 'record',
+  name: 'ActividadCreada',
+  namespace: 'com.citypass.espacios',
+  fields: [
+    { name: 'correlationId', type: ['null', 'string'], default: null },
+    { name: 'actividadId', type: 'string' },
+    { name: 'titulo', type: 'string' },
+    { name: 'estado', type: 'string' },
+    { name: 'capacidad', type: 'int' },
+    { name: 'fechaHoraInicio', type: { type: 'long', logicalType: 'timestamp-millis' } },
+    { name: 'fechaHoraFinalizacion', type: { type: 'long', logicalType: 'timestamp-millis' } },
+    {
+      name: 'ubicacion',
+      type: {
+        type: 'record',
+        name: 'Ubicacion',
+        fields: [
+          { name: 'lat', type: 'double' },
+          { name: 'lng', type: 'double' },
+        ],
+      },
+    },
+    { name: 'direccion', type: 'string' },
+    { name: 'espacioNombre', type: 'string' },
+    { name: 'actorSub', type: ['null', 'string'], default: null },
+    { name: 'categoria', type: ['null', 'string'], default: null },
+    { name: 'organizadorTipo', type: 'string' },
+  ],
+};
+
+const ACTIVIDAD_CREADA_V3_SCHEMA = {
+  type: 'record',
+  name: 'ActividadCreadaEnvelope',
+  namespace: 'com.citypass.espacios',
+  fields: [
+    {
+      name: 'metadata',
+      type: {
+        type: 'record',
+        name: 'Metadata',
+        fields: [
+          { name: 'eventId', type: 'string' },
+          { name: 'eventType', type: 'string' },
+          { name: 'source', type: 'string' },
+        ],
+      },
+    },
+    { name: 'data', type: ACTIVIDAD_CREADA_V3_DATA },
+  ],
+};
+
 const avroType = avro.Type.forSchema(EVENTO_COMUNITARIO_PUBLICADO_SCHEMA);
+const actividadAvroType = avro.Type.forSchema(ACTIVIDAD_CREADA_V3_SCHEMA);
 
 function confluentMessage(schemaId, event) {
   const header = Buffer.alloc(5);
   header.writeUInt8(MAGIC_BYTE, 0);
   header.writeInt32BE(schemaId, 1);
   return { value: Buffer.concat([header, avroType.toBuffer(event)]) };
+}
+
+function confluentActividadMessage(event) {
+  const header = Buffer.alloc(5);
+  header.writeUInt8(MAGIC_BYTE, 0);
+  header.writeInt32BE(SCHEMA_ID_ACTIVIDAD_V3, 1);
+  return { value: Buffer.concat([header, actividadAvroType.toBuffer(event)]) };
 }
 
 function fakeKafka() {
@@ -107,6 +175,32 @@ function publicado({ latitud = -34.5889, longitud = -58.3974 } = {}) {
   };
 }
 
+function actividadCreada(data = {}) {
+  const eventId = randomUUID();
+  const actividadId = `act-avro-${tag}-${usedEventoIds.length + 1}`;
+  usedEventIds.push(eventId);
+  usedEventoIds.push(actividadId);
+  return {
+    metadata: { eventId, eventType: 'com.citypass.espacios.ActividadCreada', source: 'grupo7' },
+    data: {
+      correlationId: `act-${actividadId}`,
+      actividadId,
+      titulo: 'Festival de Primavera',
+      estado: 'PROGRAMADA',
+      capacidad: 2000,
+      fechaHoraInicio: Date.now() + 60 * 60 * 1000,
+      fechaHoraFinalizacion: Date.now() + 3 * 60 * 60 * 1000,
+      ubicacion: { lat: -34.5862976, lng: -58.3925127 },
+      direccion: 'Junin 1930',
+      espacioNombre: 'Centro Cultural Recoleta',
+      actorSub: null,
+      categoria: null,
+      organizadorTipo: 'CIUDAD',
+      ...data,
+    },
+  };
+}
+
 let server;
 let registryUrl;
 const registryRequests = [];
@@ -128,6 +222,8 @@ beforeAll(async () => {
 
     if (req.method === 'GET' && id === SCHEMA_ID_OK) {
       sendJson(res, 200, { schema: JSON.stringify(EVENTO_COMUNITARIO_PUBLICADO_SCHEMA) });
+    } else if (req.method === 'GET' && id === SCHEMA_ID_ACTIVIDAD_V3) {
+      sendJson(res, 200, { schema: JSON.stringify(ACTIVIDAD_CREADA_V3_SCHEMA) });
     } else if (req.method === 'GET' && id === SCHEMA_ID_UNAVAILABLE) {
       sendJson(res, 503, { error_code: 50301, message: 'Registry no disponible' });
     } else {
@@ -166,6 +262,13 @@ function createListener() {
   factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository: new ContextoZonaRepository(pool) }));
   const decoder = createEventDecoder({ registry: registryFromEnv({ EDA_SCHEMA_REGISTRY_URL: registryUrl }) });
   return new EventoComunitarioPublicadoListener(fakeKafka(), { factory, decoder });
+}
+
+function createActividadListener() {
+  const factory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
+  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
+  const decoder = createEventDecoder({ registry: registryFromEnv({ EDA_SCHEMA_REGISTRY_URL: registryUrl }) });
+  return new ActividadCreadaListener(fakeKafka(), { factory, decoder });
 }
 
 async function coberturasDe(eventoId) {
@@ -255,5 +358,69 @@ describe('consumer con Avro en formato Confluent (registry HTTP local)', () => {
     expect(registryRequests).toContain(`GET /schemas/ids/${SCHEMA_ID_UNAVAILABLE}`);
     expect(await coberturasDe(event.data.eventoId)).toHaveLength(0);
     expect(await eventosProcesadosRepo.findById(event.metadata.eventId)).toBeNull();
+  });
+
+  describe('ActividadCreada.v3 (schema real de Espacios, schemaId 91)', () => {
+    it('decodifica el Avro, programa la cobertura PREVENTIVA con las coordenadas y registra el evento', async () => {
+      const event = actividadCreada();
+      const message = confluentActividadMessage(event);
+      expect(message.value.readInt32BE(1)).toBe(SCHEMA_ID_ACTIVIDAD_V3);
+
+      const outcomes = await createActividadListener().onMessage(message);
+
+      expect(registryRequests).toContain(`GET /schemas/ids/${SCHEMA_ID_ACTIVIDAD_V3}`);
+      expect(outcomes.map((outcome) => outcome.type)).toEqual([PROGRAMAR_COBERTURA]);
+
+      const rows = await coberturasDe(event.data.actividadId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        status: 'PENDING',
+        emergency_type: 'PREVENTIVA',
+        source: 'EXTERNAL',
+        causa_tipo: 'EVENTO_PUBLICO',
+        causa_id: event.data.actividadId,
+        requires_manual_validation: false,
+      });
+      const emergency = await emergencyRepository.findById(rows[0].id);
+      expect(emergency.latitude).toBeCloseTo(event.data.ubicacion.lat, 6);
+      expect(emergency.longitude).toBeCloseTo(event.data.ubicacion.lng, 6);
+      expect(emergency.address).toBe('Junin 1930');
+      expect(await eventosProcesadosRepo.findById(event.metadata.eventId)).toMatchObject({ status: 'PROCESSED' });
+    });
+
+    it('el mismo actividadId en otro evento no duplica la cobertura', async () => {
+      const event = actividadCreada();
+      const repetido = { ...event, metadata: { ...event.metadata, eventId: randomUUID() } };
+      usedEventIds.push(repetido.metadata.eventId);
+
+      await createActividadListener().onMessage(confluentActividadMessage(event));
+      await createActividadListener().onMessage(confluentActividadMessage(repetido));
+
+      expect(await coberturasDe(event.data.actividadId)).toHaveLength(1);
+    });
+
+    it('una actividad que ya terminó no genera cobertura', async () => {
+      const event = actividadCreada({ fechaHoraFinalizacion: Date.now() - 60 * 60 * 1000 });
+
+      await createActividadListener().onMessage(confluentActividadMessage(event));
+
+      expect(await coberturasDe(event.data.actividadId)).toHaveLength(0);
+    });
+
+    it('una reserva de ciudadano no genera cobertura', async () => {
+      const event = actividadCreada({ organizadorTipo: 'CIUDADANO' });
+
+      await createActividadListener().onMessage(confluentActividadMessage(event));
+
+      expect(await coberturasDe(event.data.actividadId)).toHaveLength(0);
+    });
+
+    it('por debajo del umbral no genera cobertura', async () => {
+      const event = actividadCreada({ capacidad: 300 });
+
+      await createActividadListener().onMessage(confluentActividadMessage(event));
+
+      expect(await coberturasDe(event.data.actividadId)).toHaveLength(0);
+    });
   });
 });
