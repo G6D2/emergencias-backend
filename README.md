@@ -166,10 +166,8 @@ Con `DEV_LOGIN_STRICT=true`, `POST /auth/dev/login` solo emite tokens para estos
 | `sub` | Grupo |
 |---|---|
 | `U000042`, `CIT-JuanPanico`, `CIT-LuciaTranquila` | `citizen` (solo `CIT-JuanPanico` tiene botón antipánico) |
-| `DISP-Demo001` | `dispatcher` |
-| `of-001`, `of-002` | `officer` (el `sub` es el id del catálogo de oficiales) |
 
-Cualquiera que conozca esos `sub` puede pedir un token, incluido el de dispatcher: sirve para una demo de clase, no para un entorno abierto.
+Cualquiera que conozca esos `sub` puede pedir un token, así que la lista tiene solo ciudadanos. Dispatchers y oficiales entran por el Login Federado; los oficiales se vinculan al catálogo con `IDP_SUB_ALIASES`. Hasta el 16/11/2026 la lista incluía `DISP-Demo001`, `of-001` y `of-002`, y cualquiera podía sacar un token de dispatcher sin contraseña. Fuera del modo estricto (dev y tests) se sigue pudiendo pedir `dispatcher` u `officer` con un `sub` libre.
 
 Qué cambia con `NODE_ENV=production`: con `AUTH_MODE=local` el server no arranca sin `ALLOW_LOCAL_AUTH=true` (con `hybrid` no hace falta), se prenden HSTS + redirect a HTTPS, `DEV_LOGIN_STRICT` pasa a ser `true` por default y, si falta `CORS_ALLOWED_ORIGINS`, CORS cae al frontend de Render con un `warn`. Fuera de `production`, sin `CORS_ALLOWED_ORIGINS` el default es `http://localhost:3001`; por eso producción la tiene seteada.
 
@@ -337,7 +335,7 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 
 Una ruta o método que no existe responde **404** en JSON (`{ "error": "NotFoundError", "message": "Cannot GET /..." }`).
 
-En dev login sin modo estricto podés probar groups distintos:
+En dev login sin modo estricto (local, nunca en producción) podés probar groups distintos:
 ```json
 { "sub": "U000042", "groups": ["citizen"] }
 { "sub": "U000999", "groups": ["dispatcher"] }
@@ -599,7 +597,7 @@ Cancela una emergencia propia en estado `PENDING` o `VALIDATED`. Requiere grupo 
 
 ### GET `/api/officers`
 
-Catálogo de oficiales para el dispatcher (`?status=disponible` u `ocupado`, opcional; otro valor responde 400). El catálogo vive en la tabla `officers` (V11); los oficiales se loguean con su id como `sub` (`of-001`, `of-002` en el dev login).
+Catálogo de oficiales para el dispatcher (`?status=disponible` u `ocupado`, opcional; otro valor responde 400). El catálogo vive en la tabla `officers` (V11); los oficiales se loguean con su id como `sub` (`of-001`, `of-002` en el dev login local; en producción, por el Login Federado con `IDP_SUB_ALIASES`).
 
 ### GET `/api/incidents` y `/api/incidents/:id`
 

@@ -78,7 +78,7 @@ flowchart TB
 ## Fuente en el código
 
 - `src/auth/groups.js` (`citizen`, `dispatcher`, `officer`), `src/auth/dev-login-policy.js`
-  (subs demo, incluidos `of-001` y `of-002`)
+  (subs demo de ciudadano; en modo estricto no emite dispatcher ni officer)
 - `src/auth/setup.js`, `src/auth/config.js` (`AUTH_MODE=hybrid` en producción desde el 12/11/2026)
 - `src/services/kafka.service.js`, `src/services/eda-auth-client.js`,
   `src/services/outbox-publisher.js`, `src/listeners/`, `render.yaml`
