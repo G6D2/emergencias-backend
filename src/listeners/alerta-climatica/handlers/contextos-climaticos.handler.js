@@ -30,7 +30,7 @@ function createRegistrarContextosClimaticosHandler({ contextoZonaRepository }) {
     if (!Array.isArray(ubicaciones) || ubicaciones.length === 0) {
       throw new ValidationError('RegistrarContextosClimaticos requiere al menos una ubicación');
     }
-    if (!(radioMetros > 0) || !vigenteDesde || !vigenteHasta) {
+    if (!Number.isFinite(radioMetros) || radioMetros <= 0 || !vigenteDesde || !vigenteHasta) {
       throw new ValidationError('RegistrarContextosClimaticos requiere radioMetros, vigenteDesde y vigenteHasta');
     }
 

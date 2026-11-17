@@ -1,4 +1,4 @@
-const { randomUUID } = require('crypto');
+const { randomUUID } = require('node:crypto');
 const { ValidationError } = require('../../../errors/app-errors');
 const { secureLog } = require('../../../security/secure-log');
 const { buildEmergencyCreatedEvent, buildEmergencyUpdatedEvent } = require('../../../services/emergency-events');

@@ -45,7 +45,7 @@ const RADIO_CLIMA_DEFAULT_METROS = Object.freeze({
 });
 
 function politicaDelNivel(nivel) {
-  return Object.prototype.hasOwnProperty.call(POLITICA_POR_NIVEL, nivel) ? POLITICA_POR_NIVEL[nivel] : null;
+  return typeof nivel === 'string' && Object.hasOwn(POLITICA_POR_NIVEL, nivel) ? POLITICA_POR_NIVEL[nivel] : null;
 }
 
 // ALTA y CRITICA (ya normalizados). BAJA, MEDIA o cualquier otro valor, no.
@@ -81,7 +81,7 @@ function alertaIdValido(alertaId) {
 // TORMENTA_FUERTE → "tormenta fuerte", para las descripciones.
 function fenomenoLegible(fenomeno) {
   return typeof fenomeno === 'string' && fenomeno.trim()
-    ? fenomeno.trim().replace(/_/g, ' ').toLowerCase()
+    ? fenomeno.trim().replaceAll('_', ' ').toLowerCase()
     : 'evento climático';
 }
 

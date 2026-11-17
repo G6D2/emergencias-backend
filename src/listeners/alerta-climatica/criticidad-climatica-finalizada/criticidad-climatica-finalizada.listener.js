@@ -1,4 +1,4 @@
-const path = require('path');
+const path = require('node:path');
 const { EventListener } = require('../../event-listener');
 
 // CriticidadClimaticaFinalizada (Espacios Públicos): la alerta venció o se
