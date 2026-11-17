@@ -20,8 +20,12 @@ const { secureLog } = require('../security/secure-log');
 // TRANSITO nace de un reclamo de tránsito (listener reclamo-intervencion), que
 // Reclamos siempre publica con afectaCirculacion = true: derivarlo del tipo da
 // el mismo valor.
+// PREVENTIVA salió del set el 17/11 (decisión Juani): la cobertura se crea
+// cuando se programa, a veces días antes del evento, y no corta ninguna calle.
+// Con true, Residuos bloqueaba zonas y Reclamos escalaba el barrio desde ese
+// momento (auditoría de integraciones del 17/11).
 const AFECTA_CIRCULACION = new Set([
-  'INCENDIO', 'INFRAESTRUCTURA', 'DISTURBIO_EVENTO_MASIVO', 'PREVENTIVA', 'TRANSITO',
+  'INCENDIO', 'INFRAESTRUCTURA', 'DISTURBIO_EVENTO_MASIVO', 'TRANSITO',
 ]);
 
 const SEVERITY_TO_PRIORIDAD = {

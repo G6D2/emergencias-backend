@@ -856,7 +856,7 @@ components:
               description: Igual que `latitud`. La versión aproximada en claro va en la raíz de `data`.
         afectaCirculacion:
           type: [boolean, 'null']
-          description: Derivado de `categoria`. true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, PREVENTIVA y TRANSITO; false para MEDICA, PANICO y OTRO; null sin categoría.
+          description: Derivado de `categoria`. true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y TRANSITO; false para MEDICA, PANICO, OTRO y PREVENTIVA (una cobertura programada no corta la calle, desde el 17/11/2026); null sin categoría.
         causaId:
           type: [string, 'null']
         causaTipo:
