@@ -1043,7 +1043,7 @@ describe('EmergencyRepository.updateStatus: estado de origen, closed_at y oficia
     const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
 
     await expect(repo.updateStatus('e-1', { newStatus: 'VALIDATED', requireStatus: 'PENDING' }))
-      .rejects.toThrow(new ConflictError('Emergency e-1 is DISPATCHED, expected PENDING'));
+      .rejects.toThrow(new ConflictError('La emergencia e-1 está en DISPATCHED, se esperaba PENDING'));
 
     expect(client.calls.some((c) => c.sql.startsWith('UPDATE emergencies'))).toBe(false);
     expect(client.calls.some((c) => c.sql.includes('officers'))).toBe(false);
@@ -1639,7 +1639,7 @@ describe('EmergencyRepository.updateStatus con expiration', () => {
     const repo = (status) => new EmergencyRepository(createPool({ client: clientIn(status) }), { locationCrypto: fakeCrypto });
 
     await expect(repo('RESOLVED').updateStatus('e-1', { newStatus: 'CANCELLED', expiration: true }))
-      .rejects.toThrow('cannot expire to CANCELLED');
+      .rejects.toThrow('no puede expirar a CANCELLED');
     await expect(repo('CLOSED').updateStatus('e-1', { newStatus: 'CANCELLED', expiration: true }))
       .rejects.toThrow(ConflictError);
     await expect(repo('PENDING').updateStatus('e-1', { newStatus: 'VALIDATED', expiration: true }))

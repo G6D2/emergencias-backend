@@ -100,7 +100,7 @@ describe('GET /api/officers', () => {
     ]) {
       const response = await request(app).get(url).expect(400);
       expect(response.body.error).toBe('ValidationError');
-      expect(response.body.message).toBe('status must be one of: disponible, ocupado');
+      expect(response.body.message).toBe('status tiene que ser uno de: disponible, ocupado');
     }
     expect(findAll).not.toHaveBeenCalled();
   });
@@ -144,11 +144,11 @@ describe('PATCH /api/emergencies/:id/assign', () => {
       findById: async (id) => emergencies.get(id) || null,
       assignOfficer: async (id, { officerId, actor, outboxEvent }) => {
         const emergency = emergencies.get(id);
-        if (!emergency) throw new NotFoundError(`Emergency with ID ${id} not found`);
+        if (!emergency) throw new NotFoundError(`No se encontró la emergencia ${id}`);
         const officer = officers.get(officerId);
-        if (!officer) throw new NotFoundError(`Officer with ID ${officerId} not found`);
+        if (!officer) throw new NotFoundError(`No se encontró el oficial ${officerId}`);
         if (officer.status !== 'disponible') {
-          throw new ConflictError(`Officer ${officerId} is not available`);
+          throw new ConflictError(`El oficial ${officerId} no está disponible`);
         }
         officer.status = 'ocupado';
         const updated = {
@@ -228,7 +228,7 @@ describe('PATCH /api/emergencies/:id/assign', () => {
       .send({ officerId: 'of-busy' })
       .expect(409);
 
-    expect(response.body.message).toMatch(/not available/i);
+    expect(response.body.message).toMatch(/no está disponible/i);
   });
 
   it('returns 409 when emergency is not VALIDATED', async () => {

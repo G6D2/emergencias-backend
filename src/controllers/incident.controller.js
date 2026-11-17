@@ -25,11 +25,11 @@ class IncidentController {
   }
 
   async getIncidentDetail(id) {
-    assertUuid(id, 'Incident id must be a valid UUID');
+    assertUuid(id, 'El id del incidente tiene que ser un UUID válido');
 
     const incident = await this.incidentRepository.findByIdWithMembers(id);
     if (!incident) {
-      throw new NotFoundError(`Incident with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró el incidente ${id}`);
     }
 
     return { success: true, data: incident };

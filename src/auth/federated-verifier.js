@@ -9,7 +9,7 @@ function readGroups(value) {
   if (value === undefined) return [];
   if (typeof value === 'string') return [value];
   if (Array.isArray(value)) return value.filter((g) => typeof g === 'string');
-  throw new UnauthorizedError('Invalid groups claim');
+  throw new UnauthorizedError('Claim de grupos del token inválido');
 }
 
 /**
@@ -50,20 +50,20 @@ function createFederatedVerifier(config, keySet) {
     } catch (error) {
       // Acá cae también un JWKS remoto que no responde: ver token-rejection-log.js.
       logTokenRejection('federated', error);
-      throw new UnauthorizedError('Invalid or expired token');
+      throw new UnauthorizedError('Token inválido o vencido');
     }
 
     if (payload.token_use !== undefined && payload.token_use !== config.tokenUse) {
-      throw new UnauthorizedError('Invalid token_use');
+      throw new UnauthorizedError('Claim token_use del token inválido');
     }
 
     if (payload.ver !== undefined && payload.ver !== config.tokenVer) {
-      throw new UnauthorizedError('Unsupported token version');
+      throw new UnauthorizedError('Versión del token no soportada');
     }
 
     const sub = payload[config.subjectClaim];
     if (typeof sub !== 'string' || sub.trim().length === 0) {
-      throw new UnauthorizedError('Invalid token subject');
+      throw new UnauthorizedError('Sujeto (sub) del token inválido');
     }
 
     const idpGroups = readGroups(payload[config.groupsClaim]);

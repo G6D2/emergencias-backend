@@ -16,7 +16,7 @@ const { createFakeFederatedIdp, generatePkcs8Pem, HYBRID_AUTH_ENV } = require('.
 const ISSUER = 'https://idp.citypass.local';
 const AUDIENCE = 'citypass-emergencias-api';
 const SUB = 'U000777';
-const REJECTED_BODY = { error: 'UnauthorizedError', message: 'Invalid or expired token' };
+const REJECTED_BODY = { error: 'UnauthorizedError', message: 'Token inválido o vencido' };
 
 const baseConfig = {
   issuer: ISSUER,
@@ -119,7 +119,7 @@ describe('verifier de tokens locales (jwt-verifier)', () => {
     const rejection = await verifyAccessToken(token).catch((error) => error);
 
     expect(rejection).toBeInstanceOf(UnauthorizedError);
-    expect(rejection.message).toBe('Invalid or expired token');
+    expect(rejection.message).toBe('Token inválido o vencido');
     expect(rejections()).toEqual([{ verifier: 'local', code: 'ERR_JWT_EXPIRED', name: 'JWTExpired' }]);
     expectNoTokenInLogs(token);
   });
@@ -173,7 +173,7 @@ describe('verifier de tokens locales (jwt-verifier)', () => {
       const rejection = await verifyAccessToken(token).catch((error) => error);
 
       expect(rejection).toBeInstanceOf(UnauthorizedError);
-      expect(rejection.message).toBe('Invalid or expired token');
+      expect(rejection.message).toBe('Token inválido o vencido');
       expect(rejections()).toEqual([{ verifier: 'idp', code: 'ERR_JOSE_GENERIC', name: 'JOSEError' }]);
       expectNoTokenInLogs(token);
     });
@@ -284,14 +284,14 @@ describe('middleware authenticate', () => {
     const authenticate = createAuthenticateMiddleware({
       config: baseConfig,
       verifyAccessToken: async () => {
-        throw new UnauthorizedError('Invalid token_use');
+        throw new UnauthorizedError('Claim token_use del token inválido');
       },
     });
     const app = createApp(mockKafka, mockRepo, { authenticate });
 
     const res = await me(app, 'cualquier-cosa').expect(401);
 
-    expect(res.body).toEqual({ error: 'UnauthorizedError', message: 'Invalid token_use' });
+    expect(res.body).toEqual({ error: 'UnauthorizedError', message: 'Claim token_use del token inválido' });
     expect(rejections()).toEqual([]);
   });
 });

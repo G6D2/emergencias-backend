@@ -14,7 +14,7 @@ class OfficerController {
     const raw = typeof query.status === 'string' ? query.status.trim() : query.status;
     const status = raw === undefined || raw === '' ? undefined : raw;
     if (status !== undefined && !OFFICER_STATUSES.includes(status)) {
-      throw new ValidationError(`status must be one of: ${OFFICER_STATUSES.join(', ')}`);
+      throw new ValidationError(`status tiene que ser uno de: ${OFFICER_STATUSES.join(', ')}`);
     }
     const officers = await this.officerRepository.findAll({ status });
     return { data: officers };

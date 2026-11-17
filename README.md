@@ -280,7 +280,7 @@ IDP_AUDIENCE=citypass-emergencias-api
 IDP_JWKS_URI=https://api.citypass-login.pp.ua/.well-known/jwks.json
 ```
 
-Para volver atrás alcanza con `AUTH_MODE=local`. Para saber desde afuera en qué modo corre, sin credenciales: un JWT con un `iss` cualquiera recibe `401 Unknown token issuer` en `hybrid` y `401 Invalid or expired token` en `local`.
+Para volver atrás alcanza con `AUTH_MODE=local`. Para saber desde afuera en qué modo corre, sin credenciales: un JWT con un `iss` cualquiera recibe `401 Emisor del token desconocido` en `hybrid` y `401 Token inválido o vencido` en `local`.
 
 **Confirmado con un token real el 12/11/2026** (se decodificó solo el payload): `iss` = `https://idp.citypass.local`; `aud` = `citypass-emergencias-api` (string); el usuario va en `sub` (por ejemplo `U000014`); vienen `token_use: "human"`, `ver: 1` y `module: "emergencias"`; el token dura 15 minutos. El dispatcher de prueba trae `groups: ["dispatcher"]`, que ya está en el mapa por default, y el delegado `groups: ["delegados"]`. Con eso `GET /api/user` devuelve `authSource: "federated"` y el rol `dispatcher`. Los oficiales LDAP traen el grupo `poli`, que ya está en el mapa por default; el primero (`jefe.gorgory`, `sub` `U000025`) entra como `of-001` gracias a `IDP_SUB_ALIASES` (desde el 16/11/2026). **Falta**: implementar el ADR "Vincular los oficiales del LDAP al catálogo de oficiales" (el vínculo pasa a la tabla `officers` y deja de ser una variable de entorno) y decidir si se prenden `IDP_REQUIRE_TOKEN_USE` e `IDP_REQUIRE_TOKEN_VER`. El contrato de referencia es la guía de integración del Grupo 2 (`docs/externo/GRUPO-2-AUTENTICACION.md` del repo `carlos-illobre/citypass-event-gateway`).
 
@@ -332,7 +332,7 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 | `GET /api/outbox-events` | `dispatcher` | estado de los eventos sin payload; filtros `status`, `topic`, `page`, `limit` (máx. 100) |
 | `GET /api/contextos-zona/activos` | `dispatcher` | alertas climáticas activas o por empezar, una por alerta (banner del tablero) |
 
-Una ruta o método que no existe responde **404** en JSON (`{ "error": "NotFoundError", "message": "Cannot GET /..." }`).
+Una ruta o método que no existe responde **404** en JSON (`{ "error": "NotFoundError", "message": "No existe la ruta GET /..." }`).
 
 En dev login sin modo estricto (local, nunca en producción) podés probar groups distintos:
 ```json
@@ -399,7 +399,7 @@ No se loguean JWT ni coordenadas. Los eventos se loguean solo como resumen (`top
 
 `LOG_LEVEL` fija el nivel mínimo que se escribe: `debug`, `info`, `warn` o `error`. Por defecto es `info` (los mensajes de `debug` no salen) y un valor inválido también cae a `info`.
 
-Un token que no pasa la verificación (firma, vencimiento, `iss` o `aud` que no coinciden, un texto que no es un JWT, o una falla inesperada del verifier) responde `401 Invalid or expired token`, sin contarle la causa al cliente. Los demás rechazos tienen su propio mensaje, siempre con 401: sin header, `Missing Authorization header`; header mal formado, `Invalid Authorization header`; en `AUTH_MODE=hybrid`, un `iss` que no es ni el local ni el del Login Federado, `Unknown token issuer`; y un token bien firmado con claims fuera de contrato, `Invalid token_use`, `Unsupported token version`, `Invalid token subject`, `Invalid groups claim` o `Invalid token audience`. Solo los del primer grupo dejan un `warn` `Token rechazado` con quién lo rechazó (`verifier`: `local`, `federated`, `idp`, `hybrid` o `authenticate`) y el `code` y `name` del error, sin el token ni sus claims. `ERR_JWT_EXPIRED` es un token vencido. Con `verifier: "federated"`, un `ERR_JWKS_TIMEOUT`, un `ERR_JOSE_GENERIC` o un código de red (`ECONNREFUSED`, `ENOTFOUND`) dicen que no se pudo leer el JWKS del Login Federado: el problema es del proveedor de identidad, no de los tokens.
+Un token que no pasa la verificación (firma, vencimiento, `iss` o `aud` que no coinciden, un texto que no es un JWT, o una falla inesperada del verifier) responde `401 Token inválido o vencido`, sin contarle la causa al cliente. Los demás rechazos tienen su propio mensaje, siempre con 401: sin header, `Falta el header Authorization`; header mal formado, `Header Authorization inválido`; en `AUTH_MODE=hybrid`, un `iss` que no es ni el local ni el del Login Federado, `Emisor del token desconocido`; y un token bien firmado con claims fuera de contrato, `Claim token_use del token inválido`, `Versión del token no soportada`, `Sujeto (sub) del token inválido`, `Claim de grupos del token inválido`, `Claim aud del token inválido` (un `aud` local que no es lista) o `Audiencia del token inválida`. Solo los del primer grupo dejan un `warn` `Token rechazado` con quién lo rechazó (`verifier`: `local`, `federated`, `idp`, `hybrid` o `authenticate`) y el `code` y `name` del error, sin el token ni sus claims. `ERR_JWT_EXPIRED` es un token vencido. Con `verifier: "federated"`, un `ERR_JWKS_TIMEOUT`, un `ERR_JOSE_GENERIC` o un código de red (`ECONNREFUSED`, `ENOTFOUND`) dicen que no se pudo leer el JWKS del Login Federado: el problema es del proveedor de identidad, no de los tokens.
 
 ### HTTPS / headers
 Siempre: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, etc. Con `NODE_ENV=production` o `FORCE_HTTPS=true`, además HSTS (`max-age=31536000; includeSubDomains`) + redirect 301 a HTTPS (vía `X-Forwarded-Proto`, típico en Render). `/health` queda afuera del redirect para que respondan los probes internos; el header HSTS sale igual. Producción corre con `NODE_ENV=production` desde el 17/11/2026, así que manda HSTS y redirige.
@@ -451,6 +451,10 @@ ALTER ROLE <rol> SET idle_in_transaction_session_timeout = '15s';
 ```
 
 Un client ocioso que se corta (Neon suspende el compute) se loguea con `pool.on('error')` en vez de tirar el proceso.
+
+### Formato de los errores
+
+Toda respuesta de error es `{ "error": "<código>", "message": "<texto>" }`. El `error` es para máquinas (`ValidationError`, `NotFoundError`, `ConflictError`, `UnauthorizedError`, `ForbiddenError`, `TooManyRequests`, `InternalServerError`...) y no cambia: un cliente que necesite distinguir casos compara el status HTTP y el `error`, nunca el texto. El `message` es para personas, va en castellano y puede cambiar. Los nombres de campos y valores de catálogo dentro del texto quedan como en la API (`location.latitude`, `officerId`, `PENDING`). Un cuerpo que `express.json()` no puede leer responde con el `error` de la librería (`SyntaxError`, `PayloadTooLargeError`, `UnsupportedMediaTypeError`) y el texto traducido (por ejemplo `El cuerpo del pedido no es un JSON válido`).
 
 ### Errores 5xx sanitizados
 
@@ -705,7 +709,7 @@ Todas las transiciones tienen endpoint:
 
 `CANCELLED`, `DISCARDED` y `CLOSED` son terminales. Cada transición deja una fila en `emergency_status_history` (con `actor` y `reason`) y un `EmergenciaActualizada` en el outbox, en la misma transacción.
 
-Una transición no listada devuelve **409 Conflict** (`ConflictError`, p. ej. `Invalid transition PENDING → RESOLVED`). La validación corre en el controller y, como defensa en profundidad, en `EmergencyRepository.updateStatus` con la fila bloqueada (`FOR UPDATE`), así ningún endpoint puede saltarse el flujo.
+Una transición no listada devuelve **409 Conflict** (`ConflictError`, p. ej. `Transición inválida: PENDING → RESOLVED`). La validación corre en el controller y, como defensa en profundidad, en `EmergencyRepository.updateStatus` con la fila bloqueada (`FOR UPDATE`), así ningún endpoint puede saltarse el flujo.
 
 ---
 

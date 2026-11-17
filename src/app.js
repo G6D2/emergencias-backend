@@ -17,6 +17,18 @@ const { secureLog } = require('./security/secure-log');
 const { resolveCorsOrigins } = require('./security/cors');
 const { kafkaHealth } = require('./services/kafka.service');
 
+// Los errores de express.json() traen el texto de la librería (o el de
+// JSON.parse) en inglés. Se traducen por `type`; el `error` queda como viene
+// (SyntaxError, PayloadTooLargeError...) y el texto original va al log.
+const BODY_PARSER_MESSAGES = new Map([
+  ['entity.parse.failed', 'El cuerpo del pedido no es un JSON válido'],
+  ['entity.too.large', 'El cuerpo del pedido es demasiado grande'],
+  ['encoding.unsupported', 'Content-Encoding no soportado'],
+  ['charset.unsupported', 'Charset no soportado'],
+  ['request.aborted', 'El pedido se cortó antes de terminar'],
+  ['request.size.invalid', 'El tamaño del cuerpo no coincide con Content-Length'],
+]);
+
 /**
  * @param {object} kafkaService - solo para GET /health (kafkaHealth)
  * @param {object} emergencyRepository
@@ -107,7 +119,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   app.use((req, res) => {
     res.status(404).json({
       error: 'NotFoundError',
-      message: `Cannot ${req.method} ${req.path}`,
+      message: `No existe la ruta ${req.method} ${req.path}`,
     });
   });
 
@@ -131,7 +143,10 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
       method: req.method,
       statusCode,
     });
-    res.status(statusCode).json({ error: err.name || 'Internal Server Error', message: err.message });
+    res.status(statusCode).json({
+      error: err.name || 'Internal Server Error',
+      message: BODY_PARSER_MESSAGES.get(err.type) || err.message,
+    });
   });
 
   return app;

@@ -29,12 +29,12 @@ function createAuthenticateMiddleware(options = {}) {
     try {
       const header = req.headers.authorization;
       if (!header || typeof header !== 'string') {
-        throw new UnauthorizedError('Missing Authorization header');
+        throw new UnauthorizedError('Falta el header Authorization');
       }
 
       const [scheme, token, ...rest] = header.split(' ');
       if (scheme !== 'Bearer' || !token || rest.length > 0) {
-        throw new UnauthorizedError('Invalid Authorization header');
+        throw new UnauthorizedError('Header Authorization inválido');
       }
 
       req.user = applySubAlias(await verifier.verifyAccessToken(token), subAliases);
@@ -48,7 +48,7 @@ function createAuthenticateMiddleware(options = {}) {
       // inesperada del verifier (un bug o una dependencia caída). Se responde
       // 401 igual, pero queda en el log en vez de perderse.
       logTokenRejection('authenticate', err);
-      next(new UnauthorizedError('Invalid or expired token'));
+      next(new UnauthorizedError('Token inválido o vencido'));
     }
   };
 }

@@ -33,7 +33,7 @@ function createRequireGroups(...allowedGroups) {
     }
 
     if (!userHasAnyGroup(req.user, allowedGroups)) {
-      next(new ForbiddenError('Insufficient group membership'));
+      next(new ForbiddenError('No tenés permiso para esta operación'));
       return;
     }
 

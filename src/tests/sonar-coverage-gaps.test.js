@@ -193,14 +193,14 @@ describe('AuthController validation branches', () => {
 
   it('rejects non-object bodies and bad email on register', async () => {
     const ctrl = new AuthController({ findByEmail: async () => null }, issuer);
-    await expect(ctrl.register(null)).rejects.toThrow(/JSON object/);
-    await expect(ctrl.register({ email: 'bad', password: 'secreto12' })).rejects.toThrow(/email/);
+    await expect(ctrl.register(null)).rejects.toThrow(/objeto JSON/);
+    await expect(ctrl.register({ email: 'bad', password: 'secreto12' })).rejects.toThrow(/correo no es válido/);
   });
 
   it('rejects non-object login body and missing password', async () => {
     const ctrl = new AuthController({ findByEmail: async () => null }, issuer);
-    await expect(ctrl.login([])).rejects.toThrow(/JSON object/);
-    await expect(ctrl.login({ email: 'a@b.com' })).rejects.toThrow(/email and password/);
+    await expect(ctrl.login([])).rejects.toThrow(/objeto JSON/);
+    await expect(ctrl.login({ email: 'a@b.com' })).rejects.toThrow(/correo y la contraseña/);
   });
 
   it('uses displayName when preferred_username is absent', async () => {
@@ -233,13 +233,13 @@ describe('CitizenProfileController validation branches', () => {
       upsertProfile: async () => ({}),
       addSavedLocation: async () => ({}),
     });
-    await expect(ctrl.upsertProfile(user, null)).rejects.toThrow(/JSON object/);
-    await expect(ctrl.addSavedLocation(user, null)).rejects.toThrow(/JSON object/);
+    await expect(ctrl.upsertProfile(user, null)).rejects.toThrow(/objeto JSON/);
+    await expect(ctrl.addSavedLocation(user, null)).rejects.toThrow(/objeto JSON/);
     await expect(ctrl.addSavedLocation(user, {
       label: 'Casa',
       address: 'A',
       lat: 'nope',
-    })).rejects.toThrow(/lat must be a number/);
+    })).rejects.toThrow(/lat tiene que ser un número/);
   });
 
   it('rejects bad update body and missing location', async () => {
@@ -248,9 +248,9 @@ describe('CitizenProfileController validation branches', () => {
       removeSavedLocation: async () => false,
     });
     const id = '11111111-1111-4111-8111-111111111111';
-    await expect(ctrl.updateSavedLocation(user, id, null)).rejects.toThrow(/JSON object/);
-    await expect(ctrl.updateSavedLocation(user, id, { lng: 'x' })).rejects.toThrow(/lng must be a number/);
-    await expect(ctrl.updateSavedLocation(user, id, { address: 'B' })).rejects.toThrow(/not found/);
-    await expect(ctrl.removeSavedLocation(user, id)).rejects.toThrow(/not found/);
+    await expect(ctrl.updateSavedLocation(user, id, null)).rejects.toThrow(/objeto JSON/);
+    await expect(ctrl.updateSavedLocation(user, id, { lng: 'x' })).rejects.toThrow(/lng tiene que ser un número/);
+    await expect(ctrl.updateSavedLocation(user, id, { address: 'B' })).rejects.toThrow(/No se encontró la ubicación guardada/);
+    await expect(ctrl.removeSavedLocation(user, id)).rejects.toThrow(/No se encontró la ubicación guardada/);
   });
 });

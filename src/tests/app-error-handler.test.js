@@ -65,7 +65,7 @@ describe('app error middleware (5xx sanitization)', () => {
 
     expect(response.body).toEqual({
       error: 'ValidationError',
-      message: 'Emergency id must be a valid UUID',
+      message: 'El id de la emergencia tiene que ser un UUID válido',
     });
   });
 });
@@ -83,8 +83,10 @@ describe('unknown route/method 404 (JSON, not HTML)', () => {
       .expect(404)
       .expect('Content-Type', /json/);
 
-    expect(response.body.error).toBe('NotFoundError');
-    expect(typeof response.body.message).toBe('string');
+    expect(response.body).toEqual({
+      error: 'NotFoundError',
+      message: 'No existe la ruta GET /api/ruta-que-no-existe',
+    });
   });
 
   it('devuelve 404 JSON para un método no soportado sobre una ruta conocida', async () => {
@@ -98,5 +100,61 @@ describe('unknown route/method 404 (JSON, not HTML)', () => {
       .expect('Content-Type', /json/);
 
     expect(response.body.error).toBe('NotFoundError');
+  });
+});
+
+// express.json() rechaza el cuerpo con un texto en inglés de la librería (o
+// de JSON.parse, que además cita un pedazo del cuerpo): se responde en
+// castellano y el `error` queda como lo arma la librería.
+describe('cuerpo rechazado por express.json()', () => {
+  function buildApp() {
+    return createApp(mockKafkaService, {}, { authenticate: stubAuthenticate(DISPATCHER) });
+  }
+
+  it('JSON mal formado: 400 en castellano, sin repetir el cuerpo', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const response = await request(buildApp())
+      .post('/api/panic-button')
+      .set('Content-Type', 'application/json')
+      .send('{"location": secreto')
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: 'SyntaxError',
+      message: 'El cuerpo del pedido no es un JSON válido',
+    });
+    expect(response.text).not.toContain('secreto');
+    warnSpy.mockRestore();
+  });
+
+  it('cuerpo más grande que el límite: 413 en castellano', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const response = await request(buildApp())
+      .post('/api/panic-button')
+      .set('Content-Type', 'application/json')
+      .send(JSON.stringify({ description: 'x'.repeat(40 * 1024) }))
+      .expect(413);
+
+    expect(response.body).toEqual({
+      error: 'PayloadTooLargeError',
+      message: 'El cuerpo del pedido es demasiado grande',
+    });
+    warnSpy.mockRestore();
+  });
+
+  it('Content-Encoding desconocido: 415 en castellano', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const response = await request(buildApp())
+      .post('/api/panic-button')
+      .set('Content-Type', 'application/json')
+      .set('Content-Encoding', 'inventado')
+      .send('{}')
+      .expect(415);
+
+    expect(response.body).toEqual({
+      error: 'UnsupportedMediaTypeError',
+      message: 'Content-Encoding no soportado',
+    });
+    warnSpy.mockRestore();
   });
 });

@@ -238,7 +238,7 @@ describe('route wiring with RATE_LIMIT_ENABLED=true', () => {
     const authenticate = (req, res, next) => {
       const sub = req.get('x-test-user');
       if (!sub) {
-        next(new UnauthorizedError('Missing Authorization header'));
+        next(new UnauthorizedError('Falta el header Authorization'));
         return;
       }
       req.user = { sub, groups: ['citizen'] };
