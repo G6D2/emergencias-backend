@@ -390,7 +390,55 @@ describe('ContextoZonaRepository', () => {
     expect(values).toEqual([
       row.tipo, row.latitud, row.longitud, row.radio_metros, row.vigente_desde, row.vigente_hasta, row.origen, row.referencia_externa,
       null, null, row.source_updated_at, false, false,
+      // nivelCriticidad, fenomeno, barrios: un evento comunitario no los manda.
+      null, null, null,
     ]);
+  });
+
+  it('upsert guarda nivel, fenómeno y barrios de una alerta climática', async () => {
+    const pool = { query: jest.fn().mockResolvedValue({ rows: [{ ...row, tipo: 'ALERTA_CLIMATICA', nivel_criticidad: 'ALTA', fenomeno: 'GRANIZO', barrios: ['PALERMO'] }] }) };
+    const repository = new ContextoZonaRepository(pool);
+
+    const result = await repository.upsert(null, {
+      tipo: 'ALERTA_CLIMATICA', nivelCriticidad: 'ALTA', fenomeno: 'GRANIZO', barrios: ['PALERMO'],
+    });
+
+    expect(result).toMatchObject({ nivelCriticidad: 'ALTA', fenomeno: 'GRANIZO', barrios: ['PALERMO'] });
+    const [sql, values] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/nivel_criticidad, fenomeno, barrios\)/);
+    expect(sql).toMatch(/\$16::text\[\]/);
+    expect(sql).toMatch(/barrios = EXCLUDED\.barrios/);
+    expect(values.slice(13)).toEqual(['ALTA', 'GRANIZO', ['PALERMO']]);
+  });
+
+  it('findActivos trae los no dados de baja, no suspendidos y sin vencer, con enCurso según now()', async () => {
+    const pool = {
+      query: jest.fn().mockResolvedValue({
+        rows: [{ ...row, en_curso: true }, { ...row, id: 'ctx-2', en_curso: false }],
+      }),
+    };
+    const repository = new ContextoZonaRepository(pool);
+
+    const result = await repository.findActivos(null, { tipo: 'ALERTA_CLIMATICA' });
+
+    expect(result.map((c) => [c.id, c.enCurso])).toEqual([['ctx-1', true], ['ctx-2', false]]);
+    expect(result[0]).toMatchObject({ nivelCriticidad: null, fenomeno: null, barrios: null });
+    const [sql, values] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/\(vigente_desde <= now\(\)\) AS en_curso/);
+    expect(sql).toMatch(/dado_de_baja_en IS NULL/);
+    expect(sql).toMatch(/suspendido_en IS NULL/);
+    expect(sql).toMatch(/vigente_hasta > now\(\)/);
+    expect(values).toEqual(['ALERTA_CLIMATICA']);
+  });
+
+  it('findActivos sin tipo trae todos y usa el executor recibido', async () => {
+    const pool = { query: jest.fn() };
+    const executor = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const repository = new ContextoZonaRepository(pool);
+
+    await expect(repository.findActivos(executor)).resolves.toEqual([]);
+    expect(executor.query.mock.calls[0][1]).toEqual([null]);
+    expect(pool.query).not.toHaveBeenCalled();
   });
 
   it('upsert marca la suspensión y conserva la ventana guardada si la del evento es un default', async () => {
@@ -403,7 +451,8 @@ describe('ContextoZonaRepository', () => {
     const [sql, values] = pool.query.mock.calls[0];
     expect(sql).toMatch(/suspendido_en = CASE WHEN \$12::boolean THEN COALESCE\(contexto_zona\.suspendido_en, now\(\)\) END/);
     expect(sql).toMatch(/vigente_hasta = CASE WHEN \$13::boolean THEN contexto_zona\.vigente_hasta ELSE EXCLUDED\.vigente_hasta END/);
-    expect(values.slice(-2)).toEqual([true, true]);
+    // $12 (suspendido) y $13 (ventanaPorDefecto).
+    expect(values.slice(11, 13)).toEqual([true, true]);
   });
 
   it('upsert devuelve null si la escritura no aplicó y usa el executor recibido', async () => {

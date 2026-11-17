@@ -32,6 +32,22 @@ describe('spec de OpenAPI (swagger-jsdoc)', () => {
     expect(operation.responses).toHaveProperty('400');
   });
 
+  it('GET /api/contextos-zona/activos documenta la respuesta del banner, solo dispatcher', () => {
+    const operation = spec.paths['/api/contextos-zona/activos'].get;
+    const schema = spec.components.schemas.AlertaClimaticaActiva;
+
+    expect(operation.tags).toEqual(['ContextosZona']);
+    expect(spec.tags.map((tag) => tag.name)).toContain('ContextosZona');
+    expect(operation.security).toEqual([{ bearerAuth: [] }]);
+    expect(Object.keys(operation.responses)).toEqual(['200', '401', '403']);
+    expect(operation.responses['200'].content['application/json'].schema.properties.data.items)
+      .toEqual({ $ref: '#/components/schemas/AlertaClimaticaActiva' });
+    expect(Object.keys(schema.properties)).toEqual([
+      'alertaId', 'nivel', 'fenomeno', 'fenomenoEtiqueta', 'barrios',
+      'vigenteDesde', 'vigenteHasta', 'enCurso', 'puntos', 'radioMetros', 'descripcion',
+    ]);
+  });
+
   it('GET /api/emergencies documenta priority como alias de severity', () => {
     const { parameters, responses } = spec.paths['/api/emergencies'].get;
     const byName = Object.fromEntries(parameters.map((parameter) => [parameter.name, parameter]));

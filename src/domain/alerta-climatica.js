@@ -114,6 +114,119 @@ function barriosDeLaAlerta(data = {}) {
     : [];
 }
 
+// ---------------------------------------------------------------------------
+// Datos para mostrar la alerta (banner del tablero, GET
+// /api/contextos-zona/activos). No intervienen en la zona ni en la suba.
+
+// Catálogo de fenómenos de Espacios (guía "CityPass Eventos climáticos",
+// 13/11/2026) con la etiqueta para mostrar. Tabla del PR #121. Espacios
+// define el catálogo; sumar un fenómeno es sumar una entrada.
+const FENOMENOS = Object.freeze({
+  TORMENTA_FUERTE: 'Tormenta fuerte',
+  LLUVIA_INTENSA: 'Lluvia intensa',
+  VIENTO_FUERTE: 'Viento fuerte',
+  OLA_DE_CALOR: 'Ola de calor',
+  OLA_DE_FRIO: 'Ola de frío',
+  GRANIZO: 'Granizo',
+  TORMENTA_ELECTRICA: 'Tormenta eléctrica',
+  HURACAN: 'Huracán',
+  NIEVE: 'Nieve',
+});
+
+// Topes de lo que se guarda en el contexto: el texto viene del bus y solo se
+// muestra. CABA tiene 48 barrios.
+const MAX_FENOMENO_LENGTH = 60;
+const MAX_BARRIOS = 48;
+const MAX_BARRIO_LENGTH = 80;
+
+// Código del fenómeno en mayúsculas ("tormenta_fuerte" → "TORMENTA_FUERTE"),
+// o null. No valida contra el catálogo: un fenómeno nuevo de Espacios se
+// guarda igual y se muestra con etiqueta genérica.
+function fenomenoNormalizado(fenomeno) {
+  if (typeof fenomeno !== 'string' || !fenomeno.trim()) return null;
+  return fenomeno.trim().toUpperCase().slice(0, MAX_FENOMENO_LENGTH);
+}
+
+// "TORMENTA_ELECTRICA" → "Tormenta eléctrica". Fuera del catálogo, el código
+// legible ("OLA_POLAR" → "Ola polar"). null sin fenómeno.
+function etiquetaFenomeno(fenomeno) {
+  const codigo = fenomenoNormalizado(fenomeno);
+  if (!codigo) return null;
+  if (Object.hasOwn(FENOMENOS, codigo)) return FENOMENOS[codigo];
+  const palabras = codigo.toLowerCase().split('_').filter(Boolean).join(' ');
+  return palabras ? palabras.charAt(0).toUpperCase() + palabras.slice(1) : null;
+}
+
+// Barrios de la alerta tal como los manda Espacios, sin repetidos y con tope.
+// Solo se muestran: la zona sigue siendo punto + radio.
+function barriosParaMostrar(data = {}) {
+  const barrios = barriosDeLaAlerta(data).map((b) => b.slice(0, MAX_BARRIO_LENGTH));
+  return [...new Set(barrios)].slice(0, MAX_BARRIOS);
+}
+
+// `<alertaId>#<índice>` → alertaId. null para la marca de baja (`<alertaId>`
+// solo) o cualquier otra referencia. El alertaId puede tener '#': se corta en
+// el último.
+function alertaIdDeReferencia(referencia) {
+  if (typeof referencia !== 'string') return null;
+  const corte = referencia.lastIndexOf('#');
+  if (corte <= 0) return null;
+  return /^\d+$/.test(referencia.slice(corte + 1)) ? referencia.slice(0, corte) : null;
+}
+
+const ORDEN_NIVEL = Object.freeze({ CRITICA: 0, ALTA: 1 });
+
+function timeOf(fecha) {
+  const ms = fecha instanceof Date ? fecha.getTime() : new Date(fecha).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function compararAlertas(a, b) {
+  const nivel = (ORDEN_NIVEL[a.nivel] ?? 2) - (ORDEN_NIVEL[b.nivel] ?? 2);
+  if (nivel !== 0) return nivel;
+  const desde = (timeOf(a.vigenteDesde) ?? 0) - (timeOf(b.vigenteDesde) ?? 0);
+  if (desde !== 0) return desde;
+  return a.alertaId.localeCompare(b.alertaId);
+}
+
+function alertaDesdeContexto(alertaId, contexto) {
+  return {
+    alertaId,
+    nivel: contexto.nivelCriticidad ?? null,
+    fenomeno: contexto.fenomeno ?? null,
+    fenomenoEtiqueta: etiquetaFenomeno(contexto.fenomeno),
+    barrios: Array.isArray(contexto.barrios) ? contexto.barrios : [],
+    vigenteDesde: contexto.vigenteDesde ?? null,
+    vigenteHasta: contexto.vigenteHasta ?? null,
+    enCurso: contexto.enCurso === true,
+    puntos: 1,
+    radioMetros: contexto.radioMetros ?? null,
+    descripcion: contexto.descripcion ?? null,
+  };
+}
+
+// Una entrada por alerta a partir de sus contextos activos (uno por punto).
+// Los puntos de una alerta se registran juntos, en la misma transacción y con
+// los mismos datos (nivel, fenómeno, barrios, ventana, radio): se toman del
+// primero y se cuentan los puntos. Primero las CRITICA, después por inicio.
+function resumirAlertasActivas(contextos = []) {
+  const porAlerta = new Map();
+  for (const contexto of contextos) {
+    if (contexto?.tipo !== CONTEXTO_TIPO.ALERTA_CLIMATICA) continue;
+    const alertaId = alertaIdDeReferencia(contexto.referenciaExterna);
+    if (!alertaId) continue;
+
+    const actual = porAlerta.get(alertaId);
+    if (actual) {
+      actual.puntos += 1;
+      actual.enCurso = actual.enCurso || contexto.enCurso === true;
+    } else {
+      porAlerta.set(alertaId, alertaDesdeContexto(alertaId, contexto));
+    }
+  }
+  return [...porAlerta.values()].sort(compararAlertas);
+}
+
 module.exports = {
   CAUSA_TIPO_CLIMA,
   NIVELES,
@@ -128,4 +241,10 @@ module.exports = {
   referenciaDeUbicacion,
   grupoDeLaAlerta,
   barriosDeLaAlerta,
+  FENOMENOS,
+  fenomenoNormalizado,
+  etiquetaFenomeno,
+  barriosParaMostrar,
+  alertaIdDeReferencia,
+  resumirAlertasActivas,
 };

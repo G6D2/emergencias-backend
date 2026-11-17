@@ -332,6 +332,7 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 | `PATCH /api/citizen/saved-locations/:id` | `citizen` | modifica una propia |
 | `DELETE /api/citizen/saved-locations/:id` | `citizen` | borra una propia |
 | `GET /api/outbox-events` | `dispatcher` | estado de los eventos sin payload; filtros `status`, `topic`, `page`, `limit` (máx. 100) |
+| `GET /api/contextos-zona/activos` | `dispatcher` | alertas climáticas activas o por empezar, una por alerta (banner del tablero) |
 
 Una ruta o método que no existe responde **404** en JSON (`{ "error": "NotFoundError", "message": "Cannot GET /..." }`).
 
@@ -610,6 +611,32 @@ Perfil personal (`GET`/`PUT /api/citizen/profile`) y ubicaciones frecuentes (`GE
 ### GET `/api/outbox-events`
 
 Estado de los eventos del outbox para el dispatcher: `id`, `topic`, `status`, `attempts`, fechas y `lastError`, sin el payload. Filtros `status` (`PENDING`, `PROCESSING`, `PUBLISHED`, `FAILED`, `SKIPPED`) y `topic`.
+
+### GET `/api/contextos-zona/activos`
+
+Alertas climáticas activas para el banner del tablero del dispatcher. Solo lee los contextos `ALERTA_CLIMATICA` que crea el listener de la [alerta climática](#alerta-climática): no publica nada ni cambia prioridades. Devuelve **una entrada por alerta** (no por punto), con contextos no dados de baja y sin vencer, incluidas las que todavía no empezaron (`enCurso: false`). `MEDIA` y `BAJA` no aparecen porque no generan contextos; una alerta finalizada deja de aparecer. Orden: primero `CRITICA`, después por `vigenteDesde`.
+
+```json
+{
+  "data": [
+    {
+      "alertaId": "a7f0e2c4-1b3d-4e5f-8a9b-0c1d2e3f4a5b",
+      "nivel": "ALTA",
+      "fenomeno": "TORMENTA_FUERTE",
+      "fenomenoEtiqueta": "Tormenta fuerte",
+      "barrios": ["SAN NICOLAS", "BELGRANO"],
+      "vigenteDesde": "2026-11-17T18:00:00.000Z",
+      "vigenteHasta": "2026-11-17T23:00:00.000Z",
+      "enCurso": true,
+      "puntos": 2,
+      "radioMetros": 500,
+      "descripcion": "Alerta climática ALTA: tormenta fuerte"
+    }
+  ]
+}
+```
+
+`barrios` son los que manda Espacios, solo para mostrar (la zona es punto + radio). `fenomenoEtiqueta` sale del catálogo de fenómenos de Espacios (`src/domain/alerta-climatica.js`); un fenómeno nuevo se muestra con el código legible. No expone coordenadas.
 
 ### GET `/health`
 
@@ -934,6 +961,7 @@ ADR *Responder a las alertas climáticas de Espacios* (`src/listeners/alerta-cli
 - **Zona.** Un contexto `ALERTA_CLIMATICA` por cada punto de `ubicaciones` (referencia `<alertaId>#<índice>`), con la ventana `vigenciaDesde`–`vigenciaHasta`. Funciona igual que el de un evento: vínculo medido al crear la emergencia, un nivel de suba, sin acumular, sin subir las `PREVENTIVA`. `priorityContext.descripcion` dice, por ejemplo, «Alerta climática CRITICA: tormenta fuerte». Los puntos sin coordenadas numéricas se descartan; `barrios` no define zona.
 - **Emergencia.** Una `PREVENTIVA` por `alertaId` (índice único de V23), en el primer punto válido; sin puntos queda con `requiresManualValidation`. La descripción lleva nivel, fenómeno y barrios. Una alerta que ya venció cuando llega no la crea. `EmergenciaCreada` sale con `prioridadOriginal` = `prioridad`, como pide el contrato para `EVENTO_CLIMATICO`.
 - **Fin.** La finalización da de baja los contextos y cancela la `PREVENTIVA` que nadie despachó. Gana aunque llegue antes o a la vez que la confirmación: las dos toman el mismo `pg_advisory_xact_lock` por alerta y la finalización deja una marca de baja (`<alertaId>`) que impide crear contextos y emergencia después.
+- **Banner.** Cada contexto guarda además el nivel, el fenómeno y los barrios de la alerta (`nivel_criticidad`, `fenomeno`, `barrios`, V33), solo para mostrarla: no cambian la zona ni la suba. [`GET /api/contextos-zona/activos`](#get-apicontextos-zonaactivos) los devuelve agrupados por alerta para el banner del tablero. No hay evento de activación propio (punto 5 del ADR): el banner solo lee.
 - **Activación.** Los dos tópicos son opt-in (sin default): con un solo consumer para todos los listeners, suscribirse a un tópico que no existe los frenaría a todos. Sin las variables, los dos listeners figuran `disabled` en `/health`. Para activarlo, confirmar los nombres en el catálogo del gateway y cargar en Render `EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA` y `EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA` (juntas: sin la finalización, la `PREVENTIVA` no se cancela).
 
 Cómo lee el bus:

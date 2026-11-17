@@ -1,7 +1,7 @@
 # Modelo entidad-relación
 
 Para qué sirve: mostrar el schema de Postgres tal como queda después de aplicar las
-migraciones Flyway hasta **V32** (`db/migrations/`), con tipos, PK/FK y
+migraciones Flyway hasta **V33** (`db/migrations/`), con tipos, PK/FK y
 los `CHECK` que importan para entender las reglas de negocio. Las versiones V17 a V20 no
 existen en el repo: la numeración salta de V16 a V21.
 

@@ -50,6 +50,8 @@ const ENDPOINTS = [
   ['POST', '/api/citizen/saved-locations', ['citizen'], { label: 'Casa', address: 'Av. Siempreviva 742' }],
   ['PATCH', '/api/citizen/saved-locations/:id', ['citizen'], { label: 'Trabajo' }],
   ['DELETE', '/api/citizen/saved-locations/:id', ['citizen']],
+  // Banner de alertas climáticas del tablero.
+  ['GET', '/api/contextos-zona/activos', ['dispatcher']],
 ];
 
 // Rutas montadas que no exigen token (no entran en la matriz).
@@ -155,6 +157,7 @@ function createMockRepositories() {
       updateSavedLocation: jest.fn(async (userId, id, changes) => ({ id, ...changes })),
       removeSavedLocation: jest.fn(async () => true),
     },
+    contextoZonaRepository: { findActivos: jest.fn(async () => []) },
   };
 }
 
@@ -273,6 +276,7 @@ describe.each(MODES)('matriz de autorización con $title (JWT real, repositorios
       officerRepository: repos.officerRepository,
       incidentRepository: repos.incidentRepository,
       citizenProfileRepository: repos.citizenProfileRepository,
+      contextoZonaRepository: repos.contextoZonaRepository,
     });
     for (const [name, identity] of Object.entries(mode.identities)) {
       bearers[name] = identity ? await auth.bearerFor(identity) : null;

@@ -2,7 +2,9 @@
 // zona", migración V28). Un contexto vigente sube un nivel la prioridad de
 // despacho de las emergencias creadas a no más de radio_metros de su punto
 // (V31); el vínculo y el cálculo viven en emergency.repository.js, acá solo
-// se dan de alta y de baja.
+// se dan de alta y de baja, y se listan los activos para el banner del
+// tablero. nivel_criticidad, fenomeno y barrios (V33) los llena solo la
+// alerta climática, para mostrarla.
 //
 // Orden de llegada (Kafka reentrega y desordena):
 // - Un alta más vieja que lo guardado no pisa nada.
@@ -21,6 +23,9 @@ function mapContextoZona(row) {
     latitud: row.latitud ?? null,
     longitud: row.longitud ?? null,
     radioMetros: row.radio_metros ?? null,
+    nivelCriticidad: row.nivel_criticidad ?? null,
+    fenomeno: row.fenomeno ?? null,
+    barrios: row.barrios ?? null,
     vigenteDesde: row.vigente_desde,
     vigenteHasta: row.vigente_hasta,
     origen: row.origen,
@@ -46,21 +51,29 @@ class ContextoZonaRepository {
   //   primera vez que se suspendió).
   // - ventanaPorDefecto: la ventana no vino en el evento; en un contexto que
   //   ya existe se conserva la guardada.
+  // - nivelCriticidad, fenomeno, barrios: los manda la alerta climática; un
+  //   evento comunitario no los manda y quedan NULL.
   async upsert(executor, {
     tipo, latitud, longitud, radioMetros, vigenteDesde, vigenteHasta, origen, referenciaExterna,
     descripcion = null, causationId = null, sourceUpdatedAt,
     suspendido = false, ventanaPorDefecto = false,
+    nivelCriticidad = null, fenomeno = null, barrios = null,
   }) {
     const client = executor || this.pool;
     const result = await client.query(
       `INSERT INTO contexto_zona
          (tipo, latitud, longitud, radio_metros, vigente_desde, vigente_hasta, origen, referencia_externa,
-          descripcion, causation_id, source_updated_at, suspendido_en)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $12::boolean THEN now() END)
+          descripcion, causation_id, source_updated_at, suspendido_en,
+          nivel_criticidad, fenomeno, barrios)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CASE WHEN $12::boolean THEN now() END,
+               $14, $15, $16::text[])
        ON CONFLICT (tipo, origen, referencia_externa) DO UPDATE
          SET latitud = EXCLUDED.latitud,
              longitud = EXCLUDED.longitud,
              radio_metros = EXCLUDED.radio_metros,
+             nivel_criticidad = EXCLUDED.nivel_criticidad,
+             fenomeno = EXCLUDED.fenomeno,
+             barrios = EXCLUDED.barrios,
              vigente_desde = CASE WHEN $13::boolean THEN contexto_zona.vigente_desde ELSE EXCLUDED.vigente_desde END,
              vigente_hasta = CASE WHEN $13::boolean THEN contexto_zona.vigente_hasta ELSE EXCLUDED.vigente_hasta END,
              suspendido_en = CASE WHEN $12::boolean THEN COALESCE(contexto_zona.suspendido_en, now()) END,
@@ -72,9 +85,30 @@ class ContextoZonaRepository {
            AND contexto_zona.source_updated_at <= EXCLUDED.source_updated_at
        RETURNING *`,
       [tipo, latitud, longitud, radioMetros, vigenteDesde, vigenteHasta, origen, referenciaExterna,
-        descripcion, causationId, sourceUpdatedAt, Boolean(suspendido), Boolean(ventanaPorDefecto)]
+        descripcion, causationId, sourceUpdatedAt, Boolean(suspendido), Boolean(ventanaPorDefecto),
+        nivelCriticidad, fenomeno, barrios]
     );
     return mapContextoZona(result.rows[0]);
+  }
+
+  // Contextos activos o por empezar, para el banner del tablero: no dados de
+  // baja, no suspendidos y sin vencer. Incluye los que todavía no empezaron
+  // (vigente_desde en el futuro) para que el banner diga "desde las 18:00";
+  // enCurso dice si ya empezó, con now() de la base, igual que el vínculo y
+  // la suba. Sin tipo, trae todos.
+  async findActivos(executor, { tipo = null } = {}) {
+    const client = executor || this.pool;
+    const result = await client.query(
+      `SELECT *, (vigente_desde <= now()) AS en_curso
+       FROM contexto_zona
+       WHERE dado_de_baja_en IS NULL
+         AND suspendido_en IS NULL
+         AND vigente_hasta > now()
+         AND ($1::text IS NULL OR tipo = $1::text)
+       ORDER BY vigente_desde ASC, referencia_externa ASC`,
+      [tipo]
+    );
+    return result.rows.map((row) => ({ ...mapContextoZona(row), enCurso: row.en_curso === true }));
   }
 
   // Baja lógica. Devuelve el contexto si esta llamada lo dio de baja (o dejó
