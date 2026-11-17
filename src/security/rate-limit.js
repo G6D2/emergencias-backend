@@ -19,6 +19,17 @@ function keyByUser(req) {
   return sub ? `sub:${sub}` : `ip:${req.ip}`;
 }
 
+const MAX_SUB_KEY_LENGTH = 128;
+
+// Login de demo: todavía no hay token, así que la clave es el `sub` que se
+// pide en el body, normalizado (sin espacios a los costados, en minúsculas y
+// cortado a 128) para que variantes del mismo sub no abran cupos nuevos. Sin
+// sub (el request va a dar 400) cuenta la IP.
+function keyByRequestedSub(req) {
+  const sub = req.body && typeof req.body.sub === 'string' ? req.body.sub.trim() : '';
+  return sub ? `sub:${sub.toLowerCase().slice(0, MAX_SUB_KEY_LENGTH)}` : `ip:${req.ip}`;
+}
+
 function buildLimiter(
   { windowMs, max, message, keyGenerator, skipFailedRequests = false, skipSuccessfulRequests = false },
   env = process.env
@@ -46,13 +57,34 @@ function buildLimiter(
   });
 }
 
-/** POST /auth/dev/login: 10 req/min por IP. */
+/**
+ * POST /auth/dev/login: 10 logins/min por `sub` pedido (keyByRequestedSub).
+ * Antes era por IP y, como todos llegan con la IP del BFF, 10 logins de
+ * cualquiera dejaban afuera a todos. Va DESPUÉS de
+ * createDevLoginIpRateLimiter en la ruta.
+ */
 function createDevLoginRateLimiter(env = process.env) {
   return buildLimiter(
     {
       windowMs: 60 * 1000,
       max: 10,
       message: 'Demasiados intentos de login. Probá de nuevo en un minuto.',
+      keyGenerator: keyByRequestedSub,
+    },
+    env
+  );
+}
+
+/**
+ * POST /auth/dev/login, ANTES del límite por sub: red por IP para que
+ * cambiar de sub en cada request no dé cupos sin fin. 100 req/min por IP.
+ */
+function createDevLoginIpRateLimiter(env = process.env) {
+  return buildLimiter(
+    {
+      windowMs: 60 * 1000,
+      max: 100,
+      message: 'Demasiadas solicitudes. Probá de nuevo en un minuto.',
     },
     env
   );
@@ -140,6 +172,7 @@ function createAuthRegisterRateLimiter(env = process.env) {
 module.exports = {
   isRateLimitEnabled,
   createDevLoginRateLimiter,
+  createDevLoginIpRateLimiter,
   createPanicButtonRateLimiter,
   createPanicButtonIpRateLimiter,
   createCitizenProfileMutationRateLimiter,

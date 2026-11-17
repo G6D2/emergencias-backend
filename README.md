@@ -306,10 +306,10 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 | `GET /health` | público | estado en memoria de Kafka (`connected`, `disconnected` o `disabled`), del outbox y de cada listener |
 | `GET /api-docs`, `GET /api-docs.json` | público | Swagger UI y spec OpenAPI |
 | `POST /auth/register` | público, `AUTH_MODE=local` o `hybrid` | 20 req/min por IP |
-| `POST /auth/login` | público, `AUTH_MODE=local` o `hybrid` | 20 req/min por IP |
-| `POST /auth/dev/login` | público, `AUTH_MODE=local` o `hybrid` | 10 req/min por IP; allowlist con `DEV_LOGIN_STRICT` |
+| `POST /auth/login` | público, `AUTH_MODE=local` o `hybrid` | 20 intentos fallidos/min por IP |
+| `POST /auth/dev/login` | público, `AUTH_MODE=local` o `hybrid` | 10 req/min por `sub` pedido y 100 req/min por IP; allowlist con `DEV_LOGIN_STRICT` |
 | `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT; en `hybrid`, además `authSource` y, si el token es federado, `idpSub` e `idpGroups` |
-| `POST /api/panic-button` | `citizen` | 5 req/min por IP; `emergencyType=PREVENTIVA` → 400 |
+| `POST /api/panic-button` | `citizen` | 5 req/min por ciudadano; `emergencyType=PREVENTIVA` → 400 |
 | `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena); deja registro de auditoría |
 | `GET /api/emergencies` | `citizen`, `dispatcher` u `officer` | citizen: solo propias; officer: solo las asignadas a él (`assignedOfficerId` = `sub`). Los dos sin `incident`/`effectivePriority` |
 | `GET /api/emergencies/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena); deja registro de auditoría |
@@ -435,7 +435,7 @@ El health check reporta el estado de Kafka (`connected`, `disconnected` o `disab
 
 | Endpoint | Límite | Respuesta al exceder |
 |----------|--------|-----------------------|
-| `POST /auth/dev/login` | 10 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
+| `POST /auth/dev/login` | 10 logins/min por `sub` pedido en el body (sin espacios a los costados y en minúsculas), más un tope de 100 req/min por IP. Todo el front llega con la IP del BFF: con el límite por IP, 10 logins de cualquiera dejaban afuera a todos | `429 { "error": "TooManyRequests", "message": "..." }` |
 | `POST /auth/login` | 20 intentos fallidos/min por IP (los logins exitosos no cuentan) | idem |
 | `POST /auth/register` | 20 req/min por IP, contador propio | idem |
 | `POST /api/panic-button` | 5 activaciones/min por ciudadano (`sub` del token; las que fallan no cuentan), más un tope de 300 req/min por IP antes de autenticar | `429 { "error": "TooManyRequests", "message": "..." }` |
@@ -487,7 +487,7 @@ Emite un access token de desarrollo. Ver ejemplo y allowlist arriba.
 
 ### POST `/api/panic-button`
 
-Activa el botón de pánico. Requiere grupo `citizen`. El `userId` se toma de `sub`. Rate limit: **5 req/min por IP**. Responde **201**.
+Activa el botón de pánico. Requiere grupo `citizen`. El `userId` se toma de `sub`. Rate limit: **5 activaciones/min por ciudadano** (ver [Rate limiting](#rate-limiting)). Responde **201**.
 
 `latitude`/`longitude` se validan contra rango geográfico (`-90..90` / `-180..180`); fuera de rango → 400. `address` es opcional (≤200 caracteres, se guarda cifrada junto con la ubicación). `emergencyType` acepta el catálogo menos `PREVENTIVA` (400), que la crea solo el sistema; sin tipo es `PANICO`.
 

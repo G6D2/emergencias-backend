@@ -2,6 +2,7 @@ const express = require('express');
 const { asyncHandler } = require('../utils/async-handler');
 const {
   createDevLoginRateLimiter,
+  createDevLoginIpRateLimiter,
   createAuthLoginRateLimiter,
   createAuthRegisterRateLimiter,
 } = require('../security/rate-limit');
@@ -41,9 +42,9 @@ function createDevAuthRoutes(tokenIssuer, authUserRepository = null) {
    *       400:
    *         description: Datos inválidos
    *       429:
-   *         description: Rate limit
+   *         description: Rate limit (10/min por sub pedido y 100/min por IP)
    */
-  router.post('/dev/login', createDevLoginRateLimiter(), asyncHandler(async (req, res) => {
+  router.post('/dev/login', createDevLoginIpRateLimiter(), createDevLoginRateLimiter(), asyncHandler(async (req, res) => {
     const claims = resolveDevLoginClaims(req.body || {}, process.env);
     const tokens = await tokenIssuer.issueAccessToken(claims);
     res.json(tokens);
