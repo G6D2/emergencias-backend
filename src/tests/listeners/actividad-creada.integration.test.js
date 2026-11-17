@@ -43,9 +43,9 @@ beforeAll(() => {
   const emergencyRepository = new EmergencyRepository(pool, { locationCrypto: createLocationCrypto() });
   eventosProcesadosRepo = new EventosProcesadosRepository(pool);
   const factory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
-  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
-  factory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository, topic: UPDATED_TOPIC }));
   const contextoZonaRepository = new ContextoZonaRepository(pool);
+  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, contextoZonaRepository, topic: CREATED_TOPIC }));
+  factory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository, contextoZonaRepository, topic: UPDATED_TOPIC }));
   factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   factory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
 
@@ -149,6 +149,21 @@ describe('ActividadCreada.v3 → cobertura preventiva (integration)', () => {
       buildMessage({ ...ACTIVIDAD, data: { ...ACTIVIDAD.data, organizadorTipo: 'CIUDADANO' } })
     );
     expect(await coberturas()).toHaveLength(0);
+  });
+
+  it('una cancelación procesada antes que ActividadCreada no deja una cobertura PENDING (#88)', async () => {
+    await cancelado.onMessage(
+      buildMessage({
+        metadata: { eventId: 'b2000000-0000-4000-8000-000000000004', eventType: 'com.citypass.espacios.EventoCancelado', source: 'grupo7' },
+        data: { eventoId: ACTIVIDAD_ID, motivo: 'lluvia', canceladoEn: '2026-11-05T12:00:00.000Z' },
+      })
+    );
+    await actividad.onMessage(buildMessage(ACTIVIDAD));
+    await publicado.onMessage(buildMessage(COMUNITARIO));
+
+    expect(await coberturas()).toHaveLength(0);
+    const { rows: outbox } = await pool.query('SELECT 1 FROM outbox_events WHERE topic = $1', [CREATED_TOPIC]);
+    expect(outbox).toHaveLength(0);
   });
 
   it('EventoCancelado cancela la cobertura que creó ActividadCreada', async () => {

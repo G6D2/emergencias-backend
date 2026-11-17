@@ -177,13 +177,13 @@ describe('filas reales del outbox contra el contrato', () => {
 
     // Alta externa: cobertura preventiva del listener (sin ciudadano, con causa).
     const factory = new OutcomeFactory(pool, { dedupRepo: new EventosProcesadosRepository(pool) });
+    const contextoZonaRepository = new ContextoZonaRepository(pool);
     factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({
       emergencyRepository: new EmergencyRepository(pool),
+      contextoZonaRepository,
       topic: COBERTURA_TOPIC,
     }));
-    factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({
-      contextoZonaRepository: new ContextoZonaRepository(pool),
-    }));
+    factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
     const listener = new EventoComunitarioPublicadoListener({ consumer: jest.fn() }, { factory });
     await listener.onMessage({ value: Buffer.from(JSON.stringify(coberturaEvent)) });
 

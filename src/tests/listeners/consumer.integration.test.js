@@ -47,9 +47,9 @@ beforeAll(() => {
   eventosProcesadosRepo = new EventosProcesadosRepository(pool);
 
   outcomeFactory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
-  outcomeFactory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
-  outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository, topic: UPDATED_TOPIC }));
   const contextoZonaRepository = new ContextoZonaRepository(pool);
+  outcomeFactory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, contextoZonaRepository, topic: CREATED_TOPIC }));
+  outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository, contextoZonaRepository, topic: UPDATED_TOPIC }));
   outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
 
@@ -214,6 +214,41 @@ describe('cobertura preventiva (integration)', () => {
     });
     // El motivo del organizador es texto libre: no viaja.
     expect(JSON.stringify(outbox.rows[0].payload)).not.toContain('texto libre del organizador');
+  });
+
+  it('una cancelación procesada antes que la publicación no deja una cobertura PENDING (#88)', async () => {
+    const cancelacionId = 'b1000000-0000-4000-8000-000000000003';
+    await cancelado.onMessage(buildMessage(cancelacion(cancelacionId)));
+    await publicado.onMessage(buildMessage(PUBLICADO));
+
+    expect(await coberturas()).toHaveLength(0);
+    const outbox = await pool.query('SELECT 1 FROM outbox_events WHERE topic IN ($1, $2)', [CREATED_TOPIC, UPDATED_TOPIC]);
+    expect(outbox.rows).toHaveLength(0);
+    // Los dos quedan procesados, no descartados: la reentrega no vuelve a intentar.
+    for (const eventId of [cancelacionId, PUBLICADO.metadata.eventId]) {
+      expect(await eventosProcesadosRepo.findById(eventId)).toMatchObject({ status: 'PROCESSED' });
+    }
+  });
+
+  it('cancelación y publicación del mismo evento a la vez: nunca queda una cobertura PENDING (#88)', async () => {
+    const eventoIds = Array.from({ length: 8 }, (_, i) => `ev-carrera-${i}`);
+    await Promise.all(eventoIds.flatMap((eventoId, i) => {
+      const n = String(i).padStart(2, '0');
+      const publicacion = {
+        metadata: { ...PUBLICADO.metadata, eventId: `c1000000-0000-4000-8000-0000000000${n}` },
+        data: { ...PUBLICADO.data, eventoId, correlationId: `evento-${eventoId}` },
+      };
+      const baja = cancelacion(`c2000000-0000-4000-8000-0000000000${n}`, eventoId);
+      // Alterna quién sale primero.
+      const pares = [cancelado.onMessage(buildMessage(baja)), publicado.onMessage(buildMessage(publicacion))];
+      return i % 2 ? pares : pares.reverse();
+    }));
+
+    const { rows } = await pool.query(
+      "SELECT causa_id, status FROM emergencies WHERE source = 'EXTERNAL' AND causa_id = ANY($1::text[])",
+      [eventoIds]
+    );
+    expect(rows.filter((row) => row.status !== 'CANCELLED')).toEqual([]);
   });
 
   it('no cancela una cobertura que ya fue despachada', async () => {
