@@ -19,6 +19,9 @@ const { ProgramarCoberturaPreventivaRule } = require('../listeners/cobertura-pre
 const { ProgramarCoberturaActividadRule } = require('../listeners/cobertura-preventiva/actividad-creada/rules/01-programar-cobertura.rule');
 const { CrearEmergenciaBicicletaRule } = require('../listeners/movilidad-bicicleta/emergencia-bicicleta/rules/01-crear-emergencia-bicicleta.rule');
 const { ProgramarCoberturaReservaRule } = require('../listeners/cobertura-preventiva/reserva-creada/rules/01-programar-cobertura-reserva.rule');
+const { CrearEmergenciaClimaticaRule } = require('../listeners/alerta-climatica/criticidad-climatica-confirmada/rules/01-crear-emergencia-climatica.rule');
+const { RegistrarContextosClimaticosRule } = require('../listeners/alerta-climatica/criticidad-climatica-confirmada/rules/02-registrar-contextos-climaticos.rule');
+const { CancelarEmergenciaClimaticaRule } = require('../listeners/alerta-climatica/criticidad-climatica-finalizada/rules/01-cancelar-emergencia-climatica.rule');
 
 const SPEC_PATH = path.join(__dirname, '..', '..', 'asyncapi.yaml');
 
@@ -59,6 +62,7 @@ describe('asyncapi.yaml', () => {
       'recibirReclamoCreado', 'recibirReclamoActualizado', 'recibirEmergenciaSolicitada',
       'recibirActividadCreada',
       'recibirEmergenciaBicicleta', 'recibirReservaCreada',
+      'recibirCriticidadClimaticaConfirmada', 'recibirCriticidadClimaticaFinalizada',
     ]));
   });
 
@@ -105,6 +109,19 @@ describe('asyncapi.yaml', () => {
         causaTipo: 'EVENTO_PUBLICO',
         causaId: 'evt-espacios-1',
       }, 'evt-2');
+      expect(validate('EmergenciaCreadaData', event.data)).toBe(true);
+    });
+
+    it('EmergenciaCreada (alerta climática, con prioridadOriginal)', () => {
+      const event = buildEmergencyCreatedEvent({
+        ...emergency,
+        userId: null,
+        emergencyType: 'PREVENTIVA',
+        severity: 'critical',
+        causaTipo: 'EVENTO_CLIMATICO',
+        causaId: 'a7f0e2c4-1b3d-4e5f-8a9b-0c1d2e3f4a5b',
+      }, 'evt-3');
+      expect(event.data.prioridadOriginal).toBe('CRITICA');
       expect(validate('EmergenciaCreadaData', event.data)).toBe(true);
     });
 
@@ -181,6 +198,41 @@ describe('asyncapi.yaml', () => {
       expect(validate('ActividadCreadaData', data)).toBe(true);
       expect(new ProgramarCoberturaActividadRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
       expect(() => validate('ActividadCreadaData', { titulo: 'sin id' })).toThrow();
+    });
+
+    it('una CriticidadClimaticaConfirmada de Espacios cumple el spec y solo ALTA/CRITICA disparan las reglas', () => {
+      // Payload con todos los campos del schema Avro de Espacios (register-event-types.ts).
+      const data = {
+        alertaId: 'a7f0e2c4-1b3d-4e5f-8a9b-0c1d2e3f4a5b',
+        nivelCriticidad: 'CRITICA',
+        fenomeno: 'TORMENTA_FUERTE',
+        ubicaciones: [{ latitud: -34.6037, longitud: -58.3816 }],
+        barrios: ['SAN NICOLAS'],
+        vigenciaDesde: 4102444800000,
+        vigenciaHasta: 4102466400000,
+        temperaturaMinC: null,
+        temperaturaMaxC: 31.5,
+        actorSub: 'admin-espacios',
+      };
+      const context = { metadata: { eventId: 'x' }, data };
+      expect(validate('CriticidadClimaticaConfirmadaData', data)).toBe(true);
+      expect(new CrearEmergenciaClimaticaRule().appliesTo(context)).toBe(true);
+      expect(new RegistrarContextosClimaticosRule().appliesTo(context)).toBe(true);
+
+      const media = { metadata: { eventId: 'x' }, data: { ...data, nivelCriticidad: 'MEDIA' } };
+      expect(validate('CriticidadClimaticaConfirmadaData', media.data)).toBe(true);
+      expect(new CrearEmergenciaClimaticaRule().appliesTo(media)).toBe(false);
+      expect(new RegistrarContextosClimaticosRule().appliesTo(media)).toBe(false);
+
+      expect(() => validate('CriticidadClimaticaConfirmadaData', { ...data, nivelCriticidad: 'ROJA' })).toThrow();
+      expect(() => validate('CriticidadClimaticaConfirmadaData', { nivelCriticidad: 'ALTA' })).toThrow();
+    });
+
+    it('una CriticidadClimaticaFinalizada de Espacios cumple el spec y dispara la cancelación', () => {
+      const data = { alertaId: 'a7f0e2c4-1b3d-4e5f-8a9b-0c1d2e3f4a5b', finalizadaEn: 4102466400000, actorSub: 'admin-espacios' };
+      expect(validate('CriticidadClimaticaFinalizadaData', data)).toBe(true);
+      expect(new CancelarEmergenciaClimaticaRule().appliesTo({ metadata: { eventId: 'x' }, data })).toBe(true);
+      expect(() => validate('CriticidadClimaticaFinalizadaData', { finalizadaEn: 1 })).toThrow();
     });
 
     it('un ReservaCreada válido según el spec dispara la regla de reserva', () => {
