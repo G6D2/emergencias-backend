@@ -56,13 +56,21 @@ de 500 personas o más (`UMBRAL_PERSONAS_COBERTURA_RESERVA`) programa una
 `PREVENTIVA` por `reservaId`. Es opt-in: sin `EDA_TOPIC_RESERVA_CREADA` el
 consumer no se suscribe, porque un topic inexistente frenaría a todos.
 
-`CriticidadClimaticaConfirmada` de Espacios deja un contexto de zona por cada
-punto de `ubicaciones` (referencia `<alertaId>#<n>`, radio
-`CONTEXTO_ZONA_RADIO_CLIMA_METROS`) y, con nivel `ALTA` o `CRITICA`, una
-emergencia `PREVENTIVA` por `alertaId` con causa `EVENTO_CLIMATICO`.
-`CriticidadClimaticaFinalizada` da de baja el grupo: deja la fila `<alertaId>`
-como marca, así una confirmación que llega tarde no crea contextos. Alta y
-baja del mismo grupo se serializan con un advisory lock de la transacción.
+`alerta-climatica` sigue el ADR "Responder a las alertas climáticas de
+Espacios". `CriticidadClimaticaConfirmada` solo actúa con nivel `ALTA` o
+`CRITICA` (`BAJA` y `MEDIA` no generan nada): deja un contexto de zona por
+cada punto de `ubicaciones` (referencia `<alertaId>#<n>`) con el radio del
+nivel (`CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS`, default 1000;
+`CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS`, default 500) y una emergencia
+`PREVENTIVA` por `alertaId` con causa `EVENTO_CLIMATICO`.
+`CriticidadClimaticaFinalizada` da de baja el grupo y cancela la `PREVENTIVA`
+sin despachar: deja la fila `<alertaId>` como marca, así una confirmación que
+llega tarde no crea contextos ni emergencia. Los cuatro handlers toman el
+mismo advisory lock de la transacción por alerta, porque los dos eventos
+llegan por tópicos distintos y el consumer procesa particiones en paralelo.
+Los dos listeners son opt-in (`EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA` y
+`EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA`, sin default), igual que
+`ReservaCreada`.
 
 ## Errores
 

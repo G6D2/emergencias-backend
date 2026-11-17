@@ -30,8 +30,8 @@ flowchart LR
     bus["Bus EDA (Grupo 1)<br/>com.citypass.emergencias.*"]
     consumers["Reclamos · Espacios · Movilidad<br/>Residuos · Analítica"]
 
-    espacios["Espacios Públicos<br/>EventoComunitarioPublicado<br/>EventoCancelado<br/>ReservaCreada"]
-    listeners["src/listeners<br/>cobertura-preventiva y reclamo-intervencion<br/>KAFKA_CONSUMER_ENABLED=true"]
+    espacios["Espacios Públicos<br/>EventoComunitarioPublicado<br/>EventoCancelado<br/>ReservaCreada<br/>CriticidadClimaticaConfirmada / Finalizada"]
+    listeners["src/listeners<br/>cobertura-preventiva, reclamo-intervencion<br/>y alerta-climatica<br/>KAFKA_CONSUMER_ENABLED=true"]
 
     t1 --> e1
     t2 --> e2
@@ -85,12 +85,13 @@ Puntos del contrato (issue #48, cerrado el 2026-11-02) que conviene tener presen
 | `EmergenciaBicicleta` (Movilidad) | `EDA_TOPIC_EMERGENCIA_BICICLETA` (default `com.citypass.movilidad.EmergenciaBicicleta`) | `EmergenciaBicicletaListener` | Crea una emergencia externa `MEDICA` en `PENDING`, mapea P1/P2/P3/P4 a critical/high/medium/low y deduplica por `data.emergenciaId` (`causaTipo = MOVILIDAD_BICICLETA`). Ese ID se conserva como `correlationId` en `EmergenciaCreada` y todas las actualizaciones. No reemplaza `EmergenciaSolicitada` |
 | `EmergenciaSolicitada` (Movilidad) | `EDA_TOPIC_EMERGENCIA_SOLICITADA` (default `com.citypass.movilidad.EmergenciaSolicitada`) | `EmergenciaSolicitadaListener` | Disparador del caso de la ciclovía (default de `RECLAMO_INTERVENCION_DISPARADOR`): crea una única emergencia `TRANSITO` por `reclamoId` (causa `RECLAMO`) con la prioridad pedida → publica `EmergenciaCreada` |
 | `ReclamoCreado` (Reclamos, v3) | `EDA_TOPIC_RECLAMO_CREADO` (default `com.citypass.reclamos.ReclamoCreado.v3`) | `ReclamoCreadoListener` | Plan B: solo con `RECLAMO_INTERVENCION_DISPARADOR` en `reclamo` o `ambos`. Con `categoria = TRANSITO` y `objetoAfectado = CICLOVIA` crea la misma emergencia `TRANSITO` por `reclamoId` → publica `EmergenciaCreada` |
-| `CriticidadClimaticaConfirmada` (Espacios) | `EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA` (default `com.citypass.espacios.CriticidadClimaticaConfirmada`) | `CriticidadClimaticaConfirmadaListener` | Registra un contexto de zona `ALERTA_CLIMATICA` por cada punto de `ubicaciones` (referencia `<alertaId>#<n>`, radio `CONTEXTO_ZONA_RADIO_CLIMA_METROS`, default 2000 m) con la ventana `vigenciaDesde`–`vigenciaHasta`: las emergencias que se crean dentro de ese radio suben un nivel de prioridad de despacho. Con `nivelCriticidad` `ALTA` o `CRITICA` (y la alerta todavía vigente) crea además una única emergencia `PREVENTIVA` por `alertaId` (`causaTipo = EVENTO_CLIMATICO`) → publica `EmergenciaCreada` con `prioridadOriginal = prioridad` |
-| `CriticidadClimaticaFinalizada` (Espacios) | `EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA` (default `com.citypass.espacios.CriticidadClimaticaFinalizada`) | `CriticidadClimaticaFinalizadaListener` | Da de baja los contextos de ese `alertaId` (si llega antes que la confirmación, la confirmación tardía no crea contextos) y cancela la emergencia climática que siga en `PENDING`/`VALIDATED` → publica `EmergenciaActualizada` con `estadoNuevo = CANCELADA` |
+| `CriticidadClimaticaConfirmada` (Espacios) | `EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA` (opt-in, sin default; ej. `com.citypass.espacios.CriticidadClimaticaConfirmada`) | `CriticidadClimaticaConfirmadaListener` | Solo con `nivelCriticidad` `ALTA` o `CRITICA` (ADR "Responder a las alertas climáticas de Espacios"); `BAJA` y `MEDIA` no generan nada. Registra un contexto de zona `ALERTA_CLIMATICA` por cada punto de `ubicaciones` (referencia `<alertaId>#<n>`) con el radio del nivel (`CRITICA` 1000 m, `CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS`; `ALTA` 500 m, `CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS`) y la ventana `vigenciaDesde`–`vigenciaHasta`: las emergencias que se crean dentro de ese radio suben un nivel de prioridad de despacho. Si la alerta sigue vigente y no se finalizó, crea además una única emergencia `PREVENTIVA` por `alertaId` (`causaTipo = EVENTO_CLIMATICO`, severidad `high`/`critical`) → publica `EmergenciaCreada` con `prioridadOriginal = prioridad` |
+| `CriticidadClimaticaFinalizada` (Espacios) | `EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA` (opt-in, sin default; ej. `com.citypass.espacios.CriticidadClimaticaFinalizada`) | `CriticidadClimaticaFinalizadaListener` | Da de baja los contextos de ese `alertaId` y cancela la emergencia climática que siga en `PENDING`/`VALIDATED` → publica `EmergenciaActualizada` con `estadoNuevo = CANCELADA`. Si llega antes que la confirmación (o a la vez), la confirmación tardía no crea contextos ni emergencia: las dos toman el mismo advisory lock por alerta |
 | `ReclamoActualizado` (Reclamos) | `EDA_TOPIC_RECLAMO_ACTUALIZADO` (default `com.citypass.reclamos.ReclamoActualizado`) | `ReclamoActualizadoListener` | Con `estadoNuevo` `RESUELTO`, `RECHAZADO` o `CERRADO`, cancela la intervención que siga en `PENDING`/`VALIDATED` → publica `EmergenciaActualizada` con `estadoNuevo = CANCELADA` |
 
 Los listeners arrancan solo con `KAFKA_CONSUMER_ENABLED=true` y cada uno necesita su tópico
-seteado. Un solo consumer group, `com.citypass.emergencias.eventos`; deduplicación por
+seteado. Los opt-in (`ReservaCreada` y los dos de alerta climática) no tienen default: sin la
+variable, el consumer no se suscribe y `/health` los muestra `disabled`. Un solo consumer group, `com.citypass.emergencias.eventos`; deduplicación por
 `metadata.eventId` en `eventos_procesados`, y los mensajes ilegibles o inválidos se descartan sin
 frenar el tópico. Detalle en [`src/listeners/README.md`](../../src/listeners/README.md).
 
@@ -119,7 +120,7 @@ Viajan con su valor por defecto (`null`) hasta que se cierren los issues corresp
 | Campo | Evento | Pendiente de |
 |---|---|---|
 | `ubicacion.latitud`, `ubicacion.longitud` | `EmergenciaCreada` | Cargar `BUS_LOCATION_ENCRYPTION_KEY` en Render (sin clave salen `null`) |
-| `causaId`, `causaTipo` | `EmergenciaCreada` | Los completan las emergencias que crean los listeners (`EVENTO_PUBLICO`, `RECLAMO`, `EVENTO_CLIMATICO`, `MOVILIDAD_BICICLETA`); faltan `INCIDENTE_VIAL` y `RESERVA` |
+| `causaId`, `causaTipo` | `EmergenciaCreada` | Los completan las emergencias que crean los listeners (`EVENTO_PUBLICO`, `RESERVA`, `RECLAMO`, `EVENTO_CLIMATICO`, `MOVILIDAD_BICICLETA`); falta `INCIDENTE_VIAL` |
 | `prioridadOriginal` | `EmergenciaCreada` | Solo con `causaTipo = EVENTO_CLIMATICO` (igual a `prioridad`); en el resto, `null` como pide el contrato |
 | `areaResponsable` | `EmergenciaActualizada` | #85 |
 | Un evento por recurso despachado | `EmergenciaActualizada` | #85 (hoy sale un único evento con `asignadoA`) |
