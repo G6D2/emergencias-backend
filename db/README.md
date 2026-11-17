@@ -49,6 +49,9 @@ Las filas `PUBLISHED` se purgan después de `OUTBOX_PUBLISHED_RETENTION_HOURS`
 - `emergencies`: una fila por emergency.
 - `emergency_status_history`: una fila por cambio de status
   (`emergency_id`, `previous_status`, `new_status`, `actor`, `reason`, `created_at`).
+- `idempotency_keys` (V34): una fila por `Idempotency-Key` usada en un alta
+  (`scope`, `user_sub`, `idempotency_key`, `emergency_id`, `status_code`,
+  `created_at`). Vale 24 h; la app borra las vencidas.
 
 ## Cómo correr las migrations
 

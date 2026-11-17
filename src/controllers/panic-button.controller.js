@@ -12,6 +12,18 @@ const MAX_LATITUDE = 90;
 const MIN_LONGITUDE = -180;
 const MAX_LONGITUDE = 180;
 const MAX_ADDRESS_LENGTH = 200;
+// Alcance de las Idempotency-Key de esta alta en la tabla idempotency_keys.
+const PANIC_BUTTON_IDEMPOTENCY_SCOPE = 'POST /api/panic-button';
+const CREATED = 201;
+
+function createdResponse(emergency) {
+  return {
+    success: true,
+    emergencyId: emergency.id,
+    message: 'Botón de pánico activado',
+    data: emergency,
+  };
+}
 
 /**
  * Sanitiza la dirección legible opcional del body: nunca lanza (un dato mal
@@ -40,8 +52,12 @@ class PanicButtonController {
   /**
    * @param {object} payload - body del request (sin userId: viene del JWT)
    * @param {{ sub: string }} user - identidad autenticada (req.user)
+   * @param {{ idempotencyKey?: string|null }} [options] - clave ya validada
+   *   (parseIdempotencyKey). Con clave, un reintento del mismo usuario
+   *   devuelve la emergencia que creó el primer pedido.
+   * @returns {Promise<{ statusCode: number, replayed: boolean, body: object }>}
    */
-  async triggerPanicButton(payload, user) {
+  async triggerPanicButton(payload, user, { idempotencyKey = null } = {}) {
     if (!payload.location) {
       throw new ValidationError('Missing required fields: location');
     }
@@ -82,7 +98,7 @@ class PanicButtonController {
     // geocodificación inversa en vivo): nunca rompe el alta, se sanea o se ignora.
     const address = normalizeAddress(payload.address);
 
-    const emergency = await this.emergencyRepository.create({
+    const emergencyData = {
       id: emergencyId,
       // Tarea #58 (ADR-001): correlationId = emergencyId al crear; con él se
       // traza creación → priorización → despacho en los eventos.
@@ -101,13 +117,35 @@ class PanicButtonController {
         topic: process.env.TOPIC_PANIC_BUTTON || 'emergencias.boton-panico',
         payload: (savedEmergency, eventId) => buildEmergencyCreatedEvent(savedEmergency, eventId),
       },
-    });
+    };
 
+    if (!idempotencyKey) {
+      const emergency = await this.emergencyRepository.create(emergencyData);
+      return { statusCode: CREATED, replayed: false, body: createdResponse(emergency) };
+    }
+
+    // La respuesta repetida se arma con la emergencia guardada: mismo status y
+    // mismo cuerpo (si la emergencia cambió de estado en el medio, `data`
+    // muestra el actual). No se guarda el cuerpo para no duplicar la
+    // ubicación en claro fuera de la columna cifrada.
+    const result = await this.emergencyRepository.createWithIdempotencyKey({
+      idempotency: {
+        scope: PANIC_BUTTON_IDEMPOTENCY_SCOPE,
+        userSub: user.sub,
+        key: idempotencyKey,
+        statusCode: CREATED,
+      },
+      ...emergencyData,
+    });
+    if (result.replayed) {
+      secureLog('info', 'Idempotency-Key repetida: se devuelve la emergencia ya creada', {
+        emergencyId: result.emergency.id,
+      });
+    }
     return {
-      success: true,
-      emergencyId,
-      message: 'Botón de pánico activado',
-      data: emergency,
+      statusCode: result.statusCode,
+      replayed: result.replayed,
+      body: createdResponse(result.emergency),
     };
   }
 
@@ -142,4 +180,4 @@ class PanicButtonController {
   }
 }
 
-module.exports = { PanicButtonController };
+module.exports = { PanicButtonController, PANIC_BUTTON_IDEMPOTENCY_SCOPE };

@@ -200,6 +200,7 @@ flowchart TB
 | Entrega repetida (at-least-once) | Cada evento externo se procesa dentro de una transacción que también registra su `eventId`; el repetido se descarta | `src/listeners/outcome-factory.js`, tabla `eventos_procesados` |
 | Publicación confiable | El evento se escribe en `outbox_events` en la misma transacción que el cambio de estado; el publisher lo envía después y reintenta | `src/services/outbox-publisher.js`, `src/services/gateway-publisher.js` |
 | Dos instancias a la vez (primario y backup) | El job de incidentes toma un advisory lock de Postgres: solo una instancia detecta por vez. El outbox no pisa una fila que otro proceso ya reclamó | `src/services/incident-detection-job.js`, `src/services/outbox-publisher.js` |
+| Reintento de un alta (SOS) | Con `Idempotency-Key`, el mismo usuario y la misma clave dentro de 24 h devuelven la emergencia ya creada; la clave se reserva en la base, en la misma transacción que el alta, así que también vale con dos instancias y con pedidos simultáneos | `src/repositories/emergency.repository.js` (`createWithIdempotencyKey`), tabla `idempotency_keys` |
 | Errores de un evento externo | Transitorio (base o red caídas): no se confirma el offset y Kafka lo reentrega. Permanente (payload inválido): se registra como descartado, con su motivo, y el tópico sigue | `src/listeners/error-classifier.js` |
 | Caída del consumer | Se reinicia con backoff en vez de quedar muerto hasta el próximo deploy | `src/listeners/listener-supervisor.js` |
 | Servicio dormido (Render free) | Mientras duerme no consume ni publica; al despertar retoma desde el último offset confirmado y drena el outbox pendiente | `src/jobs/keep-warm.js`, `.github/workflows/keep-warm.yml` |
@@ -208,9 +209,8 @@ flowchart TB
 
 Limitaciones conocidas de esta vista: no hay *dead-letter topic* (un evento con error
 permanente se registra como descartado en `eventos_procesados`, sin un tópico desde donde
-reprocesarlo), y el
-`POST /api/panic-button` no usa el `Idempotency-Key` que manda el BFF, por lo que el BFF solo
-reintenta ese alta ante un 502 o 503 o si no llegó a conectar.
+reprocesarlo), y el BFF sigue reintentando `POST /api/panic-button` solo ante un 502 o 503 o
+si no llegó a conectar, aunque el backend ya deduplica por `Idempotency-Key`.
 
 Los intercambios paso a paso están en `05-secuencias.md`; la semántica de orden y entrega de
 los eventos, en `06-eventos.md`.
