@@ -1,18 +1,26 @@
 const { OutboxPublisher, resolvePublishSince, isOutboxPublisherEnabled } = require('../services/outbox-publisher');
 
-function createPool({ events = [], claimError = null, updateRowCount = 1 } = {}) {
+// Cada reclamo devuelve el siguiente lote de `batches` (o `events` una sola
+// vez) y después nada: runOnce reclama hasta que no salen más eventos.
+function createPool({ events = [], batches = null, claimError = null, updateRowCount = 1 } = {}) {
   const queries = [];
+  const pendingBatches = batches ? [...batches] : [events];
+  const claims = [];
   const client = {
     query: async (sql, params) => {
       queries.push({ sql, params });
       if (claimError && sql.includes('RETURNING id, topic, payload, attempts')) throw claimError;
-      if (sql.includes('RETURNING id, topic, payload, attempts')) return { rows: events };
+      if (sql.includes('RETURNING id, topic, payload, attempts')) {
+        claims.push(params[0]);
+        return { rows: pendingBatches.shift() || [] };
+      }
       return { rows: [] };
     },
     release: () => {},
   };
   return {
     queries,
+    claims,
     connect: async () => client,
     query: async (sql, params) => {
       queries.push({ sql, params });
@@ -32,7 +40,7 @@ describe('OutboxPublisher', () => {
       isConnected: () => true,
       publishEvent: async (topic, payload) => published.push({ topic, payload }),
     };
-    const publisher = new OutboxPublisher(pool, kafka, { maxAttempts: 3 });
+    const publisher = new OutboxPublisher(pool, kafka);
 
     await expect(publisher.runOnce()).resolves.toBe(1);
 
@@ -50,14 +58,14 @@ describe('OutboxPublisher', () => {
     expect(claim.sql.replace(/\s+/g, ' ').trim()).toMatch(/FROM claimed ORDER BY created_at, id$/);
   });
 
-  it('marks a repeatedly failing event as FAILED after max attempts', async () => {
+  it('un error transitorio nunca deja la fila FAILED, por más intentos que lleve (issue #104)', async () => {
     const pool = createPool();
-    const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, { maxAttempts: 2 });
+    const publisher = new OutboxPublisher(pool, { isEnabled: () => true }, { maxBackoffMs: 900_000 });
 
-    await publisher.markFailed('event-1', 2, new Error('broker down'));
+    await publisher.markFailed('event-1', 50, new Error('broker down'));
 
     const failureQuery = pool.queries.at(-1);
-    expect(failureQuery.params).toEqual(['event-1', 'FAILED', 0, 'broker down', 2]);
+    expect(failureQuery.params).toEqual(['event-1', 'PENDING', 900_000, 'broker down', 50]);
   });
 
   it('claimBatch hace ROLLBACK y repropaga si la query falla', async () => {
@@ -75,7 +83,7 @@ describe('OutboxPublisher', () => {
       isConnected: () => true,
       publishEvent: async () => { throw new Error('send failed'); },
     };
-    const publisher = new OutboxPublisher(pool, kafka, { maxAttempts: 3 });
+    const publisher = new OutboxPublisher(pool, kafka);
 
     const published = await publisher.runOnce();
 
@@ -86,7 +94,7 @@ describe('OutboxPublisher', () => {
   it('runOnce marca failed si publishEvent devuelve false (kafka deshabilitado dinámicamente)', async () => {
     const pool = createPool({ events: [{ id: 'event-3', topic: 'topic', payload: {}, attempts: 1 }] });
     const kafka = { isEnabled: () => true, isConnected: () => true, publishEvent: async () => false };
-    const publisher = new OutboxPublisher(pool, kafka, { maxAttempts: 3 });
+    const publisher = new OutboxPublisher(pool, kafka);
 
     const published = await publisher.runOnce();
 
@@ -125,7 +133,8 @@ describe('OutboxPublisher', () => {
   });
 
   it('runOnce conecta el producer en el primer poll y publica si la conexión sale bien', async () => {
-    const pool = createPool({ events: [{ id: 'event-5', topic: 'topic', payload: {}, attempts: 1 }] });
+    const event = { id: 'event-5', topic: 'topic', payload: {}, attempts: 1 };
+    const pool = createPool({ batches: [[event], [], [event]] });
     let connected = false;
     const kafka = {
       isEnabled: () => true,
@@ -192,7 +201,9 @@ describe('OutboxPublisher', () => {
   it('health(): enabled solo mientras corre el poller', () => {
     jest.useFakeTimers();
     const publisher = new OutboxPublisher(createPool(), { isEnabled: () => false });
-    expect(publisher.health()).toEqual({ enabled: false, publisher: 'kafka', lastPollAt: null });
+    expect(publisher.health()).toEqual({
+      enabled: false, publisher: 'kafka', lastPollAt: null, pausedUntil: null, consecutiveFailures: 0,
+    });
     const gateway = { isEnabled: () => true, publishEvent: async () => ({}) };
     expect(new OutboxPublisher(createPool(), {}, { publisher: gateway }).health().publisher).toBe('gateway');
 
@@ -445,7 +456,7 @@ describe('OutboxPublisher', () => {
 
     it('markFailed con error.isPermanent → FAILED directo sin importar los attempts', async () => {
       const pool = createPool();
-      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const publisher = new OutboxPublisher(pool, {});
       const err = new Error('bad schema');
       err.isPermanent = true;
 
@@ -459,7 +470,7 @@ describe('OutboxPublisher', () => {
 
     it('markFailed con error.retryAfterMs usa ese backoff en vez del exponencial', async () => {
       const pool = createPool();
-      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const publisher = new OutboxPublisher(pool, {});
       const err = new Error('rate limited');
       err.retryAfterMs = 45_000;
 
@@ -472,7 +483,7 @@ describe('OutboxPublisher', () => {
 
     it('markFailed con retryAfterMs > maxBackoffMs se capa al maximo', async () => {
       const pool = createPool();
-      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10, maxBackoffMs: 60_000 });
+      const publisher = new OutboxPublisher(pool, {}, { maxBackoffMs: 60_000 });
       const err = new Error('too long');
       err.retryAfterMs = 300_000;
 
@@ -501,7 +512,7 @@ describe('isOutboxPublisherEnabled', () => {
       ['markFailed', (p) => p.markFailed('e1', 3, new Error('x')), 'e1', 3],
     ])('%s filtra por status PROCESSING y el attempts del reclamo', async (_name, call, id, attempts) => {
       const pool = createPool();
-      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const publisher = new OutboxPublisher(pool, {});
 
       await expect(call(publisher)).resolves.toBe(true);
 
@@ -512,7 +523,7 @@ describe('isOutboxPublisherEnabled', () => {
 
     it('si otro proceso ya la reclamó (rowCount 0) no la pisa: devuelve false y loguea warn', async () => {
       const pool = createPool({ updateRowCount: 0 });
-      const publisher = new OutboxPublisher(pool, {}, { maxAttempts: 10 });
+      const publisher = new OutboxPublisher(pool, {});
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
       await expect(publisher.markFailed('e1', 1, new Error('timeout'))).resolves.toBe(false);
@@ -520,6 +531,238 @@ describe('isOutboxPublisherEnabled', () => {
 
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('ya no es de este reclamo'));
       warnSpy.mockRestore();
+    });
+  });
+});
+
+// Issue #104: caídas largas del bus y orden por emergencia.
+describe('OutboxPublisher ante caídas del bus (issue #104)', () => {
+  const event = (id, emergenciaId, attempts = 1) => ({
+    id, topic: 't', payload: { type: 'EmergenciaActualizada', data: { emergenciaId } }, attempts,
+  });
+  const transient = (message = 'Gateway 503') => new Error(message);
+  const permanent = (message = 'Gateway 400') => Object.assign(new Error(message), { isPermanent: true });
+  const updates = (pool, fragment) => pool.queries.filter(({ sql }) => sql.includes(fragment));
+
+  function scriptedPublisher(script) {
+    const sent = [];
+    return {
+      sent,
+      isEnabled: () => true,
+      publishEvent: async (topic, payload) => {
+        sent.push(payload.data && payload.data.emergenciaId);
+        const outcome = script.shift();
+        if (outcome instanceof Error) throw outcome;
+        return outcome === undefined ? { eventId: null, payloadHash: null } : outcome;
+      },
+    };
+  }
+
+  beforeEach(() => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  describe('claimBatch', () => {
+    it('no reclama un evento si hay uno anterior de la misma emergencia PENDING, PROCESSING o FAILED', async () => {
+      const pool = createPool();
+      const publisher = new OutboxPublisher(pool, { isEnabled: () => true });
+
+      await publisher.claimBatch(7);
+
+      const claim = pool.queries.find(({ sql }) => sql.includes('RETURNING id, topic, payload, attempts'));
+      const sql = claim.sql.replace(/\s+/g, ' ');
+      expect(sql).toContain("AND NOT EXISTS ( SELECT 1 FROM outbox_events prev WHERE prev.status IN ('PENDING', 'PROCESSING', 'FAILED')");
+      expect(sql).toContain("COALESCE(prev.payload->'data'->>'emergenciaId', prev.payload->'data'->>'id') = COALESCE(o.payload->'data'->>'emergenciaId', o.payload->'data'->>'id')");
+      expect(sql).toContain('(prev.created_at, prev.id) < (o.created_at, o.id)');
+      // Los PENDING anteriores a publishSince no frenan: se descartan al arrancar.
+      expect(sql).toContain("NOT (prev.status = 'PENDING' AND $2::timestamptz IS NOT NULL AND prev.created_at < $2::timestamptz)");
+      expect(claim.params[0]).toBe(7);
+    });
+
+    it('sin límite explícito usa batchSize', async () => {
+      const pool = createPool();
+      await new OutboxPublisher(pool, { isEnabled: () => true }, { batchSize: 12 }).claimBatch();
+      expect(pool.claims).toEqual([12]);
+    });
+  });
+
+  describe('runOnce reclama de nuevo hasta batchSize', () => {
+    it('publica en la misma corrida el evento siguiente de una emergencia cuando el anterior salió', async () => {
+      const pool = createPool({ batches: [[event('a1', 'A'), event('b1', 'B')], [event('a2', 'A')]] });
+      const gateway = scriptedPublisher([]);
+      const publisher = new OutboxPublisher(pool, {}, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(3);
+
+      expect(gateway.sent).toEqual(['A', 'B', 'A']);
+      // 50 → 48 → 47 y un último reclamo vacío que corta.
+      expect(pool.claims).toEqual([50, 48, 47]);
+    });
+
+    it('no pasa de batchSize eventos por corrida', async () => {
+      const pool = createPool({ batches: [[event('a1', 'A'), event('b1', 'B')], [event('a2', 'A')]] });
+      const publisher = new OutboxPublisher(pool, {}, { publisher: scriptedPublisher([]), batchSize: 2 });
+
+      await expect(publisher.runOnce()).resolves.toBe(2);
+
+      expect(pool.claims).toEqual([2]);
+    });
+  });
+
+  describe('error transitorio: corta el lote y pausa', () => {
+    it('el primer error transitorio deja la fila PENDING con backoff, devuelve el resto sin gastar intentos y no manda más', async () => {
+      let now = 1_000_000;
+      const pool = createPool({ batches: [[event('a1', 'A', 3), event('b1', 'B', 1), event('c1', 'C', 2)]] });
+      const gateway = scriptedPublisher([transient()]);
+      const publisher = new OutboxPublisher(pool, {}, { publisher: gateway, intervalMs: 5000, now: () => now });
+
+      await expect(publisher.runOnce()).resolves.toBe(0);
+
+      expect(gateway.sent).toEqual(['A']);
+      const [failed] = updates(pool, 'SET status = $2');
+      expect(failed.params.slice(0, 2)).toEqual(['a1', 'PENDING']);
+      const [release] = updates(pool, 'FROM unnest($1::uuid[], $2::int[]) AS claim(id, attempts)');
+      expect(release.sql).toMatch(/attempts = o\.attempts - 1/);
+      expect(release.sql).toMatch(/o\.status = 'PROCESSING' AND o\.attempts = claim\.attempts/);
+      expect(release.params).toEqual([['b1', 'c1'], [1, 2]]);
+      // Corta: no vuelve a reclamar en esta corrida.
+      expect(pool.claims).toHaveLength(1);
+      expect(publisher.health()).toMatchObject({
+        pausedUntil: new Date(1_005_000).toISOString(),
+        consecutiveFailures: 1,
+      });
+
+      // En pausa no toca la base.
+      const before = pool.queries.length;
+      now += 4999;
+      await expect(publisher.runOnce()).resolves.toBe(0);
+      expect(pool.queries).toHaveLength(before);
+
+      // Pasada la pausa vuelve a reclamar.
+      now += 1;
+      await publisher.runOnce();
+      expect(pool.claims).toHaveLength(2);
+    });
+
+    it('la pausa se duplica con cada fallo seguido, hasta maxPauseMs', () => {
+      const now = 0;
+      const publisher = new OutboxPublisher(createPool(), {}, {
+        publisher: scriptedPublisher([]), intervalMs: 5000, maxPauseMs: 30_000, now: () => now,
+      });
+      const pauses = [];
+      for (let i = 0; i < 5; i += 1) {
+        publisher.pause(transient());
+        pauses.push(publisher.pausedUntil - now);
+      }
+      expect(pauses).toEqual([5000, 10_000, 20_000, 30_000, 30_000]);
+    });
+
+    it('un 429 con Retry-After pausa ese tiempo, acotado a maxBackoffMs', () => {
+      const publisher = new OutboxPublisher(createPool(), {}, {
+        publisher: scriptedPublisher([]), maxBackoffMs: 60_000, now: () => 0,
+      });
+
+      publisher.pause(Object.assign(transient('Gateway 429'), { retryAfterMs: 20_000 }));
+      expect(publisher.pausedUntil).toBe(20_000);
+
+      publisher.pause(Object.assign(transient('Gateway 429'), { retryAfterMs: 600_000 }));
+      expect(publisher.pausedUntil).toBe(60_000);
+    });
+
+    it('la pausa por defecto no pasa de 5 minutos ni de maxBackoffMs', () => {
+      expect(new OutboxPublisher(createPool(), {}).maxPauseMs).toBe(5 * 60 * 1000);
+      expect(new OutboxPublisher(createPool(), {}, { maxBackoffMs: 60_000 }).maxPauseMs).toBe(60_000);
+    });
+
+    it('un envío que sale bien levanta la pausa y reinicia la cuenta', async () => {
+      const now = 0;
+      const pool = createPool({ batches: [[event('a1', 'A')]] });
+      const publisher = new OutboxPublisher(pool, {}, { publisher: scriptedPublisher([]), now: () => now });
+      publisher.consecutiveFailures = 4;
+      publisher.pausedUntil = -1;
+
+      await expect(publisher.runOnce()).resolves.toBe(1);
+
+      expect(publisher.health()).toMatchObject({ pausedUntil: null, consecutiveFailures: 0 });
+      expect(console.log).toHaveBeenCalledWith(expect.stringContaining('volvió a responder'));
+    });
+
+    it('un evento salteado (no pasa por el bus) no levanta la pausa', async () => {
+      const pool = createPool({ batches: [[event('p1', 'A')]] });
+      const publisher = new OutboxPublisher(pool, {}, { publisher: scriptedPublisher([{ skipped: true }]), now: () => 0 });
+      publisher.consecutiveFailures = 2;
+      publisher.pausedUntil = -1;
+
+      await publisher.runOnce();
+
+      expect(publisher.consecutiveFailures).toBe(2);
+    });
+
+    it('un error permanente marca FAILED pero no corta el lote ni pausa', async () => {
+      const pool = createPool({ batches: [[event('a1', 'A'), event('b1', 'B')]] });
+      const gateway = scriptedPublisher([permanent()]);
+      const publisher = new OutboxPublisher(pool, {}, { publisher: gateway });
+
+      await expect(publisher.runOnce()).resolves.toBe(1);
+
+      expect(gateway.sent).toEqual(['A', 'B']);
+      expect(updates(pool, 'SET status = $2')[0].params.slice(0, 2)).toEqual(['a1', 'FAILED']);
+      expect(updates(pool, 'FROM unnest(')).toHaveLength(0);
+      expect(publisher.isPaused()).toBe(false);
+    });
+
+    it('si el error es del último del lote no hay nada que devolver', async () => {
+      const pool = createPool({ batches: [[event('a1', 'A')]] });
+      const publisher = new OutboxPublisher(pool, {}, { publisher: scriptedPublisher([transient()]) });
+
+      await publisher.runOnce();
+
+      expect(updates(pool, 'FROM unnest(')).toHaveLength(0);
+      expect(publisher.isPaused()).toBe(true);
+    });
+
+    it('releaseClaims devuelve 0 si la base no informa filas', async () => {
+      const pool = createPool();
+      pool.query = async () => ({ rows: [] });
+      const publisher = new OutboxPublisher(pool, {});
+
+      await expect(publisher.releaseClaims([event('a1', 'A')])).resolves.toBe(0);
+    });
+  });
+
+  describe('configuración por entorno', () => {
+    const saved = {};
+    beforeEach(() => {
+      ['OUTBOX_BATCH_SIZE', 'OUTBOX_POLL_INTERVAL_MS'].forEach((name) => {
+        saved[name] = process.env[name];
+      });
+    });
+    afterEach(() => {
+      Object.entries(saved).forEach(([name, value]) => {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      });
+    });
+
+    it('OUTBOX_BATCH_SIZE y OUTBOX_POLL_INTERVAL_MS cambian el lote y el intervalo', () => {
+      process.env.OUTBOX_BATCH_SIZE = '10';
+      process.env.OUTBOX_POLL_INTERVAL_MS = '15000';
+      const publisher = new OutboxPublisher(createPool(), {});
+      expect(publisher.batchSize).toBe(10);
+      expect(publisher.intervalMs).toBe(15_000);
+    });
+
+    it.each([['0'], ['-5'], ['abc'], [''], ['10.5']])('un valor inválido (%p) cae al default', (value) => {
+      process.env.OUTBOX_BATCH_SIZE = value;
+      process.env.OUTBOX_POLL_INTERVAL_MS = value;
+      const publisher = new OutboxPublisher(createPool(), {});
+      expect(publisher.batchSize).toBe(50);
+      expect(publisher.intervalMs).toBe(5000);
     });
   });
 });

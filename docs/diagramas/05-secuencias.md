@@ -123,15 +123,20 @@ sequenceDiagram
     Pub->>DB: al arrancar, skipPendingBefore(): PENDING anteriores a OUTBOX_PUBLISH_SINCE pasan a SKIPPED
     loop runOnce() cada intervalMs (default 5000ms)
         alt kafkaService.isEnabled() === true
-            Pub->>DB: claimBatch() — UPDATE ... SET PROCESSING FOR UPDATE SKIP LOCKED LIMIT 50
-            DB-->>Pub: lote de eventos reclamados
+            Note over Pub: si está en pausa (el bus no respondió), no reclama nada
+            Pub->>DB: claimBatch() — UPDATE ... SET PROCESSING FOR UPDATE SKIP LOCKED LIMIT 50, a lo sumo un evento por emergencia (ninguno si hay uno anterior PENDING/PROCESSING/FAILED)
+            DB-->>Pub: lote de eventos reclamados (se vuelve a reclamar hasta 50 por corrida)
             loop por evento del lote
                 Pub->>Kafka: producer.send(topic, payload)
                 alt envío OK
                     Kafka-->>Pub: ack
                     Pub->>DB: markPublished(id, attempts) — status=PUBLISHED (solo si sigue PROCESSING con ese attempts)
-                else falla o Kafka no conectado
-                    Pub->>DB: markFailed(id, attempts) — backoff hasta OUTBOX_MAX_ATTEMPTS, luego FAILED (mismo filtro)
+                else error propio del evento (400/403/404/413)
+                    Pub->>DB: markFailed(id, attempts) — FAILED, frena a los posteriores de su emergencia (mismo filtro)
+                else error transitorio (red, timeout, 5xx, 429) o Kafka no conectado
+                    Pub->>DB: markFailed(id, attempts) — PENDING con backoff (sin límite de intentos)
+                    Pub->>DB: releaseClaims(resto del lote) — vuelven a PENDING sin gastar intento
+                    Note over Pub: corta el lote y pausa (Retry-After o 5 s, 10 s, 20 s… hasta 5 min)
                 end
             end
         else kafkaService.isEnabled() === false (KAFKA_ENABLED=false)

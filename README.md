@@ -664,7 +664,7 @@ Estado del servicio (público). Responde con lo que el proceso tiene en memoria,
   "status": "ok",
   "timestamp": "2026-11-05T15:00:00.000Z",
   "kafka": "connected",
-  "outbox": { "enabled": false, "lastPollAt": null, "producerConnected": false },
+  "outbox": { "enabled": true, "publisher": "gateway", "lastPollAt": "2026-11-05T14:59:58.000Z", "pausedUntil": null, "consecutiveFailures": 0, "producerConnected": false },
   "listeners": [
     { "name": "EventoCanceladoListener", "running": true, "status": "running", "lastPollAt": "2026-11-05T14:59:58.000Z", "nextRetryAt": null }
   ]
@@ -672,6 +672,8 @@ Estado del servicio (público). Responde con lo que el proceso tiene en memoria,
 ```
 
 `status` de un listener: `starting` (primer intento), `running`, `retrying` (falló y todavía no volvió a arrancar: se reintenta a los 5 s, 30 s, 2 min y después cada 2 min; `nextRetryAt` dice cuándo es el próximo intento), `disabled` (sin topic) o `stopped`. `lastPollAt` es el último fetch al broker (kafkajs hace long polling, así que se actualiza cada pocos segundos aunque no haya mensajes).
+
+En `outbox`, `pausedUntil` dice hasta cuándo el publisher no publica porque el bus no respondió (`null` si anda) y `consecutiveFailures` cuántos errores transitorios seguidos lleva (ver [Cómo salen](#cómo-salen)).
 
 ---
 
@@ -820,7 +822,14 @@ Detalle del schema y migrations: [db/README.md](db/README.md). Plantilla de env:
 
 ### Cómo salen
 
-Cada operación que crea una emergencia o le cambia el estado deja su evento en `outbox_events` en la **misma transacción** (outbox transaccional). El `OutboxPublisher` reclama los pendientes cada 5 s y los manda a Kafka; si un envío falla, reintenta con backoff exponencial y, después de `OUTBOX_MAX_ATTEMPTS`, lo marca `FAILED`. Los `PUBLISHED` se purgan a las `OUTBOX_PUBLISHED_RETENTION_HOURS`. Al arrancar, el publisher pasa a `SKIPPED` los `PENDING` anteriores a `OUTBOX_PUBLISH_SINCE`.
+Cada operación que crea una emergencia o le cambia el estado deja su evento en `outbox_events` en la **misma transacción** (outbox transaccional). El `OutboxPublisher` reclama los pendientes cada 5 s (`OUTBOX_POLL_INTERVAL_MS`), hasta 50 por corrida (`OUTBOX_BATCH_SIZE`), y los manda al bus. Los `PUBLISHED` se purgan a las `OUTBOX_PUBLISHED_RETENTION_HOURS`. Al arrancar, el publisher pasa a `SKIPPED` los `PENDING` anteriores a `OUTBOX_PUBLISH_SINCE`.
+
+**Caídas del bus y orden (issue #104):**
+
+- **Una caída no pierde eventos.** Un error transitorio (red, timeout, 5xx, 429) se reintenta sin límite de intentos, con backoff exponencial desde 30 s acotado a `OUTBOX_MAX_BACKOFF_MS` (15 min). Antes, a los 10 intentos (~75 min de caída) el evento quedaba `FAILED` para siempre. Solo un error propio del evento (400/403/404/413 del gateway, 401 tras renovar el token) lo deja `FAILED`.
+- **No insiste contra un bus caído.** Ante el primer error transitorio corta el lote (lo que faltaba vuelve a `PENDING` sin gastar intento) y se pausa: `Retry-After` si vino, si no 5 s, 10 s, 20 s… hasta 5 min. Después de la pausa prueba con un solo envío. `/health` muestra `outbox.pausedUntil` y `outbox.consecutiveFailures`.
+- **Orden por emergencia.** Un evento no se publica mientras haya uno anterior de la misma emergencia `PENDING`, `PROCESSING` o `FAILED`, aunque el anterior tenga el reintento programado para más tarde. También vale con dos instancias. Entre emergencias distintas no hay orden.
+- **`FAILED`.** Frena a los eventos posteriores de su emergencia hasta resolverlo: `npm run outbox:requeue-failed` lista los `FAILED` sin cambiar nada; con `-- --apply` los reencola (después de corregir la causa) y con `-- --skip --apply` los descarta (`SKIPPED`). `--id <uuid>` limita a esos eventos.
 
 **En producción el publisher está prendido desde el 05/11** con `EDA_PUBLISHER_MODE=gateway` y `OUTBOX_PUBLISHER_ENABLED=true`: `EmergenciaCreada` y `EmergenciaActualizada` salen por HTTP al gateway, a los FQN `com.citypass.emergencias.*`, y `EmergenciaPriorizada` queda `SKIPPED`. Sin `OUTBOX_PUBLISHER_ENABLED=true` no se publica nada, pero tampoco se pierde: los eventos quedan `PENDING` en `outbox_events` (`GET /api/outbox-events`).
 
@@ -1035,8 +1044,8 @@ request renueve el token aunque haya N llamadas en vuelo.
 | `2xx` | `markPublished` con `payload_hash` y `gateway_event_id` del response |
 | `401` | reintento interno con token fresco; si vuelve a 401 → `PermanentError` → `FAILED` |
 | `400` / `403` / `404` / `413` | `PermanentError` → `FAILED` directo sin reintentar |
-| `429` | respeta `Retry-After` si viene; outbox usa ese `retryAfterMs` como backoff |
-| `5xx` y otros | transient — backoff exponencial del outbox |
+| `429` | respeta `Retry-After` si viene: es el backoff del evento y la pausa del publisher. Corta el lote |
+| `5xx`, red, timeout y otros | transient: backoff exponencial del evento, sin límite de intentos. Corta el lote y pausa el publisher |
 
 Solo salen al bus `EmergenciaCreada` y `EmergenciaActualizada`, los tipos del contrato. `EmergenciaPriorizada` es interna: el publisher la devuelve como salteada y el outbox la marca `SKIPPED` sin llamar al gateway.
 

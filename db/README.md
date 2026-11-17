@@ -26,8 +26,13 @@ Los eventos se marcan como `PUBLISHED` solo después de que Kafka confirma el
 envío. El outbox proporciona entrega al menos una vez; los consumidores deben
 usar `event.id` o `emergencyId` para hacer sus operaciones idempotentes.
 
-Los eventos fallidos usan backoff exponencial hasta `OUTBOX_MAX_ATTEMPTS`
-(default: 10); después pasan a `FAILED` para evitar reintentos infinitos.
+Los eventos fallidos por un error transitorio (red, timeout, 5xx, 429) se
+reintentan sin límite de intentos, con backoff exponencial acotado a
+`OUTBOX_MAX_BACKOFF_MS` (default: 15 min): una caída del bus solo los demora.
+Solo un error propio del evento (400/403/404/413 del gateway) los deja `FAILED`.
+Un evento no se publica mientras haya uno anterior de la misma emergencia
+`PENDING`, `PROCESSING` o `FAILED`; los `FAILED` se reencolan o descartan con
+`npm run outbox:requeue-failed` (issue #104).
 Las filas `PUBLISHED` se purgan después de `OUTBOX_PUBLISHED_RETENTION_HOURS`
 (default: 168 horas). Con `KAFKA_ENABLED=false`, los eventos permanecen
 `PENDING` hasta que exista un broker y se habilite el publisher.

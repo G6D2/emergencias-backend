@@ -513,7 +513,8 @@ const options = {
           type: 'string',
           enum: OUTBOX_STATUSES,
           description: 'PENDING: espera publicación. PROCESSING: reclamado por el publisher. '
-            + 'PUBLISHED: Kafka confirmó el envío. FAILED: agotó OUTBOX_MAX_ATTEMPTS. '
+            + 'PUBLISHED: Kafka confirmó el envío. FAILED: error propio del evento (400/403/404/413 del gateway); '
+            + 'frena a los posteriores de su emergencia hasta reencolarlo o descartarlo (npm run outbox:requeue-failed). '
             + 'SKIPPED: PENDING anterior a OUTBOX_PUBLISH_SINCE, descartado al arrancar el publisher (V21).',
         },
         HealthResponse: {
@@ -534,6 +535,17 @@ const options = {
                 enabled: { type: 'boolean', example: false },
                 producerConnected: { type: 'boolean', example: false },
                 lastPollAt: { type: 'string', format: 'date-time', nullable: true },
+                pausedUntil: {
+                  type: 'string',
+                  format: 'date-time',
+                  nullable: true,
+                  description: 'Hasta cuándo no publica porque el bus no respondió (issue #104). null si anda.',
+                },
+                consecutiveFailures: {
+                  type: 'integer',
+                  example: 0,
+                  description: 'Errores transitorios seguidos del bus; vuelve a 0 con el primer envío que sale bien.',
+                },
               },
             },
             listeners: {
