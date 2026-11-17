@@ -102,13 +102,13 @@ describe('login de desarrollo: grupo officer', () => {
     expect(claims.sub).toBe('of-003');
   });
 
-  it('modo estricto emite officer solo para los oficiales demo, con grupos fijos', () => {
-    const claims = resolveDevLoginClaims(
-      { sub: 'of-001', groups: ['dispatcher'] },
-      { NODE_ENV: 'production' }
-    );
-    expect(claims.groups).toEqual(['officer']);
-    expect(Object.keys(DEV_LOGIN_ALLOWLIST)).toEqual(expect.arrayContaining(['of-001', 'of-002']));
+  it('modo estricto no emite officer: los oficiales entran por el Login Federado', () => {
+    for (const sub of ['of-001', 'of-002']) {
+      expect(() => resolveDevLoginClaims({ sub, groups: ['officer'] }, { NODE_ENV: 'production' }))
+        .toThrow(/not allowed/);
+    }
+    const grupos = Object.values(DEV_LOGIN_ALLOWLIST).flatMap((entry) => entry.groups);
+    expect(new Set(grupos)).toEqual(new Set(['citizen']));
   });
 
   it('modo estricto rechaza un oficial que no está en la allowlist', () => {
