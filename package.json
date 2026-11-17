@@ -11,6 +11,7 @@
     "security:anonymize-locations": "node scripts/anonymize-locations.js",
     "security:backfill-barrios": "node scripts/backfill-barrios.js",
     "backfill:vinculos-contexto": "node scripts/backfill-vinculos-contexto.js",
+    "outbox:requeue-failed": "node scripts/outbox-requeue-failed.js",
     "seed": "node scripts/seed.js",
     "test": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js --runInBand",

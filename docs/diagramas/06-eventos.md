@@ -127,21 +127,24 @@ Viajan con su valor por defecto (`null`) hasta que se cierren los issues corresp
 
 ## Semántica de orden y entrega
 
-No prometemos orden estricto de entrega. Los detalles:
+Desde el issue #104 el outbox publica **en orden por emergencia**; entre emergencias distintas no hay orden. Los detalles:
 
 | Aspecto | Comportamiento actual | Consecuencia |
 |---|---|---|
-| **Orden de reclamo** | `OutboxPublisher.claimBatch()` corre `... ORDER BY created_at FOR UPDATE SKIP LOCKED` | Dentro de un batch, los más viejos salen primero |
-| **Retries** | Si la publicación falla, `markFailed()` setea `available_at = now() + backoff` (30 s, 60 s, 120 s… hasta `OUTBOX_MAX_BACKOFF_MS`, 15 min por default; con 429 del gateway respeta `Retry-After`). El evento vuelve a `PENDING` pero **demorado**. Los errores permanentes del gateway (400/403/404/413, 401 tras reintentar) pasan a `FAILED` sin reintento | Un evento posterior puede **adelantar** al fallido si el próximo poll (5 s) llega antes que el backoff |
+| **Orden de reclamo** | `OutboxPublisher.claimBatch()` corre `... ORDER BY created_at, id FOR UPDATE SKIP LOCKED` y no reclama un evento mientras haya uno anterior de la misma emergencia (`data.emergenciaId`, o `data.id` en `EmergenciaPriorizada`) en `PENDING`, `PROCESSING` o `FAILED`. `runOnce` vuelve a reclamar hasta 50 eventos por corrida | Los eventos de una emergencia salen en el orden en que se crearon, también con dos instancias. Los de la misma transacción comparten `created_at` y se ordenan por `id` |
+| **Retries** | Si la publicación falla, `markFailed()` setea `available_at = now() + backoff` (30 s, 60 s, 120 s… hasta `OUTBOX_MAX_BACKOFF_MS`, 15 min por default; con 429 del gateway respeta `Retry-After`). Un error transitorio nunca deja la fila `FAILED`: se reintenta sin límite de intentos. Los errores permanentes del gateway (400/403/404/413, 401 tras reintentar) pasan a `FAILED` sin reintento | Un evento demorado frena a los posteriores de su emergencia, no a los demás. Un `FAILED` los frena hasta que se lo reencola o se lo descarta (`npm run outbox:requeue-failed`) |
+| **Caída del bus** | Ante el primer error transitorio el publisher corta el lote (el resto vuelve a `PENDING` sin gastar intento) y se pausa: `Retry-After` si vino, si no 5 s, 10 s, 20 s… hasta 5 min. Cada corrida después de la pausa prueba con un solo envío. `/health` muestra `outbox.pausedUntil` | Una caída larga solo demora: no se pierde nada. Al volver, los eventos que quedaron con backoff largo (los que se usaron para probar) salen cuando vence, como mucho 15 min después |
 | **Lock vencido** | `claimBatch()` también reclama filas `PROCESSING` con `locked_at` de más de 1 minuto, y cada reclamo suma 1 a `attempts`. `markPublished`/`markSkipped`/`markFailed` solo actualizan si la fila sigue `PROCESSING` con el `attempts` de su reclamo | Si un proceso tarda más de 1 minuto y otro ya la reclamó y la publicó, el primero no la vuelve a `PENDING` (antes sí: el evento salía dos veces). Igual puede salir dos veces si los dos llegan a enviarla |
 | **Partition key** | Modo `kafka`: `producer.send({ messages: [{ key: null, value }] })` en `KafkaService.publishEvent`. Modo `gateway`: la key la decide el gateway | En modo `kafka`, cero ordenamiento entre particiones, ni siquiera para la misma emergencia. En modo `gateway` no hay garantía documentada por nuestro lado |
 | **Entrega** | Outbox transaccional + reintentos = **at-least-once** | Un consumidor puede recibir el mismo evento más de una vez (si `markPublished` falla después de que el bus confirmó). Deduplicar por `metadata.eventId`, como hace nuestro `OutcomeFactory` |
-| **Prender el bus con eventos acumulados** | El poll reclama el batch más viejo primero. Si alguno falla, el resto sigue y el fallido se demora | "Salen todos en orden al prender el bus" es **falso** en cuanto hay una falla intermedia |
+| **Prender el bus con eventos acumulados** | El poll reclama el batch más viejo primero, a lo sumo 50 eventos por corrida. Si uno falla por el bus, el lote se corta y el publisher se pausa | Por emergencia salen en orden; entre emergencias, no |
 
 ### Qué habría que hacer si un consumidor necesitase orden
 
-- **Orden por emergencia:** usar `key = emergenciaId` (en `KafkaService`, o pedirle al gateway
-  que particione por esa key). **No implementado.**
+- **Orden por emergencia:** el outbox ya no publica un evento mientras haya uno anterior de la
+  misma emergencia sin publicar (issue #104). Del lado del bus, en modo `kafka` faltaría
+  `key = emergenciaId` en `KafkaService` (o pedirle al gateway que particione por esa key).
+  **No implementado.**
 - **Orden por `correlationId`:** igual que lo anterior, agrupando por cadena de eventos.
   **No implementado.**
 - **Orden estricto global:** un tópico con una sola partición y sin retries paralelos. Descarta
