@@ -271,6 +271,26 @@ const INSERT_SQL = `INSERT INTO emergencies (
    VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'), $9, $10, $11, $12, $13)
    RETURNING *`;
 
+// Idempotency-Key del alta (V34): ventana en la que un pedido con la misma
+// clave del mismo usuario devuelve la emergencia ya creada, y cada cuánto se
+// borran, como mucho, las claves vencidas.
+const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
+const IDEMPOTENCY_KEY_PURGE_INTERVAL_MS = 60 * 60 * 1000;
+
+// Reserva la clave. Si ya existe pero venció, se pisa y cuenta como nueva. Si
+// otro pedido con la misma clave la reservó y todavía no confirmó, el INSERT
+// espera a que termine (clave primaria): si confirmó, no devuelve fila; si se
+// deshizo, la reserva entra.
+const RESERVE_IDEMPOTENCY_KEY_SQL = `INSERT INTO idempotency_keys
+     (scope, user_sub, idempotency_key, emergency_id, status_code)
+   VALUES ($1, $2, $3, $4, $5)
+   ON CONFLICT (scope, user_sub, idempotency_key) DO UPDATE
+     SET emergency_id = EXCLUDED.emergency_id,
+         status_code = EXCLUDED.status_code,
+         created_at = now()
+     WHERE idempotency_keys.created_at <= now() - ($6::double precision * interval '1 millisecond')
+   RETURNING emergency_id`;
+
 // Repository de persistencia de emergencies.
 // No sabe nada de Kafka, controllers ni HTTP: solo SQL + cifrado de ubicación.
 class EmergencyRepository {
@@ -279,6 +299,8 @@ class EmergencyRepository {
     this.locationCrypto = options.locationCrypto || createLocationCrypto();
     // Inyectable para tests (EVENTO_VINCULO_CONTEXTO_ENABLED y topics).
     this.env = options.env || process.env;
+    this.idempotencyKeyTtlMs = options.idempotencyKeyTtlMs || IDEMPOTENCY_KEY_TTL_MS;
+    this.lastIdempotencyKeyPurgeAt = 0;
   }
 
   // source/causa vienen de las emergencias que crea el listener de eventos
@@ -350,6 +372,83 @@ class EmergencyRepository {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * create() con Idempotency-Key (V34). La clave se reserva en la misma
+   * transacción que crea la emergencia y su evento del outbox:
+   * - Reserva nueva: se crea la emergencia. Si algo falla se deshace todo y la
+   *   clave queda libre para el reintento.
+   * - Clave ya usada por el mismo usuario dentro de la ventana: no se crea
+   *   nada; se devuelve la emergencia de esa clave con el status guardado.
+   * - Dos pedidos simultáneos con la misma clave: el segundo espera en el
+   *   INSERT a que el primero termine y después cae en el caso anterior.
+   *
+   * @param {{ idempotency: { scope: string, userSub: string, key: string, statusCode: number } }} params
+   *   más los mismos campos que create() (sin `client`).
+   * @returns {Promise<{ emergency: object, statusCode: number, replayed: boolean }>}
+   */
+  async createWithIdempotencyKey({ idempotency, ...data }) {
+    const { scope, userSub, key, statusCode } = idempotency;
+    const client = await this.pool.connect();
+    let created = null;
+    try {
+      await client.query('BEGIN');
+      const reservation = await client.query(RESERVE_IDEMPOTENCY_KEY_SQL, [
+        scope, userSub, key, data.id, statusCode, this.idempotencyKeyTtlMs,
+      ]);
+      if (reservation.rowCount > 0) {
+        created = await this.create({ ...data, client });
+        await client.query('COMMIT');
+      } else {
+        await client.query('ROLLBACK');
+      }
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    if (created) {
+      await this.purgeExpiredIdempotencyKeysIfDue();
+      return { emergency: created, statusCode, replayed: false };
+    }
+    return this.findIdempotentResult({ scope, userSub, key });
+  }
+
+  async findIdempotentResult({ scope, userSub, key }) {
+    const { rows } = await this.pool.query(
+      `SELECT emergency_id, status_code FROM idempotency_keys
+       WHERE scope = $1 AND user_sub = $2 AND idempotency_key = $3`,
+      [scope, userSub, key]
+    );
+    const emergency = rows[0] ? await this.findById(rows[0].emergency_id) : null;
+    // Solo si la fila desapareció entre la reserva y esta lectura (otra
+    // transacción la venció y se deshizo): el cliente puede reintentar.
+    if (!emergency) {
+      throw new ConflictError('Idempotency-Key en uso por otro pedido: reintentá');
+    }
+    return { emergency, statusCode: rows[0].status_code, replayed: true };
+  }
+
+  // Borra las claves vencidas, como mucho una vez por hora por proceso. Es
+  // limpieza: una clave vencida ya no se usa aunque siga en la tabla (la
+  // reserva la pisa). Un error no corta el alta que la disparó.
+  async purgeExpiredIdempotencyKeysIfDue(now = Date.now()) {
+    if (now - this.lastIdempotencyKeyPurgeAt < IDEMPOTENCY_KEY_PURGE_INTERVAL_MS) return 0;
+    this.lastIdempotencyKeyPurgeAt = now;
+    try {
+      const result = await this.pool.query(
+        `DELETE FROM idempotency_keys
+         WHERE created_at < now() - ($1::double precision * interval '1 millisecond')`,
+        [this.idempotencyKeyTtlMs]
+      );
+      return result.rowCount || 0;
+    } catch (error) {
+      secureLog('warn', 'No se pudieron borrar las Idempotency-Key vencidas', { message: error.message });
+      return 0;
     }
   }
 

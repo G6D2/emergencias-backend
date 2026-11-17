@@ -493,6 +493,23 @@ Activa el botón de pánico. Requiere grupo `citizen`. El `userId` se toma de `s
 
 **`severity` ya no es un input:** el backend la deriva de `emergencyType` (ver tabla abajo). Si el body manda `severity`, se **ignora** (se loguea a nivel debug, no rompe con 400, para no romper clientes viejos hasta que se actualicen).
 
+#### Header `Idempotency-Key` (opcional)
+
+Evita que un reintento por red duplique el SOS. El BFF del front manda un UUID v4 por pedido lógico y lo repite en cada reintento.
+
+- **Mismo usuario (`sub`) + misma clave dentro de las 24 h:** no se crea otra emergencia ni otro `EmergenciaCreada`. Responde lo mismo que la primera vez (201 y el mismo cuerpo, armado con la emergencia guardada) y agrega el header `Idempotent-Replayed: true`.
+- **Pedidos simultáneos con la misma clave:** se crea una sola emergencia. La clave se reserva en la misma transacción que el alta (tabla `idempotency_keys`, V34, clave primaria por alta + usuario + clave): el segundo pedido espera a que termine el primero y devuelve su emergencia. Si el primero falla, el segundo la crea. Funciona igual con dos instancias (deploy de Render), porque vive en la base.
+- **Formato:** de 1 a 128 caracteres entre letras, números y `_ . : -`; también se acepta entre comillas dobles. Mal formada → **400** sin crear nada. Vacía o ausente → el alta sigue como siempre (cada pedido crea una emergencia).
+- **Alcance:** la clave es por usuario (la misma clave de otro usuario es otra alta) y vence a las 24 h; después, el mismo valor crea una emergencia nueva. Solo se guarda la reserva cuando el alta sale bien: un 400 o un 5xx no la consumen.
+- **Qué no hace:** no compara el cuerpo del reintento con el original (el draft de la IETF sugiere 422 si cambia); con la misma clave se devuelve la emergencia original. No se guarda el cuerpo de la respuesta, para no duplicar la ubicación en claro fuera de la columna cifrada: si la emergencia cambió de estado entre los dos pedidos, `data` muestra el estado actual.
+
+```bash
+curl -X POST http://localhost:3000/api/panic-button \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -H "Idempotency-Key: 8e03978e-40d5-43e8-bc93-6894a57f9324" \
+  -d '{"location":{"latitude":-34.6037,"longitude":-58.3816}}'
+```
+
 **Request:**
 ```json
 {
