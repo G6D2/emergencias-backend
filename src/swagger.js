@@ -61,8 +61,9 @@ const options = {
             id: { type: 'string', format: 'uuid' },
             correlationId: {
               type: 'string',
-              format: 'uuid',
-              description: 'Igual al id al crear (ADR-001). Traza creación → priorización → despacho en los eventos.',
+              description: 'Igual al id en las altas ciudadanas (ADR-001). En las externas conserva el id de '
+                + 'correlación del otro módulo aunque no sea UUID (p. ej. EMG-... de Movilidad, V32). '
+                + 'Traza creación → priorización → despacho en los eventos.',
             },
             userId: {
               type: 'string',
@@ -143,7 +144,8 @@ const options = {
               enum: ['INTERNAL', 'EXTERNAL'],
               example: 'INTERNAL',
               description: 'INTERNAL: reportada por un ciudadano. EXTERNAL: creada por un listener de '
-                + 'eventos de otro módulo (hoy, la cobertura preventiva de Espacios).',
+                + 'eventos de otro módulo (cobertura preventiva y alerta climática de Espacios, intervención '
+                + 'por reclamo de ciclovía, emergencia en bicicleta de Movilidad).',
             },
             requiresManualValidation: {
               type: 'boolean',
@@ -153,10 +155,12 @@ const options = {
             causaTipo: {
               type: 'string',
               nullable: true,
-              enum: ['EVENTO_CLIMATICO', 'RECLAMO', 'INCIDENTE_VIAL', 'EVENTO_PUBLICO', 'RESERVA', null],
+              enum: ['EVENTO_CLIMATICO', 'RECLAMO', 'INCIDENTE_VIAL', 'EVENTO_PUBLICO', 'RESERVA', 'MOVILIDAD_BICICLETA', null],
               example: null,
-              description: 'Qué originó la emergencia (CHECK de V23). null en las reportadas por un ciudadano; '
-                + 'hoy solo se completa con EVENTO_PUBLICO (cobertura preventiva).',
+              description: 'Qué originó la emergencia (CHECK de V23 y V32). null en las reportadas por un ciudadano. '
+                + 'Lo completan los listeners: EVENTO_PUBLICO y RESERVA (cobertura preventiva), EVENTO_CLIMATICO '
+                + '(alerta climática), RECLAMO (intervención por reclamo de ciclovía) y MOVILIDAD_BICICLETA. '
+                + 'INCIDENTE_VIAL todavía no lo usa ningún listener.',
             },
             causaId: {
               type: 'string',

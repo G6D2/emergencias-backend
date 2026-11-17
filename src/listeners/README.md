@@ -50,6 +50,18 @@ descarta lo que no es un string, está vacío, pasa de 128 caracteres o trae
 caracteres de control. En ese caso, o si no viene, la emergencia usa su
 propio id.
 
+`reclamo-intervencion` es el caso de la ciclovía obstruida (Reclamos →
+Movilidad → Emergencias). `RECLAMO_INTERVENCION_DISPARADOR`
+(`reclamo-intervencion/disparador.js`) decide qué evento crea la intervención
+`TRANSITO`: `movilidad` (default: solo `EmergenciaSolicitada`), `reclamo`
+(solo `ReclamoCreado.v3`, el plan B) o `ambos` (el primero que llegue; el otro
+la encuentra creada). Un valor que no es ninguno de los tres frena el
+arranque. Los dos listeners usan el mismo handler `CrearIntervencionPorReclamo`
+y nunca crean dos por reclamo (`findByCausa` + índice único de V29).
+`ReclamoActualizado` con estado final (`RESUELTO`, `RECHAZADO`, `CERRADO`)
+cancela la intervención si sigue en `PENDING` o `VALIDATED`, sin importar el
+disparador. Secuencia en `docs/diagramas/05-secuencias.md` (f).
+
 `EmergenciaBicicleta` de Movilidad tiene un listener independiente de
 `EmergenciaSolicitada`: crea una emergencia médica por `data.emergenciaId`,
 deduplica además por la causa única `MOVILIDAD_BICICLETA`, y conserva ese ID
