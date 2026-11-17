@@ -226,7 +226,7 @@ flowchart LR
     subgraph org["GitHub · G6D2"]
         direction TB
 
-        subgraph be["emergencias-backend (Node.js 20, Express, CommonJS)"]
+        subgraph be["emergencias-backend (Node.js 22, Express, CommonJS)"]
             direction TB
             routes["src/routes"]
             authM["src/auth"]
@@ -307,7 +307,7 @@ flowchart TB
 
     subgraph render["Render · región Oregon · plan free"]
         feN["Web service: Frontend<br/>Next.js"]
-        beN["Web service: emergencias-backend<br/>contenedor Docker (node:20-alpine)"]
+        beN["Web service: emergencias-backend<br/>contenedor Docker (node:22-alpine)"]
     end
 
     subgraph render2["Render · segunda cuenta"]

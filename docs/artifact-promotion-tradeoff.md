@@ -59,7 +59,7 @@ Beneficios que hoy **no tenemos**:
 
 1. **Costo del cambio:** implementar imagen inmutable requiere Docker también en el frontend (el backend ya se construye con su `Dockerfile` en Render), publicación a GHCR, cambiar `render.yaml` para consumir imagen en vez de repo, y aprender el ciclo `pull → deploy` de Render con imágenes (soportado, pero es distinto al hook actual).
 2. **Beneficio marginal para el volumen actual:** dos builds seguidos toman 2-4 min extras y no somos production-critical. Ninguna de las regresiones que un artefacto inmutable previene apareció en las corridas hasta ahora.
-3. **El delta CI vs Render es acotado hoy:** ambos usan Node 20 y `npm ci`. La probabilidad de que un build pase en CI y falle en Render por diferencia de entorno es baja.
+3. **El delta CI vs Render es acotado hoy:** ambos usan Node 22 y `npm ci`. La probabilidad de que un build pase en CI y falle en Render por diferencia de entorno es baja.
 
 ## Cuándo migrar a artefacto inmutable
 

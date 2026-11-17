@@ -21,7 +21,7 @@ Backend para el módulo de Emergencias y Seguridad de CityPass+. Gestiona el bot
 ## Inicio Rápido
 
 ### Requisitos
-- Node.js 20+
+- Node.js 22+
 - Docker & Docker Compose (para **Kafka**; Postgres puede ser Neon o Docker)
 
 ### 1. Variables de entorno
