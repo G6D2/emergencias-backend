@@ -16,6 +16,7 @@ const {
   createDarDeBajaContextosClimaticosHandler,
 } = require('../../../listeners/alerta-climatica/handlers/contextos-climaticos.handler');
 const { buildEmergencyCreatedEvent } = require('../../../services/emergency-events');
+const { zonaDelBarrio } = require('../../../domain/barrio');
 const { ContextoZonaRepository } = require('../../../repositories/contexto-zona.repository');
 const { CrearEmergenciaClimaticaRule } = require('../../../listeners/alerta-climatica/criticidad-climatica-confirmada/rules/01-crear-emergencia-climatica.rule');
 const { RegistrarContextosClimaticosRule } = require('../../../listeners/alerta-climatica/criticidad-climatica-confirmada/rules/02-registrar-contextos-climaticos.rule');
@@ -140,7 +141,7 @@ describe('listeners/alerta-climatica', () => {
   });
 
   describe('CriticidadClimaticaConfirmada', () => {
-    it('ALTA crea la emergencia y registra un contexto por punto con radio de 500 m', async () => {
+    it('ALTA crea la emergencia y registra un contexto por barrio, con el círculo de cada barrio', async () => {
       const outcomes = await new CriticidadClimaticaConfirmadaListener(kafka).handle(confirmada());
       expect(outcomes.map((o) => o.type)).toEqual(['CrearEmergenciaClimatica', 'RegistrarContextosClimaticos']);
 
@@ -162,11 +163,28 @@ describe('listeners/alerta-climatica', () => {
         descripcion: 'Alerta climática ALTA: tormenta fuerte',
       });
       expect(contextos.ubicaciones).toEqual([
-        { indice: 0, latitud: -34.6037, longitud: -58.3816 },
-        { indice: 1, latitud: -34.5631, longitud: -58.4584 },
+        { indice: 0, barrio: 'SAN NICOLAS', ...zonaDelBarrio('SAN NICOLAS') },
+        { indice: 1, barrio: 'BELGRANO', ...zonaDelBarrio('BELGRANO') },
       ]);
       expect(contextos.vigenteDesde).toEqual(new Date(ALERTA.vigenciaDesde));
       expect(contextos.vigenteHasta).toEqual(new Date(ALERTA.vigenciaHasta));
+    });
+
+    it('sin barrios del catálogo registra un contexto por punto con el radio del nivel', async () => {
+      for (const barrios of [[], ['NARNIA'], undefined]) {
+        const outcomes = await new CriticidadClimaticaConfirmadaListener(kafka).handle(confirmada({ barrios }));
+        expect(outcomes[1].payload.ubicaciones).toEqual([
+          { indice: 0, latitud: -34.6037, longitud: -58.3816, radioMetros: 500, barrio: null },
+          { indice: 1, latitud: -34.5631, longitud: -58.4584, radioMetros: 500, barrio: null },
+        ]);
+      }
+    });
+
+    it('un barrio fuera del catálogo se descarta sin correr el índice de los demás', async () => {
+      const outcomes = await new CriticidadClimaticaConfirmadaListener(kafka).handle(confirmada({
+        barrios: ['NARNIA', 'belgrano', 'BELGRANO'],
+      }));
+      expect(outcomes[1].payload.ubicaciones.map((u) => [u.indice, u.barrio])).toEqual([[1, 'BELGRANO']]);
     });
 
     it('CRITICA registra los contextos con radio de 1000 m', async () => {
@@ -196,8 +214,15 @@ describe('listeners/alerta-climatica', () => {
       expect(outcomes[1].payload.radioMetros).toBe(1000);
     });
 
-    it('sin ubicaciones crea la emergencia sin punto y no registra contextos', async () => {
+    it('sin ubicaciones pero con barrios, crea la emergencia sin punto y registra los contextos por barrio', async () => {
       const outcomes = await new CriticidadClimaticaConfirmadaListener(kafka).handle(confirmada({ ubicaciones: [] }));
+      expect(outcomes.map((o) => o.type)).toEqual(['CrearEmergenciaClimatica', 'RegistrarContextosClimaticos']);
+      expect(outcomes[0].payload).toMatchObject({ latitud: null, longitud: null });
+      expect(outcomes[1].payload.ubicaciones.map((u) => u.barrio)).toEqual(['SAN NICOLAS', 'BELGRANO']);
+    });
+
+    it('sin ubicaciones ni barrios del catálogo crea la emergencia sin punto y no registra contextos', async () => {
+      const outcomes = await new CriticidadClimaticaConfirmadaListener(kafka).handle(confirmada({ ubicaciones: [], barrios: [] }));
       expect(outcomes.map((o) => o.type)).toEqual(['CrearEmergenciaClimatica']);
       expect(outcomes[0].payload).toMatchObject({ latitud: null, longitud: null });
     });
@@ -205,9 +230,12 @@ describe('listeners/alerta-climatica', () => {
     it('la emergencia va en el primer punto válido', async () => {
       const outcomes = await new CriticidadClimaticaConfirmadaListener(kafka).handle(confirmada({
         ubicaciones: [{ latitud: 'x', longitud: 1 }, { latitud: -34.5631, longitud: -58.4584 }],
+        barrios: [],
       }));
       expect(outcomes[0].payload).toMatchObject({ latitud: -34.5631, longitud: -58.4584 });
-      expect(outcomes[1].payload.ubicaciones).toEqual([{ indice: 1, latitud: -34.5631, longitud: -58.4584 }]);
+      expect(outcomes[1].payload.ubicaciones).toEqual([
+        { indice: 1, latitud: -34.5631, longitud: -58.4584, radioMetros: 500, barrio: null },
+      ]);
     });
 
     it('una alerta que ya venció solo deja contextos (sin emergencia)', async () => {

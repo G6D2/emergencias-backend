@@ -328,10 +328,14 @@ operations:
       $ref: '#/channels/criticidadClimaticaConfirmada'
     summary: |
       Solo con `nivelCriticidad` `ALTA` o `CRITICA` (`BAJA` y `MEDIA` no generan
-      nada). Registra un contexto de zona `ALERTA_CLIMATICA` por cada punto de
-      `ubicaciones`, con el radio del nivel (`CRITICA` 1000 m,
-      `CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS`; `ALTA` 500 m,
-      `CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS`) y la ventana
+      nada). Registra un contexto de zona `ALERTA_CLIMATICA` por cada barrio de
+      `barrios` que está en el catálogo de CABA, con un círculo que cubre el
+      barrio (centro: promedio de los vértices del polígono). Una emergencia se
+      vincula si se crea dentro del círculo **y** es de ese barrio, así el
+      círculo no alcanza a los barrios vecinos. Si no viene ningún barrio del
+      catálogo, un contexto por cada punto de `ubicaciones`, con el radio del
+      nivel (`CRITICA` 1000 m, `CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS`;
+      `ALTA` 500 m, `CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS`). Ventana:
       `vigenciaDesde`–`vigenciaHasta`. Si la alerta todavía está vigente, crea
       una única emergencia `PREVENTIVA` por `alertaId` (causa
       `EVENTO_CLIMATICO`, severidad `high` o `critical`), que sale en
@@ -1019,8 +1023,10 @@ components:
           type: string
           description: |
             Id en el módulo de origen. Con `EVENTO_ESPACIO_PUBLICO`, el `eventoId` de
-            Espacios; con `ALERTA_CLIMATICA`, `<alertaId>#<índice del punto>`. Clave
-            para agrupar por evento o alerta.
+            Espacios; con `ALERTA_CLIMATICA`, `<alertaId>#<índice>`, donde el índice
+            es la posición del barrio en `barrios` (zona por barrio) o del punto en
+            `ubicaciones` (alerta sin barrios del catálogo). Clave para agrupar por
+            evento o alerta.
         radioMetros:
           type: integer
           minimum: 1

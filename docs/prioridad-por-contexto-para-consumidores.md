@@ -9,9 +9,9 @@ Documento **autocontenido** para equipos que consumen eventos de Emergencias del
 Emergencias atiende con **un nivel más de prioridad** las emergencias que se crean cerca de una situación de la ciudad mientras dura. Hoy hay dos, las dos de Espacios Públicos:
 
 - **Un evento comunitario:** sube las emergencias que se crean a no más de 500 m del evento.
-- **Una alerta climática `ALTA` o `CRITICA`:** sube las emergencias que se crean cerca de alguno de los puntos de la alerta (500 m con `ALTA`, 1000 m con `CRITICA`). Con `MEDIA` o `BAJA` no sube nada. Ver sección 3.1.
+- **Una alerta climática `ALTA` o `CRITICA`:** sube las emergencias que se crean en los barrios de la alerta. Si la alerta no trae barrios del catálogo, las que se crean cerca de alguno de sus puntos (500 m con `ALTA`, 1000 m con `CRITICA`). Con `MEDIA` o `BAJA` no sube nada. Ver sección 3.1.
 
-Las dos funcionan igual: un punto, un radio y una ventana. Es una regla interna de despacho:
+Las dos funcionan igual: un punto, un radio y una ventana. La alerta por barrio, además, exige que la emergencia sea de ese barrio. Es una regla interna de despacho:
 
 - **`data.prioridad` no cambia.** En `EmergenciaCreada` y `EmergenciaActualizada` es siempre la prioridad original de la emergencia, haya o no un evento o una alerta en curso.
 - **El vínculo sí se publica**, como evento propio: `EmergenciaVinculadaAContextoZona` (ver sección 1.1). Es la forma recomendada de saber qué emergencias se elevaron y por qué evento.
@@ -20,7 +20,7 @@ Las dos funcionan igual: un punto, un radio y una ventana. Es una regla interna 
 
 ### 1.1 Recomendado: `EmergenciaVinculadaAContextoZona`
 
-Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios o un punto de una alerta climática). Es el mismo dato que usa el tablero del dispatcher, encolado en la misma sentencia que lo guarda: no hace falta recalcular nada ni medir distancias.
+Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios, o un barrio o un punto de una alerta climática). Es el mismo dato que usa el tablero del dispatcher, encolado en la misma sentencia que lo guarda: no hace falta recalcular nada ni medir distancias.
 
 | Campo | Para qué |
 |---|---|
@@ -28,7 +28,7 @@ Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios o un
 | `contextoId` | El contexto en Emergencias |
 | `contextoTipo` | `EVENTO_ESPACIO_PUBLICO` o `ALERTA_CLIMATICA` |
 | `contextoOrigen` | Módulo de origen (`espacios`) |
-| `referenciaExterna` | El `eventoId` de Espacios, o `<alertaId>#<índice del punto>` en una alerta climática. **Agrupar por este campo** para contar por evento; para contar por alerta, agrupar por lo que está antes del último `#` |
+| `referenciaExterna` | El `eventoId` de Espacios, o `<alertaId>#<índice>` en una alerta climática (posición del barrio en `barrios`, o del punto en `ubicaciones` si la alerta no trae barrios del catálogo). **Agrupar por este campo** para contar por evento; para contar por alerta, agrupar por lo que está antes del último `#` |
 | `radioMetros` | Radio con el que se decidió |
 | `vinculadaEn` | Cuándo se vinculó (al crearse la emergencia) |
 | `reglaVersion` | Versión de la regla. Si sube, cambió la forma de decidir el vínculo |
@@ -56,9 +56,9 @@ El resto de esta guía explica cómo **recalcular** el vínculo y la suba con lo
 |------|--------|--------|
 | Lugar y ventana del evento público | `com.citypass.espacios.EventoComunitarioPublicado` | `data.eventoId`, `data.latitud`, `data.longitud`, `data.inicio`, `data.fin`, `data.estado` (también llegan así la suspensión y la reanudación) |
 | Cancelación del evento | `com.citypass.espacios.EventoCancelado` | `data.eventoId`, `data.canceladoEn` |
-| Alerta climática | `com.citypass.espacios.CriticidadClimaticaConfirmada` | `data.alertaId`, `data.nivelCriticidad`, `data.ubicaciones` (`[{ latitud, longitud }]`), `data.vigenciaDesde`, `data.vigenciaHasta` (epoch ms) |
+| Alerta climática | `com.citypass.espacios.CriticidadClimaticaConfirmada` | `data.alertaId`, `data.nivelCriticidad`, `data.barrios`, `data.ubicaciones` (`[{ latitud, longitud }]`), `data.vigenciaDesde`, `data.vigenciaHasta` (epoch ms) |
 | Fin de la alerta | `com.citypass.espacios.CriticidadClimaticaFinalizada` | `data.alertaId` |
-| Emergencia | `EmergenciaCreada` | `data.emergenciaId`, `data.latitud`, `data.longitud`, `data.categoria`, `data.prioridad`, `data.createdAt` |
+| Emergencia | `EmergenciaCreada` | `data.emergenciaId`, `data.latitud`, `data.longitud`, `data.barrio`, `data.categoria`, `data.prioridad`, `data.createdAt` |
 | Cambios de estado | `EmergenciaActualizada` | `data.emergenciaId`, `data.estadoNuevo`, `data.updatedAt` |
 
 ---
@@ -95,12 +95,12 @@ En la práctica, una emergencia creada cerca de un evento en curso estuvo elevad
 
 ### 3.1 La alerta climática
 
-Cada punto de `ubicaciones` de una alerta `ALTA` o `CRITICA` funciona como un evento: misma regla de vínculo al crear, misma suba de un nivel y sin acumular con otros eventos o alertas. Cambia esto:
+Cada barrio de una alerta `ALTA` o `CRITICA` funciona como un evento: misma regla de vínculo al crear, misma suba de un nivel y sin acumular con otros eventos o alertas. `MEDIA` y `BAJA` no suben nada. Cambia esto:
 
-- **Radio por nivel:** 500 m con `ALTA` y 1000 m con `CRITICA`. `MEDIA` y `BAJA` no suben nada.
+- **Zona por barrio:** por cada barrio de `data.barrios` que está en el catálogo de CABA, un círculo que cubre el barrio entero (ver sección 4). La emergencia se vincula si se crea dentro del círculo **y** su `data.barrio` es ese barrio: el círculo se pasa a los barrios vecinos, pero esos no suben.
+- **Sin barrios del catálogo:** si `data.barrios` viene vacío o con nombres que no son del catálogo, cada punto de `ubicaciones` funciona como un evento, con un radio de 500 m (`ALTA`) o 1000 m (`CRITICA`), sin mirar el barrio.
 - **Ventana:** `vigenciaDesde`–`vigenciaHasta` de la confirmación. No hay suspensión.
-- **Fin:** `CriticidadClimaticaFinalizada` con el mismo `alertaId` termina la suba de todos los puntos, como una cancelación. Es definitiva.
-- **Zona:** solo los puntos. `barrios` no define zona: una emergencia del mismo barrio pero lejos de los puntos no sube.
+- **Fin:** `CriticidadClimaticaFinalizada` con el mismo `alertaId` termina la suba de todos los barrios o puntos, como una cancelación. Es definitiva.
 - **La `PREVENTIVA` de la alerta no sube** (es la cobertura de la propia alerta).
 
 ---
@@ -108,8 +108,9 @@ Cada punto de `ubicaciones` de una alerta `ALTA` o `CRITICA` funciona como un ev
 ## 4. Distancia al evento
 
 - **Punto del evento:** `data.latitud` y `data.longitud` de `EventoComunitarioPublicado`, tal como llegan. Un evento sin coordenadas numéricas **no eleva nada**: el texto `barrio` o `zona` no se usa.
-- **Radio:** 500 m para todos los eventos. Para las alertas climáticas, 500 m con `ALTA` y 1000 m con `CRITICA`. Son valores de Emergencias (Espacios no informa un radio); si cambian, se avisa. `radioMetros` de `EmergenciaVinculadaAContextoZona` dice con qué radio se decidió.
-- **Punto de una alerta:** cada elemento de `data.ubicaciones`, tal como llega. Un punto sin coordenadas numéricas se descarta.
+- **Radio:** 500 m para todos los eventos. Para las alertas climáticas sin barrios del catálogo, 500 m con `ALTA` y 1000 m con `CRITICA`. Son valores de Emergencias (Espacios no informa un radio); si cambian, se avisa. `radioMetros` de `EmergenciaVinculadaAContextoZona` dice con qué radio se decidió.
+- **Círculo de un barrio (alerta climática):** centro en el promedio de los vértices del polígono del barrio (catálogo GCBA de 48 barrios), y radio igual a la distancia al vértice más lejano más 100 m. Va de ~930 m (Coghlan) a ~4,1 km (Recoleta). Como además se exige el barrio, para recalcular alcanza con `data.barrio`: una emergencia de ese barrio siempre cae dentro de su círculo.
+- **Punto de una alerta sin barrios:** cada elemento de `data.ubicaciones`, tal como llega. Un punto sin coordenadas numéricas se descarta.
 - **Punto de la emergencia:** `data.latitud` y `data.longitud` de `EmergenciaCreada`, que van redondeadas a 3 decimales (~100 m). Una emergencia sin ubicación (`null`) nunca se eleva.
 - **Fórmula:** distancia de círculo máximo (haversine) con radio terrestre de 6.371.000 m.
 
@@ -135,6 +136,9 @@ El barrio ya no interviene: una emergencia del mismo barrio que el evento pero a
 | La finalización de una alerta llega antes que la confirmación | La alerta nunca eleva nada |
 | La alerta llega con nivel `MEDIA` o `BAJA` | No eleva nada |
 | La confirmación llega cuando la alerta ya venció | No eleva nada (la ventana ya pasó) |
+| La alerta trae un barrio que no es del catálogo de CABA | Ese barrio se ignora; si no queda ninguno, se usan los puntos |
+| Una emergencia de un barrio vecino cae dentro del círculo de un barrio de la alerta | No se eleva: tiene que ser del barrio |
+| Una emergencia sin barrio (fuera de CABA) | No se eleva por una alerta por barrio |
 
 ---
 

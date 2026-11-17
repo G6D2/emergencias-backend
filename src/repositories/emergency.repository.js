@@ -361,20 +361,29 @@ class EmergencyRepository {
   //
   // Consecuencia: una emergencia creada antes de que empiece el evento (o
   // antes de que llegue su publicación) no sube de prioridad.
+  //
+  // Un contexto con barrios (zona por barrio de una alerta climática) además
+  // exige que la emergencia sea de uno de esos barrios: el círculo cubre el
+  // barrio entero pero se pasa a los vecinos, y así no los alcanza. Una
+  // emergencia sin barrio (fuera de CABA) no entra en esos contextos. Los
+  // contextos sin barrios (eventos comunitarios, alertas por punto) vinculan
+  // solo por distancia.
   async linkZoneContexts(executor, emergency) {
-    const { id, latitude, longitude, emergencyType } = emergency;
+    const { id, latitude, longitude, emergencyType, barrio = null } = emergency;
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
     if (emergencyType === 'PREVENTIVA') return [];
 
     const enCurso = await executor.query(
-      `SELECT c.id, c.latitud, c.longitud, c.radio_metros, c.tipo, c.origen, c.referencia_externa
+      `SELECT c.id, c.latitud, c.longitud, c.radio_metros, c.tipo, c.origen, c.referencia_externa, c.barrios
        FROM contexto_zona c
        WHERE ${ZONE_CONTEXT_EN_CURSO_SQL}
          AND c.latitud IS NOT NULL
          AND c.longitud IS NOT NULL
          AND c.radio_metros IS NOT NULL`
     );
-    const alcanzan = enCurso.rows.filter((c) => haversineDistanceMeters(
+    const enSuBarrio = (c) => !Array.isArray(c.barrios) || c.barrios.length === 0
+      || (barrio !== null && c.barrios.includes(barrio));
+    const alcanzan = enCurso.rows.filter((c) => enSuBarrio(c) && haversineDistanceMeters(
       { latitude, longitude },
       { latitude: Number(c.latitud), longitude: Number(c.longitud) }
     ) <= Number(c.radio_metros));

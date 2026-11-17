@@ -82,10 +82,11 @@ describe('datos para mostrar una alerta climática', () => {
 });
 
 describe('resumirAlertasActivas', () => {
-  it('una entrada por alerta: cuenta los puntos y conserva nivel, fenómeno, barrios, ventana y radio', () => {
+  it('zona por barrio: una entrada por alerta que junta los barrios de sus contextos, sin radio', () => {
     const [alerta, ...resto] = resumirAlertasActivas([
-      contexto(),
-      contexto({ referenciaExterna: `${ALERTA_ID}#1` }),
+      contexto({ radioMetros: 3837 }),
+      contexto({ referenciaExterna: `${ALERTA_ID}#1`, barrios: ['RECOLETA'], radioMetros: 4084 }),
+      contexto({ referenciaExterna: `${ALERTA_ID}#2`, barrios: ['PALERMO'], radioMetros: 3837 }),
     ]);
 
     expect(resto).toEqual([]);
@@ -94,27 +95,37 @@ describe('resumirAlertasActivas', () => {
       nivel: 'ALTA',
       fenomeno: 'TORMENTA_FUERTE',
       fenomenoEtiqueta: 'Tormenta fuerte',
-      barrios: ['PALERMO'],
+      barrios: ['PALERMO', 'RECOLETA'],
+      zona: 'BARRIOS',
       vigenteDesde: new Date('2026-11-17T18:00:00Z'),
       vigenteHasta: new Date('2026-11-17T23:00:00Z'),
       enCurso: true,
-      puntos: 2,
-      radioMetros: 500,
+      puntos: 3,
+      radioMetros: null,
       descripcion: 'Alerta climática ALTA: tormenta fuerte',
     });
   });
 
-  it('los datos salen del primer punto; está en curso si algún punto lo está', () => {
+  it('zona por punto: sin barrios, informa el radio del nivel y cuenta los puntos', () => {
     const [alerta] = resumirAlertasActivas([
-      contexto({ enCurso: false }),
-      contexto({ referenciaExterna: `${ALERTA_ID}#1`, enCurso: true }),
-      contexto({ referenciaExterna: `${ALERTA_ID}#2`, enCurso: false, radioMetros: 1000 }),
+      contexto({ barrios: null }),
+      contexto({ referenciaExterna: `${ALERTA_ID}#1`, barrios: null }),
     ]);
 
-    expect(alerta).toMatchObject({ enCurso: true, puntos: 3, radioMetros: 500 });
+    expect(alerta).toMatchObject({ barrios: [], zona: 'PUNTOS', puntos: 2, radioMetros: 500 });
   });
 
-  it('sin datos de la alerta (contexto anterior a V33): nulls y barrios vacíos', () => {
+  it('los datos salen del primer contexto; está en curso si alguno lo está', () => {
+    const [alerta] = resumirAlertasActivas([
+      contexto({ enCurso: false, barrios: null }),
+      contexto({ referenciaExterna: `${ALERTA_ID}#1`, enCurso: true, barrios: null }),
+      contexto({ referenciaExterna: `${ALERTA_ID}#2`, enCurso: false, radioMetros: 1000, barrios: null }),
+    ]);
+
+    expect(alerta).toMatchObject({ enCurso: true, puntos: 3, radioMetros: 500, zona: 'PUNTOS' });
+  });
+
+  it('sin datos de la alerta (contexto anterior a V33): nulls, barrios vacíos y zona por punto', () => {
     const [alerta] = resumirAlertasActivas([{
       tipo: 'ALERTA_CLIMATICA', referenciaExterna: `${ALERTA_ID}#0`,
     }]);
@@ -124,6 +135,7 @@ describe('resumirAlertasActivas', () => {
       fenomeno: null,
       fenomenoEtiqueta: null,
       barrios: [],
+      zona: 'PUNTOS',
       vigenteDesde: null,
       vigenteHasta: null,
       enCurso: false,
@@ -165,7 +177,7 @@ describe('alta de contextos: guarda los datos para mostrar', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  it('la regla manda nivel, fenómeno normalizado y barrios en el payload', () => {
+  it('la regla manda nivel, fenómeno normalizado y una zona por barrio, sin repetir', () => {
     const { payload } = new RegistrarContextosClimaticosRule().apply({
       metadata: {},
       data: {
@@ -178,14 +190,16 @@ describe('alta de contextos: guarda los datos para mostrar', () => {
         vigenciaHasta: 1792616400000,
       },
     });
-    expect(payload).toMatchObject({ nivel: 'CRITICA', fenomeno: 'GRANIZO', barrios: ['PALERMO', 'BELGRANO'] });
+    expect(payload).toMatchObject({ nivel: 'CRITICA', fenomeno: 'GRANIZO' });
+    expect(payload.ubicaciones.map((u) => [u.indice, u.barrio])).toEqual([[0, 'PALERMO'], [2, 'BELGRANO']]);
   });
 
-  it('sin fenómeno ni barrios, la regla manda null y []', () => {
+  it('sin fenómeno ni barrios, la regla manda null y zonas por punto', () => {
     const { payload } = new RegistrarContextosClimaticosRule().apply({
       data: { alertaId: ALERTA_ID, nivelCriticidad: 'ALTA', ubicaciones: [{ latitud: -34.6, longitud: -58.4 }] },
     });
-    expect(payload).toMatchObject({ nivel: 'ALTA', fenomeno: null, barrios: [] });
+    expect(payload).toMatchObject({ nivel: 'ALTA', fenomeno: null });
+    expect(payload.ubicaciones).toEqual([{ indice: 0, latitud: -34.6, longitud: -58.4, radioMetros: 500, barrio: null }]);
   });
 
   function repo() {
@@ -206,25 +220,42 @@ describe('alta de contextos: guarda los datos para mostrar', () => {
     sourceUpdatedAt: new Date('2026-11-17T17:00:00Z'),
   };
 
-  it('el handler guarda nivel, fenómeno y barrios en cada punto', async () => {
+  it('el handler guarda nivel y fenómeno en cada contexto, y en la zona por barrio su barrio y su radio', async () => {
     const contextoZonaRepository = repo();
     await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })(
       { query: jest.fn() },
-      { ...base, nivel: 'CRITICA', fenomeno: 'GRANIZO', barrios: ['PALERMO'] }
+      {
+        ...base,
+        nivel: 'CRITICA',
+        fenomeno: 'GRANIZO',
+        ubicaciones: [
+          { indice: 0, latitud: -34.56, longitud: -58.41, radioMetros: 3837, barrio: 'PALERMO' },
+          { indice: 2, latitud: -34.57, longitud: -58.38, radioMetros: 4084, barrio: 'RECOLETA' },
+        ],
+      }
     );
     expect(contextoZonaRepository.upsert).toHaveBeenCalledTimes(2);
+    const [[, palermo], [, recoleta]] = contextoZonaRepository.upsert.mock.calls;
+    expect(palermo).toMatchObject({
+      referenciaExterna: `${ALERTA_ID}#0`, nivelCriticidad: 'CRITICA', fenomeno: 'GRANIZO', barrios: ['PALERMO'], radioMetros: 3837,
+    });
+    expect(recoleta).toMatchObject({ referenciaExterna: `${ALERTA_ID}#2`, barrios: ['RECOLETA'], radioMetros: 4084 });
+  });
+
+  it('el handler guarda barrios null en la zona por punto, con el radio del payload', async () => {
+    const contextoZonaRepository = repo();
+    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })({ query: jest.fn() }, base);
+    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })(
+      { query: jest.fn() },
+      { ...base, ubicaciones: base.ubicaciones.map((u) => ({ ...u, barrio: null, radioMetros: null })) }
+    );
     for (const [, punto] of contextoZonaRepository.upsert.mock.calls) {
-      expect(punto).toMatchObject({ nivelCriticidad: 'CRITICA', fenomeno: 'GRANIZO', barrios: ['PALERMO'] });
+      expect(punto).toMatchObject({ nivelCriticidad: null, fenomeno: null, barrios: null, radioMetros: 1000 });
     }
   });
 
-  it('el handler guarda null si no vienen (payload anterior o sin barrios)', async () => {
-    const contextoZonaRepository = repo();
-    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })({ query: jest.fn() }, base);
-    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })({ query: jest.fn() }, { ...base, barrios: [] });
-    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })({ query: jest.fn() }, { ...base, barrios: 'PALERMO' });
-    for (const [, punto] of contextoZonaRepository.upsert.mock.calls) {
-      expect(punto).toMatchObject({ nivelCriticidad: null, fenomeno: null, barrios: null });
-    }
+  it('el handler rechaza una zona sin radio propio si el payload tampoco trae uno', async () => {
+    const handler = createRegistrarContextosClimaticosHandler({ contextoZonaRepository: repo() });
+    await expect(handler({ query: jest.fn() }, { ...base, radioMetros: null })).rejects.toThrow('radioMetros');
   });
 });

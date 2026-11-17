@@ -33,6 +33,7 @@ const {
   createDarDeBajaContextosClimaticosHandler,
 } = require('../../listeners/alerta-climatica/handlers/contextos-climaticos.handler');
 const { grupoDeLaAlerta } = require('../../domain/alerta-climatica');
+const { zonaDelBarrio } = require('../../domain/barrio');
 const { createLocationCrypto } = require('../../security/location-crypto');
 const { createLifecycleHarness } = require('../helpers/emergency-lifecycle');
 
@@ -49,6 +50,15 @@ const CENTENARIO = { latitude: -34.6066, longitude: -58.4355 };
 const MATADEROS = { latitude: -34.6596, longitude: -58.5026 };
 const A_300_M = 0.0027;
 const A_800_M = 0.0072;
+// Prueba de la zona por barrio (PALERMO, círculo de ~3,8 km): un punto de la
+// alerta en Palermo norte; Palermo Hollywood queda en el barrio a ~3 km de
+// ese punto; Recoleta y Colegiales caen dentro del círculo pero son otros
+// barrios; Villa Crespo queda fuera del círculo.
+const PALERMO_NORTE = { latitude: -34.5560, longitude: -58.4150 };
+const PALERMO_HOLLYWOOD = { latitude: -34.5850, longitude: -58.4330 };
+const RECOLETA = { latitude: -34.5869, longitude: -58.3930 };
+const COLEGIALES = { latitude: -34.5745, longitude: -58.4500 };
+const VILLA_CRESPO = { latitude: -34.5960, longitude: -58.4400 };
 
 const HORA = 60 * 60 * 1000;
 
@@ -185,22 +195,24 @@ afterAll(async () => {
 });
 
 describe('alerta climática (integration)', () => {
-  it('la confirmación ALTA deja un contexto de 500 m por punto y una emergencia climática', async () => {
+  it('la confirmación ALTA deja un contexto por barrio, con el círculo del barrio, y una emergencia climática', async () => {
     const evento = confirmacion();
     await confirmada.onMessage(buildMessage(evento));
     const { alertaId } = evento.data;
 
     const contextos = await contextosDe(alertaId);
     expect(contextos.map((c) => c.referenciaExterna)).toEqual([`${alertaId}#0`, `${alertaId}#1`]);
+    const sanNicolas = zonaDelBarrio('SAN NICOLAS');
     expect(contextos[0]).toMatchObject({
-      latitud: OBELISCO.latitude,
-      longitud: OBELISCO.longitude,
-      radioMetros: 500,
+      latitud: sanNicolas.latitud,
+      longitud: sanNicolas.longitud,
+      radioMetros: sanNicolas.radioMetros,
+      barrios: ['SAN NICOLAS'],
       descripcion: 'Alerta climática ALTA: tormenta fuerte',
       causationId: evento.metadata.eventId,
       dadoDeBajaEn: null,
     });
-    expect(contextos[1]).toMatchObject({ latitud: BELGRANO.latitude, radioMetros: 500 });
+    expect(contextos[1]).toMatchObject({ barrios: ['BELGRANO'], radioMetros: zonaDelBarrio('BELGRANO').radioMetros });
     expect(contextos[0].vigenteHasta.getTime()).toBe(evento.data.vigenciaHasta);
 
     const [emergencia] = await emergenciasDe(alertaId);
@@ -233,8 +245,8 @@ describe('alerta climática (integration)', () => {
     expect(vinculos.rowCount).toBe(0);
   });
 
-  it('la confirmación CRITICA crea la emergencia critical y contextos de 1000 m', async () => {
-    const evento = confirmacion({ nivelCriticidad: 'CRITICA' });
+  it('la confirmación CRITICA sin barrios crea la emergencia critical y contextos de 1000 m por punto', async () => {
+    const evento = confirmacion({ nivelCriticidad: 'CRITICA', barrios: [] });
     await confirmada.onMessage(buildMessage(evento));
 
     const contextos = await contextosDe(evento.data.alertaId);
@@ -268,14 +280,16 @@ describe('alerta climática (integration)', () => {
     expect(await emergenciasDe(evento.data.alertaId)).toHaveLength(0);
   });
 
-  it('el radio depende del nivel: CRITICA alcanza a 800 m, ALTA solo a 300 m', async () => {
+  it('sin barrios, el radio depende del nivel: CRITICA alcanza a 800 m, ALTA solo a 300 m', async () => {
     const critica = confirmacion({
       nivelCriticidad: 'CRITICA',
       ubicaciones: [{ latitud: CENTENARIO.latitude, longitud: CENTENARIO.longitude }],
+      barrios: [],
     });
     const alta = confirmacion({
       nivelCriticidad: 'ALTA',
       ubicaciones: [{ latitud: MATADEROS.latitude, longitud: MATADEROS.longitude }],
+      barrios: [],
     });
     await confirmada.onMessage(buildMessage(critica));
     await confirmada.onMessage(buildMessage(alta));
@@ -296,6 +310,38 @@ describe('alerta climática (integration)', () => {
     const altaA800 = await dispatchPriorityDe(alNorte(MATADEROS, A_800_M));
     expect(altaA800.dispatchPriority).toBe('high');
     expect(altaA800.priorityContext).toBeNull();
+  });
+
+  it('zona por barrio: sube en todo el barrio, aunque esté lejos del punto, y no en los barrios vecinos del círculo', async () => {
+    const evento = confirmacion({
+      ubicaciones: [{ latitud: PALERMO_NORTE.latitude, longitud: PALERMO_NORTE.longitude }],
+      barrios: ['Palermo'],
+    });
+    await confirmada.onMessage(buildMessage(evento));
+    const palermo = zonaDelBarrio('PALERMO');
+
+    // En Palermo, a ~3 km del punto de la alerta: con el radio por punto no subía.
+    const enElBarrio = await dispatchPriorityDe(PALERMO_HOLLYWOOD);
+    expect(enElBarrio.barrio).toBe('PALERMO');
+    expect(enElBarrio.dispatchPriority).toBe('critical');
+    expect(enElBarrio.priorityContext).toMatchObject({
+      tipo: 'ALERTA_CLIMATICA',
+      referenciaExterna: `${evento.data.alertaId}#0`,
+      radioMetros: palermo.radioMetros,
+    });
+
+    // Dentro del círculo de Palermo pero de otro barrio: no sube.
+    for (const vecino of [RECOLETA, COLEGIALES]) {
+      const emergencia = await dispatchPriorityDe(vecino);
+      expect(emergencia.barrio).not.toBe('PALERMO');
+      expect(emergencia.dispatchPriority).toBe('high');
+      expect(emergencia.priorityContext).toBeNull();
+    }
+
+    // Fuera del círculo: no sube.
+    const afuera = await dispatchPriorityDe(VILLA_CRESPO);
+    expect(afuera.dispatchPriority).toBe('high');
+    expect(afuera.priorityContext).toBeNull();
   });
 
   it('la finalización da de baja los contextos y cancela la emergencia sin despachar', async () => {

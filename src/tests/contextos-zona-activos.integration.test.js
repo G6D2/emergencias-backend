@@ -201,7 +201,7 @@ describe('V33: datos de la alerta en contexto_zona', () => {
 });
 
 describe('GET /api/contextos-zona/activos (integration)', () => {
-  it('una alerta ALTA confirmada sale como una entrada, con sus dos puntos y los datos para el banner', async () => {
+  it('una alerta ALTA confirmada sale como una entrada, con sus dos barrios y los datos para el banner', async () => {
     const evento = confirmacion();
     await confirmada.onMessage(buildMessage(evento));
 
@@ -214,16 +214,28 @@ describe('GET /api/contextos-zona/activos (integration)', () => {
       fenomeno: 'TORMENTA_FUERTE',
       fenomenoEtiqueta: 'Tormenta fuerte',
       barrios: ['SAN NICOLAS', 'BELGRANO'],
+      zona: 'BARRIOS',
       vigenteDesde: new Date(evento.data.vigenciaDesde).toISOString(),
       vigenteHasta: new Date(evento.data.vigenciaHasta).toISOString(),
       enCurso: true,
       puntos: 2,
-      radioMetros: 500,
+      // Cada barrio tiene su radio: un solo número no describe la alerta.
+      radioMetros: null,
       descripcion: 'Alerta climática ALTA: tormenta fuerte',
     });
   });
 
-  it('una CRITICA que todavía no empezó sale primero, con radio 1000 y enCurso false', async () => {
+  it('una alerta sin barrios sale con zona por punto y el radio del nivel', async () => {
+    const evento = confirmacion({ barrios: [] });
+    await confirmada.onMessage(buildMessage(evento));
+
+    const { alertas } = await activas();
+    expect(alertas.find((a) => a.alertaId === evento.data.alertaId)).toMatchObject({
+      barrios: [], zona: 'PUNTOS', puntos: 2, radioMetros: 500,
+    });
+  });
+
+  it('una CRITICA que todavía no empezó sale primero, con su barrio y enCurso false', async () => {
     const evento = confirmacion({
       nivelCriticidad: 'CRITICA',
       fenomeno: 'GRANIZO',
@@ -240,9 +252,10 @@ describe('GET /api/contextos-zona/activos (integration)', () => {
       nivel: 'CRITICA',
       fenomenoEtiqueta: 'Granizo',
       barrios: ['CABALLITO'],
+      zona: 'BARRIOS',
       enCurso: false,
       puntos: 1,
-      radioMetros: 1000,
+      radioMetros: null,
     });
     const primeraAlta = alertas.findIndex((a) => a.nivel === 'ALTA');
     expect(primeraAlta).toBeGreaterThan(indice);

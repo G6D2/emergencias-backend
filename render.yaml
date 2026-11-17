@@ -118,7 +118,8 @@ services:
       # nombres en el catálogo del gateway y cargar a mano
       # EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA y _FINALIZADA (las dos).
       # Radios por nivel: CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS (default
-      # 1000) y CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS (default 500).
+      # 1000) y CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS (default 500). Solo para
+      # alertas sin barrios del catálogo; con barrios, el círculo de cada barrio.
       # Piso de consumo: un grupo sin offset lee desde el principio y saltea lo
       # anterior a esta fecha. Tiene que quedar cargada siempre.
       - key: EDA_CONSUMER_SINCE
