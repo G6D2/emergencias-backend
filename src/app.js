@@ -9,6 +9,7 @@ const { createOutboxRoutes } = require('./routes/outbox.routes');
 const { createOfficerRoutes } = require('./routes/officer.routes');
 const { createIncidentsRoutes } = require('./routes/incidents.routes');
 const { createCitizenProfileRoutes } = require('./routes/citizen-profile.routes');
+const { createContextosZonaRoutes } = require('./routes/contextos-zona.routes');
 const { createAsyncApiRoutes } = require('./routes/asyncapi.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
@@ -26,6 +27,7 @@ const { kafkaHealth } = require('./services/kafka.service');
  *   officerRepository?: object|null,
  *   incidentRepository?: object|null,
  *   citizenProfileRepository?: object|null,
+ *   contextoZonaRepository?: object|null,
  * }} [options]
  */
 function createApp(kafkaService, emergencyRepository, options = {}) {
@@ -35,6 +37,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   const officerRepository = options.officerRepository || null;
   const incidentRepository = options.incidentRepository || null;
   const citizenProfileRepository = options.citizenProfileRepository || null;
+  const contextoZonaRepository = options.contextoZonaRepository || null;
 
   app.set('trust proxy', 1);
   app.use(createSecurityMiddleware());
@@ -97,6 +100,9 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   }
   if (citizenProfileRepository) {
     app.use('/api/citizen', createCitizenProfileRoutes(citizenProfileRepository, authenticate));
+  }
+  if (contextoZonaRepository) {
+    app.use('/api/contextos-zona', createContextosZonaRoutes(contextoZonaRepository, authenticate));
   }
 
   // Ruta o método no soportado: 404 en JSON con el mismo shape { error, message }

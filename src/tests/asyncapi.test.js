@@ -16,6 +16,8 @@ const {
 } = require('../services/emergency-events');
 const { EMERGENCY_TYPES } = require('../domain/emergency-type');
 const { ProgramarCoberturaPreventivaRule } = require('../listeners/cobertura-preventiva/evento-comunitario-publicado/rules/01-programar-cobertura.rule');
+const { RegistrarContextoClimaRule } = require('../listeners/alerta-climatica/alerta-climatica-confirmada/rules/01-registrar-contexto-clima.rule');
+const { normalizarEnvelope } = require('../listeners/alerta-climatica/envelope');
 
 const SPEC_PATH = path.join(__dirname, '..', '..', 'asyncapi.yaml');
 
@@ -54,6 +56,7 @@ describe('asyncapi.yaml', () => {
     expect(receive).toEqual(expect.arrayContaining([
       'recibirEventoComunitarioPublicado', 'recibirEventoCancelado',
       'recibirReclamoCreado', 'recibirReclamoActualizado',
+      'recibirAlertaClimaticaConfirmada', 'recibirAlertaClimaticaFinalizada',
     ]));
   });
 
@@ -164,6 +167,60 @@ describe('asyncapi.yaml', () => {
     it('EventoCancelado requiere eventoId', () => {
       expect(validate('EventoCanceladoData', { eventoId: 'evt-espacios-1', motivo: 'lluvia', canceladoEn: '2026-11-03T10:00:00Z' })).toBe(true);
       expect(() => validate('EventoCanceladoData', { motivo: 'lluvia' })).toThrow();
+    });
+
+    it('el ejemplo de AlertaClimaticaConfirmada del spec dispara la regla y eleva', () => {
+      const message = document.components().messages().get('AlertaClimaticaConfirmada');
+      const [example] = message.examples().all();
+      const context = normalizarEnvelope(example.payload());
+      const rule = new RegistrarContextoClimaRule();
+
+      expect(context.metadata.eventId).toBe(example.payload().eventId);
+      expect(rule.appliesTo(context)).toBe(true);
+      expect(rule.apply(context).payload).toMatchObject({
+        tipo: 'ALERTA_CLIMATICA',
+        barrios: ['PALERMO', 'VILLA CRESPO'],
+        tiposEmergencia: ['INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO'],
+      });
+    });
+
+    it('declara los canales reales de criticidad climática', () => {
+      const receive = document.operations().filterByReceive().map((op) => op.id());
+      expect(receive).toEqual(expect.arrayContaining([
+        'recibirCriticidadClimaticaConfirmada', 'recibirCriticidadClimaticaFinalizada',
+      ]));
+      expect(document.channels().get('criticidadClimaticaConfirmada').address())
+        .toBe('com.citypass.espacios.CriticidadClimaticaConfirmada');
+      expect(document.channels().get('criticidadClimaticaFinalizada').address())
+        .toBe('com.citypass.espacios.CriticidadClimaticaFinalizada');
+    });
+
+    it('el ejemplo de CriticidadClimaticaConfirmada (contrato real) dispara la regla y eleva', () => {
+      const message = document.components().messages().get('CriticidadClimaticaConfirmada');
+      const [example] = message.examples().all();
+      const context = normalizarEnvelope(example.payload());
+      const rule = new RegistrarContextoClimaRule();
+
+      expect(rule.appliesTo(context)).toBe(true);
+      expect(rule.apply(context).payload).toMatchObject({
+        tipo: 'ALERTA_CLIMATICA',
+        referenciaExterna: 'f6029e4f-e0ef-46b8-9f1a-66e814f1c90e',
+        barrios: ['BALVANERA', 'SAN NICOLAS'],
+        gravedad: 'ALTA',
+        tiposEmergencia: ['MEDICA', 'INCENDIO', 'INFRAESTRUCTURA'],
+      });
+    });
+
+    it('CriticidadClimaticaFinalizada requiere alertaId, finalizadaEn y actorSub', () => {
+      expect(validate('CriticidadClimaticaFinalizadaData', {
+        alertaId: 'f6029e4f-e0ef-46b8-9f1a-66e814f1c90e', finalizadaEn: 1794625200000, actorSub: 'admin-ejemplo',
+      })).toBe(true);
+      expect(() => validate('CriticidadClimaticaFinalizadaData', { alertaId: 'f6029e4f-e0ef-46b8-9f1a-66e814f1c90e' })).toThrow();
+    });
+
+    it('AlertaClimaticaFinalizada requiere alertaId', () => {
+      expect(validate('AlertaClimaticaFinalizadaData', { alertaId: '0b0e5c1a-7f3e-4a8e-9a51-2d5f1c7e9b10' })).toBe(true);
+      expect(() => validate('AlertaClimaticaFinalizadaData', {})).toThrow();
     });
   });
 });

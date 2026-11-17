@@ -88,8 +88,10 @@ async function start() {
   outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository }));
   outcomeFactory.register(CREAR_INTERVENCION, createCrearIntervencionHandler({ emergencyRepository }));
   outcomeFactory.register(CERRAR_INTERVENCION, createCerrarIntervencionHandler({ emergencyRepository }));
-  // Contexto de zona: mientras dura el evento, las emergencias que se crean
-  // dentro de su radio suben un nivel de prioridad de despacho.
+  // Contexto de zona: mientras dura un evento comunitario, las emergencias
+  // que se crean dentro de su radio suben un nivel de prioridad de despacho;
+  // mientras dura una alerta climática, las emergencias abiertas de sus
+  // barrios, para los tipos que afecta.
   const contextoZonaRepository = new ContextoZonaRepository(pool);
   outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
@@ -121,6 +123,8 @@ async function start() {
     officerRepository,
     incidentRepository,
     citizenProfileRepository,
+    // GET /api/contextos-zona/activos: banner de alertas climáticas.
+    contextoZonaRepository,
   });
 
   const server = app.listen(PORT, () => {

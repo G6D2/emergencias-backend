@@ -80,6 +80,17 @@ services:
         value: com.citypass.espacios.EventoComunitarioPublicado
       - key: EDA_TOPIC_EVENTO_CANCELADO
         value: com.citypass.espacios.EventoCancelado
+      # Alerta climática de Espacios. Los topics reales están por confirmar:
+      # se cargan en el dashboard cuando Espacios los confirme. Vacíos, esos
+      # listeners no arrancan. Los parámetros CONTEXTO_CLIMA_* usan el default
+      # del código (ver .env.example).
+      # FQN del contrato real de Espacios (cargar después de desplegar la rama):
+      #   EDA_TOPIC_ALERTA_CLIMATICA_CONFIRMADA=com.citypass.espacios.CriticidadClimaticaConfirmada
+      #   EDA_TOPIC_ALERTA_CLIMATICA_FINALIZADA=com.citypass.espacios.CriticidadClimaticaFinalizada
+      - key: EDA_TOPIC_ALERTA_CLIMATICA_CONFIRMADA
+        sync: false
+      - key: EDA_TOPIC_ALERTA_CLIMATICA_FINALIZADA
+        sync: false
       # Schema registry del gateway (Avro); usa el mismo token que el broker.
       - key: EDA_SCHEMA_REGISTRY_URL
         value: https://test.citypass.mrfranco.net.ar/api/v1

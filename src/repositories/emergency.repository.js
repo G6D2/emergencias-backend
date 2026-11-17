@@ -107,33 +107,46 @@ const INCIDENT_SELECT_FIELDS = `
        (SELECT COUNT(*)::int FROM emergencies em2 WHERE em2.incident_id = e.incident_id) AS incident_report_count,
        (SELECT COUNT(DISTINCT em3.user_id)::int FROM emergencies em3 WHERE em3.incident_id = e.incident_id) AS incident_unique_citizens`;
 
-// Contexto de zona que eleva la prioridad de la emergencia (ADR "Elevar
-// temporalmente la prioridad con contextos de zona", tablas de V28 y V31).
+// Contexto de zona que eleva la prioridad de la emergencia (ADR "Elevar la
+// prioridad con contextos de zona por radio o por barrio", tablas de V28, V31
+// y V33). Un contexto alcanza a la emergencia por una de dos zonas:
 //
-// El vínculo emergencia–contexto se escribe una sola vez, al crear la
-// emergencia (ver linkZoneContexts): acá solo se mira si el contexto
-// vinculado sigue en curso. Mientras lo está, la prioridad de despacho sube
-// un nivel; al vencer, suspenderse o darse de baja, la próxima lectura ya no
-// lo trae y la prioridad vuelve sola.
+// - Punto + radio (eventos comunitarios): el vínculo emergencia–contexto se
+//   escribe una sola vez, al crear la emergencia (ver linkZoneContexts). Acá
+//   solo se mira si el contexto vinculado sigue en curso.
+// - Barrios (alertas climáticas): se compara al leer el barrio de la
+//   emergencia con los del contexto, así que alcanza también a las
+//   emergencias abiertas antes de la alerta.
+//
+// Si el contexto tiene tipos_emergencia, solo eleva esos tipos (NULL = todos;
+// [] = ninguno, como una alerta LEVE). Mientras está en curso, la prioridad de
+// despacho sube un nivel. Al vencer, suspenderse o darse de baja, la próxima
+// lectura ya no lo trae y la prioridad vuelve sola.
 //
 // - Se evalúa contra now(): nada se guarda en emergencies.
-// - Varios contextos vinculados suben un solo nivel (LIMIT 1; se muestra el
-//   que vence último).
+// - Varios contextos suben un solo nivel, aunque sean de distinta zona
+//   (LIMIT 1; se muestra el que vence último).
 // - No aplica a emergencias terminales ni a las PREVENTIVA: la cobertura del
 //   propio evento no es un llamado.
+// - Una emergencia sin barrio (anonimizada, fuera de CABA) o sin tipo
+//   (legacy) no sube por un contexto de barrios con tipos.
 const ZONE_CONTEXT_EN_CURSO_SQL = `c.dado_de_baja_en IS NULL
            AND c.suspendido_en IS NULL
            AND c.vigente_desde <= now()
            AND c.vigente_hasta > now()`;
 const ZONE_CONTEXT_JOIN_SQL = `LEFT JOIN LATERAL (
-         SELECT c.tipo, c.latitud, c.longitud, c.radio_metros, c.origen, c.referencia_externa,
-                c.descripcion, c.vigente_desde, c.vigente_hasta
-         FROM emergencia_contexto_zona ecz
-         JOIN contexto_zona c ON c.id = ecz.contexto_id
-         WHERE ecz.emergency_id = e.id
-           AND ${ZONE_CONTEXT_EN_CURSO_SQL}
+         SELECT c.tipo, c.latitud, c.longitud, c.radio_metros, c.barrios, c.fenomeno, c.gravedad,
+                c.origen, c.referencia_externa, c.descripcion, c.vigente_desde, c.vigente_hasta
+         FROM contexto_zona c
+         WHERE ${ZONE_CONTEXT_EN_CURSO_SQL}
            AND e.emergency_type IS DISTINCT FROM 'PREVENTIVA'
            AND e.status NOT IN (${TERMINAL_STATUSES.map((status) => `'${status}'`).join(', ')})
+           AND (c.tipos_emergencia IS NULL OR e.emergency_type = ANY(c.tipos_emergencia))
+           AND (
+             EXISTS (SELECT 1 FROM emergencia_contexto_zona ecz
+                     WHERE ecz.emergency_id = e.id AND ecz.contexto_id = c.id)
+             OR (c.barrios IS NOT NULL AND e.barrio = ANY(c.barrios))
+           )
          ORDER BY c.vigente_hasta DESC
          LIMIT 1
        ) cz ON true`;
@@ -142,6 +155,9 @@ const ZONE_CONTEXT_SELECT_FIELDS = `
        cz.latitud AS contexto_latitud,
        cz.longitud AS contexto_longitud,
        cz.radio_metros AS contexto_radio_metros,
+       cz.barrios AS contexto_barrios,
+       cz.fenomeno AS contexto_fenomeno,
+       cz.gravedad AS contexto_gravedad,
        cz.origen AS contexto_origen,
        cz.referencia_externa AS contexto_referencia_externa,
        cz.descripcion AS contexto_descripcion,
@@ -155,6 +171,9 @@ function mapZoneContext(row) {
     latitud: row.contexto_latitud,
     longitud: row.contexto_longitud,
     radioMetros: row.contexto_radio_metros,
+    barrios: row.contexto_barrios ?? null,
+    fenomeno: row.contexto_fenomeno ?? null,
+    gravedad: row.contexto_gravedad ?? null,
     origen: row.contexto_origen,
     referenciaExterna: row.contexto_referencia_externa,
     descripcion: row.contexto_descripcion ?? null,
@@ -693,7 +712,7 @@ class EmergencyRepository {
     const priorityRank = (column) => `CASE ${column} WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
     //
     // Prioridad de despacho: a ese rank se le suma 1 (tope 4) si hay un
-    // contexto de zona en curso vinculado (cz, ver ZONE_CONTEXT_JOIN_SQL).
+    // contexto de zona en curso que la alcanza (cz, ver ZONE_CONTEXT_JOIN_SQL).
     // Va en el ORDER BY y no en JS para que el orden valga entre páginas.
     const sortExpression = sortBy === 'priority'
       ? `LEAST(GREATEST(${priorityRank('e.severity')}, ${priorityRank('i.priority')}) + CASE WHEN cz.tipo IS NULL THEN 0 ELSE 1 END, 4)`

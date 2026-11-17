@@ -1,7 +1,8 @@
 // Contexto de zona: una situación de la ciudad que sube un nivel la prioridad
-// de despacho de las emergencias cercanas mientras está vigente (ADR "Elevar
-// temporalmente la prioridad con contextos de zona"). La zona es un punto con
-// un radio en metros, no un barrio.
+// de despacho de las emergencias que alcanza mientras está vigente (ADR
+// "Elevar la prioridad con contextos de zona por radio o por barrio"). La zona
+// es un punto con un radio en metros (eventos comunitarios) o una lista de
+// barrios (alertas climáticas).
 //
 // Acá viven las constantes, la zona y el armado de la ventana de vigencia. La
 // persistencia está en repositories/contexto-zona.repository.js y el cálculo
