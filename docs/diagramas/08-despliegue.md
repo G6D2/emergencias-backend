@@ -52,7 +52,7 @@ flowchart TB
 
 | Variable | Para qué |
 |---|---|
-| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH` (con `hybrid` no). Producción hoy **no** corre con `production` (no manda HSTS; verificado el 12/11/2026) |
+| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH` (con `hybrid` no). Producción corre con `production` desde el 17/11/2026: manda HSTS y redirige a HTTPS, con `/health` afuera del redirect |
 | `DATABASE_URL` | Connection string pooled de Neon, `sslmode=require` |
 | `DATABASE_SSL`, `DATABASE_SSL_VERIFY`, `DATABASE_SSL_CA` | SSL del pool (por default cifra sin verificar el certificado) |
 | `DB_POOL_MAX` | Tope de conexiones del pool `pg` |
