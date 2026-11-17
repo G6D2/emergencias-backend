@@ -71,8 +71,8 @@ De dónde sale el 70: 3 reportes × 5 = 15; 3 ciudadanos × 8 = 24; cercanía 20
 (los reportes más alejados están a 71 m); recencia ≈ 15; severidad Media = 10. El score baja
 alrededor de 1 punto por minuto, porque la recencia pesa cada vez menos, hasta ≈ 55 a los 16
 minutos. Ahí queda fijo y en **Alta**, con los 3 reportes: el job puntúa el incidente con todos
-sus miembros, también los que ya salieron de la ventana de 15 minutos. No hace falta apurarse a
-mostrarlo.
+sus miembros, también los que ya salieron de la ventana de 15 minutos (hasta #134 bajaba a Media).
+No hace falta apurarse a mostrarlo.
 
 ## Qué decir
 

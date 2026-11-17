@@ -252,7 +252,8 @@ hechos. `minPts` = 3 no se recomienda mientras haya hechos con solo dos testigos
 
 ## Hallazgo (corregido): el score de un incidente bajaba cuando sus primeros reportes salían de la ventana
 
-> **Corregido en #PR_NUMERO.** Lo que sigue describe el problema y cómo quedó.
+> **Corregido en [#134](https://github.com/G6D2/emergencias-backend/pull/134).** Lo que sigue
+> describe el problema y cómo quedó.
 
 El job volvía a puntuar cada incidente en cada pasada, pero solo con los miembros que seguían
 dentro de la ventana (`processEmergencyTypeCandidates` armaba los factores con el grupo que DBSCAN
