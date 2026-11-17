@@ -209,12 +209,14 @@ function startKeepWarmJob(options = {}) {
   });
 
   // Primera pasada diferida para no bloquear el boot.
+  // runOnce atrapa sus propios errores y devuelve el resultado: la promesa se
+  // ignora a propósito (Sonar S9383).
   const initialTimeout = setTimeout(() => {
-    runOnce();
+    void runOnce();
   }, Math.min(intervalMs, 30_000));
 
   const timer = setInterval(() => {
-    runOnce();
+    void runOnce();
   }, intervalMs);
 
   if (typeof timer.unref === 'function') timer.unref();
