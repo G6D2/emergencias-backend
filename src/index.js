@@ -34,6 +34,10 @@ const {
   createRegistrarContextoZonaHandler,
   createDarDeBajaContextoZonaHandler,
 } = require('./listeners/cobertura-preventiva/handlers/contexto-zona.handler');
+const {
+  PUBLICAR_CONFIRMACION_CLIMA,
+  createPublicarConfirmacionClimaHandler,
+} = require('./listeners/alerta-climatica/handlers/confirmacion-clima.handler');
 const { ContextoZonaRepository } = require('./repositories/contexto-zona.repository');
 const { gracefulShutdown, closeServer } = require('./utils/graceful-shutdown');
 const { installProcessSafetyNet } = require('./utils/process-safety-net');
@@ -108,6 +112,8 @@ async function start() {
   // barrios, para los tipos que afecta.
   const contextoZonaRepository = new ContextoZonaRepository(pool);
   outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
+  // Confirmación por el EDA de que Emergencias recibió la alerta climática.
+  outcomeFactory.register(PUBLICAR_CONFIRMACION_CLIMA, createPublicarConfirmacionClimaHandler({ emergencyRepository }));
   outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
 
   const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true'

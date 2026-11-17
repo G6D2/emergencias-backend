@@ -26,10 +26,14 @@ const TIMEOUT_MS = 45_000;
 // EVENTO_VINCULO_CONTEXTO_ENABLED=true, que se enciende recién cuando el tipo
 // está registrado en el catálogo (si no, el gateway responde 404 y la fila
 // queda FAILED).
+// CriticidadClimaticaConfirmada: confirmación de que Emergencias recibió la
+// alerta climática de Espacios (mismo contrato que Residuos). Tiene que estar
+// registrada en el catálogo del gateway; si no, la fila queda FAILED.
 const PUBLISHED_TYPES = new Set([
   'EmergenciaCreada',
   'EmergenciaActualizada',
   'EmergenciaVinculadaAContextoZona',
+  'CriticidadClimaticaConfirmada',
 ]);
 
 class PermanentError extends Error {

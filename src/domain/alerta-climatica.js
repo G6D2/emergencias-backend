@@ -20,34 +20,24 @@ const GRAVEDAD_MINIMA_DEFAULT = 'ALTA';
 // OTRO (no sabemos qué es), PANICO (ya nace critical) y PREVENTIVA (es
 // cobertura, no un llamado).
 //
-// Los 9 fenómenos del catálogo real de Espacios (guía "CityPass Eventos
-// climáticos", 13/11/2026) son: TORMENTA_FUERTE, LLUVIA_INTENSA, VIENTO_FUERTE,
-// OLA_DE_CALOR, OLA_DE_FRIO, GRANIZO, TORMENTA_ELECTRICA, HURACAN y NIEVE. Los
-// demás (LLUVIA_FUERTE, TORNADO, INUNDACION, FRIO_EXTREMO, NIEBLA) vienen del
-// ejemplo anterior y se conservan. Espacios no dice qué tipos afecta cada
-// fenómeno: la tabla es nuestra (los 5 nuevos los valida Producto). Sumar un
-// fenómeno es sumar una entrada.
+// Solo los 9 fenómenos del catálogo de Espacios (guía "CityPass Eventos
+// climáticos", 13/11/2026). Espacios define el catálogo; qué tipos sube cada
+// uno lo decide Emergencias. Sumar un fenómeno es sumar una entrada.
 const TIPOS_POR_FENOMENO = Object.freeze({
-  LLUVIA_FUERTE: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']),
-  TORMENTA_ELECTRICA: Object.freeze(['INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']),
-  VIENTO_FUERTE: Object.freeze(['INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']),
-  TORNADO: Object.freeze(['MEDICA', 'INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']),
-  GRANIZO: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']),
-  INUNDACION: Object.freeze(['MEDICA', 'INFRAESTRUCTURA', 'TRANSITO']),
-  OLA_DE_CALOR: Object.freeze(['MEDICA', 'INCENDIO', 'INFRAESTRUCTURA']),
-  FRIO_EXTREMO: Object.freeze(['MEDICA']),
-  NIEBLA: Object.freeze(['TRANSITO']),
-  // Catálogo real de Espacios.
-  LLUVIA_INTENSA: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']), // como LLUVIA_FUERTE
   TORMENTA_FUERTE: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']), // lluvia y viento, sin rayos
-  OLA_DE_FRIO: Object.freeze(['MEDICA']), // como FRIO_EXTREMO
-  HURACAN: Object.freeze(['MEDICA', 'INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']), // como TORNADO
+  LLUVIA_INTENSA: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']), // anegamientos, calzada resbaladiza
+  VIENTO_FUERTE: Object.freeze(['INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']), // propaga el fuego, árboles caídos
+  OLA_DE_CALOR: Object.freeze(['MEDICA', 'INCENDIO', 'INFRAESTRUCTURA']), // golpes de calor, cortes de luz
+  OLA_DE_FRIO: Object.freeze(['MEDICA']), // hipotermia
+  GRANIZO: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']), // techos, vehículos, visibilidad
+  TORMENTA_ELECTRICA: Object.freeze(['INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']), // rayos, cables caídos
+  HURACAN: Object.freeze(['MEDICA', 'INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']), // heridos, estructuras, vías
   NIEVE: Object.freeze(['MEDICA', 'INFRAESTRUCTURA', 'TRANSITO']), // hipotermia, estructuras, calzada
 });
 
-// Default conservador para un fenómeno que no está en la tabla. La regla deja
-// un warn en el log.
-const TIPOS_FENOMENO_DESCONOCIDO = Object.freeze(['INFRAESTRUCTURA']);
+// Un fenómeno fuera del catálogo no sube nada: el contexto se registra (sale
+// en el banner) y la regla deja un warn en el log.
+const TIPOS_FENOMENO_DESCONOCIDO = Object.freeze([]);
 
 const MARGEN_HORAS_DEFAULT = 3;
 const TOPE_HORAS_DEFAULT = 24;

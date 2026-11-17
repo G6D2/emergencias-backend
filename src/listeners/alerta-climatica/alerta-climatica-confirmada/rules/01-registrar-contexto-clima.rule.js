@@ -69,7 +69,7 @@ function barriosDeLaAlerta(data) {
 // - Gravedad: `gravedad`, o `nivelCriticidad` traducida (CRITICA = EXTREMA).
 //   LEVE, MEDIA, nula o desconocida crea el contexto (sale en el banner) con
 //   tiposEmergencia = [], así que no eleva nada.
-// - Fenómeno desconocido: warn y los tipos por defecto.
+// - Fenómeno fuera del catálogo de Espacios: warn y no eleva nada.
 // - Ventana: fechaInicio (o vigenciaDesde) hasta fechaFinEstimada (o
 //   vigenciaHasta) + margen, o el tope si no hay fin. La alerta la cierra el
 //   evento de finalización.
@@ -111,7 +111,7 @@ class RegistrarContextoClimaRule extends BusinessRule {
       });
     }
     if (!esFenomenoConocido(fenomeno)) {
-      secureLog('warn', 'Alerta climática con fenómeno desconocido: se usan los tipos por defecto', {
+      secureLog('warn', 'Alerta climática con fenómeno fuera del catálogo: no eleva la prioridad', {
         alertaId: data.alertaId,
         fenomeno: data.fenomeno ?? null,
       });

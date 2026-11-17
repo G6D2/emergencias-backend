@@ -62,9 +62,9 @@ describe('domain/alerta-climatica', () => {
   });
 
   it('normalizarFenomeno y esFenomenoConocido', () => {
-    expect(normalizarFenomeno(' lluvia_fuerte ')).toBe('LLUVIA_FUERTE');
+    expect(normalizarFenomeno(' lluvia_intensa ')).toBe('LLUVIA_INTENSA');
     expect(normalizarFenomeno('  ')).toBeNull();
-    expect(esFenomenoConocido('tornado')).toBe(true);
+    expect(esFenomenoConocido('huracan')).toBe(true);
     expect(esFenomenoConocido('OLA_POLAR')).toBe(false);
     expect(esFenomenoConocido('toString')).toBe(false);
     expect(esFenomenoConocido(null)).toBe(false);
@@ -76,40 +76,52 @@ describe('domain/alerta-climatica', () => {
       expect(elevados.has(tipo)).toBe(false);
     }
     expect(Object.isFrozen(TIPOS_POR_FENOMENO)).toBe(true);
-    expect(Object.isFrozen(TIPOS_POR_FENOMENO.TORNADO)).toBe(true);
+    expect(Object.isFrozen(TIPOS_POR_FENOMENO.HURACAN)).toBe(true);
+  });
+
+  it('la tabla tiene exactamente los 9 fenómenos del catálogo de Espacios', () => {
+    expect(Object.keys(TIPOS_POR_FENOMENO).sort()).toEqual([
+      'GRANIZO', 'HURACAN', 'LLUVIA_INTENSA', 'NIEVE', 'OLA_DE_CALOR', 'OLA_DE_FRIO',
+      'TORMENTA_ELECTRICA', 'TORMENTA_FUERTE', 'VIENTO_FUERTE',
+    ]);
+    for (const viejo of ['LLUVIA_FUERTE', 'TORNADO', 'INUNDACION', 'FRIO_EXTREMO', 'NIEBLA']) {
+      expect(esFenomenoConocido(viejo)).toBe(false);
+    }
   });
 
   describe('tiposAfectados', () => {
     it('con ALTA o EXTREMA devuelve los tipos del fenómeno', () => {
       expect(tiposAfectados({ fenomeno: 'TORMENTA_ELECTRICA', gravedad: 'ALTA', env: {} }))
         .toEqual(['INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']);
-      expect(tiposAfectados({ fenomeno: 'frio_extremo', gravedad: 'extrema', env: {} })).toEqual(['MEDICA']);
+      expect(tiposAfectados({ fenomeno: 'ola_de_frio', gravedad: 'extrema', env: {} })).toEqual(['MEDICA']);
     });
 
     it('con LEVE, MEDIA, nula o desconocida no eleva nada', () => {
       for (const gravedad of ['LEVE', 'MEDIA', null, undefined, 'ROJA']) {
-        expect(tiposAfectados({ fenomeno: 'TORNADO', gravedad, env: {} })).toEqual([]);
+        expect(tiposAfectados({ fenomeno: 'HURACAN', gravedad, env: {} })).toEqual([]);
       }
     });
 
-    it('un fenómeno desconocido usa los tipos por defecto', () => {
-      expect(tiposAfectados({ fenomeno: 'OLA_POLAR', gravedad: 'ALTA', env: {} })).toEqual(TIPOS_FENOMENO_DESCONOCIDO);
-      expect(tiposAfectados({ fenomeno: null, gravedad: 'ALTA', env: {} })).toEqual(['INFRAESTRUCTURA']);
+    it('un fenómeno fuera del catálogo no eleva nada', () => {
+      expect(TIPOS_FENOMENO_DESCONOCIDO).toEqual([]);
+      expect(tiposAfectados({ fenomeno: 'OLA_POLAR', gravedad: 'ALTA', env: {} })).toEqual([]);
+      expect(tiposAfectados({ fenomeno: 'TORNADO', gravedad: 'EXTREMA', env: {} })).toEqual([]);
+      expect(tiposAfectados({ fenomeno: null, gravedad: 'ALTA', env: {} })).toEqual([]);
     });
 
     it('el umbral se configura con CONTEXTO_CLIMA_GRAVEDAD_MINIMA; uno inválido usa ALTA', () => {
-      expect(tiposAfectados({ fenomeno: 'NIEBLA', gravedad: 'MEDIA', env: { CONTEXTO_CLIMA_GRAVEDAD_MINIMA: 'media' } }))
-        .toEqual(['TRANSITO']);
-      expect(tiposAfectados({ fenomeno: 'NIEBLA', gravedad: 'ALTA', env: { CONTEXTO_CLIMA_GRAVEDAD_MINIMA: 'EXTREMA' } }))
+      expect(tiposAfectados({ fenomeno: 'OLA_DE_FRIO', gravedad: 'MEDIA', env: { CONTEXTO_CLIMA_GRAVEDAD_MINIMA: 'media' } }))
+        .toEqual(['MEDICA']);
+      expect(tiposAfectados({ fenomeno: 'OLA_DE_FRIO', gravedad: 'ALTA', env: { CONTEXTO_CLIMA_GRAVEDAD_MINIMA: 'EXTREMA' } }))
         .toEqual([]);
       expect(gravedadMinima({ CONTEXTO_CLIMA_GRAVEDAD_MINIMA: 'ROJA' })).toBe('ALTA');
       expect(gravedadMinima({})).toBe('ALTA');
     });
 
     it('devuelve una copia: modificarla no toca la tabla', () => {
-      const tipos = tiposAfectados({ fenomeno: 'NIEBLA', gravedad: 'ALTA', env: {} });
-      tipos.push('MEDICA');
-      expect(TIPOS_POR_FENOMENO.NIEBLA).toEqual(['TRANSITO']);
+      const tipos = tiposAfectados({ fenomeno: 'OLA_DE_FRIO', gravedad: 'ALTA', env: {} });
+      tipos.push('TRANSITO');
+      expect(TIPOS_POR_FENOMENO.OLA_DE_FRIO).toEqual(['MEDICA']);
     });
   });
 
@@ -186,7 +198,7 @@ describe('listeners de alerta climática', () => {
     process.env = env;
   });
 
-  it('toman el topic del env y no tienen default', () => {
+  it('toman el topic del env y, sin env, el FQN real de Espacios', () => {
     process.env.EDA_TOPIC_ALERTA_CLIMATICA_CONFIRMADA = 'clima.confirmada';
     process.env.EDA_TOPIC_ALERTA_CLIMATICA_FINALIZADA = 'clima.finalizada';
     expect(new alertaClimatica.AlertaClimaticaConfirmadaListener(kafka).topic).toBe('clima.confirmada');
@@ -194,8 +206,10 @@ describe('listeners de alerta climática', () => {
 
     delete process.env.EDA_TOPIC_ALERTA_CLIMATICA_CONFIRMADA;
     delete process.env.EDA_TOPIC_ALERTA_CLIMATICA_FINALIZADA;
-    expect(new alertaClimatica.AlertaClimaticaConfirmadaListener(kafka).topic).toBeUndefined();
-    expect(new alertaClimatica.AlertaClimaticaFinalizadaListener(kafka).topic).toBeUndefined();
+    expect(new alertaClimatica.AlertaClimaticaConfirmadaListener(kafka).topic)
+      .toBe('com.citypass.espacios.CriticidadClimaticaConfirmada');
+    expect(new alertaClimatica.AlertaClimaticaFinalizadaListener(kafka).topic)
+      .toBe('com.citypass.espacios.CriticidadClimaticaFinalizada');
   });
 
   it('el paquete exporta los dos listeners y normalizan el envelope plano', async () => {
@@ -270,7 +284,7 @@ describe('RegistrarContextoClimaRule', () => {
     const mensajes = secureLog.mock.calls.map(([, mensaje]) => mensaje);
     expect(mensajes).toEqual(expect.arrayContaining([
       expect.stringMatching(/fuera del catálogo/),
-      expect.stringMatching(/fenómeno desconocido/),
+      expect.stringMatching(/fenómeno fuera del catálogo/),
       expect.stringMatching(/gravedad desconocida/),
     ]));
   });
@@ -349,7 +363,7 @@ describe('ContextoZonaRepository (alerta climática)', () => {
 
     await repository.upsert(null, {
       tipo: 'ALERTA_CLIMATICA', origen: 'espacios', referenciaExterna: ALERTA_ID,
-      barrios: ['PALERMO'], tiposEmergencia: ['TRANSITO'], fenomeno: 'NIEBLA', gravedad: 'ALTA', versionOrigen: 3,
+      barrios: ['PALERMO'], tiposEmergencia: ['TRANSITO'], fenomeno: 'GRANIZO', gravedad: 'ALTA', versionOrigen: 3,
     });
 
     const [sql, values] = pool.query.mock.calls[0];
@@ -357,13 +371,13 @@ describe('ContextoZonaRepository (alerta climática)', () => {
     expect(sql).toMatch(/\$14::text\[\], \$15::text\[\], \$16, \$17, \$18/);
     expect(sql).toMatch(/barrios = EXCLUDED\.barrios/);
     expect(sql).toMatch(/contexto_zona\.version_origen IS NULL OR EXCLUDED\.version_origen IS NULL\s+OR contexto_zona\.version_origen <= EXCLUDED\.version_origen/);
-    expect(values.slice(13)).toEqual([['PALERMO'], ['TRANSITO'], 'NIEBLA', 'ALTA', 3]);
+    expect(values.slice(13)).toEqual([['PALERMO'], ['TRANSITO'], 'GRANIZO', 'ALTA', 3]);
   });
 
   it('findActivos trae los no dados de baja, no suspendidos y sin vencer, filtrando por tipo', async () => {
     const fila = {
       id: 'ctx-1', tipo: 'ALERTA_CLIMATICA', barrios: ['PALERMO'], tipos_emergencia: [],
-      fenomeno: 'NIEBLA', gravedad: 'LEVE', version_origen: 1,
+      fenomeno: 'GRANIZO', gravedad: 'LEVE', version_origen: 1,
     };
     const executor = { query: jest.fn().mockResolvedValue({ rows: [fila] }) };
     const repository = new ContextoZonaRepository({ query: jest.fn() });
@@ -372,7 +386,7 @@ describe('ContextoZonaRepository (alerta climática)', () => {
 
     expect(activos).toEqual([mapContextoZona(fila)]);
     expect(activos[0]).toMatchObject({
-      barrios: ['PALERMO'], tiposEmergencia: [], fenomeno: 'NIEBLA', gravedad: 'LEVE', versionOrigen: 1,
+      barrios: ['PALERMO'], tiposEmergencia: [], fenomeno: 'GRANIZO', gravedad: 'LEVE', versionOrigen: 1,
     });
     const [sql, values] = executor.query.mock.calls[0];
     expect(sql).toMatch(/dado_de_baja_en IS NULL/);
@@ -397,7 +411,7 @@ describe('ContextoZonaRepository (alerta climática)', () => {
 
 describe('ContextoZonaController', () => {
   const activo = {
-    id: 'ctx-1', referenciaExterna: ALERTA_ID, tipo: 'ALERTA_CLIMATICA', fenomeno: 'TORNADO', gravedad: 'ALTA',
+    id: 'ctx-1', referenciaExterna: ALERTA_ID, tipo: 'ALERTA_CLIMATICA', fenomeno: 'HURACAN', gravedad: 'ALTA',
     tiposEmergencia: ['MEDICA'], barrios: ['PALERMO'], descripcion: null, latitud: null,
     vigenteDesde: new Date('2026-11-12T21:00:00Z'), vigenteHasta: new Date('2026-11-13T06:00:00Z'),
   };
@@ -406,7 +420,7 @@ describe('ContextoZonaController', () => {
     expect(toContextoActivo(activo)).toEqual({
       referenciaExterna: ALERTA_ID,
       tipo: 'ALERTA_CLIMATICA',
-      fenomeno: 'TORNADO',
+      fenomeno: 'HURACAN',
       gravedad: 'ALTA',
       eleva: true,
       tiposEmergencia: ['MEDICA'],

@@ -86,6 +86,20 @@ channels:
       emergenciaActualizada:
         $ref: '#/components/messages/EmergenciaActualizada'
 
+  criticidadClimaticaRecibida:
+    address: com.citypass.emergencias.CriticidadClimaticaConfirmada
+    title: CriticidadClimaticaConfirmada (confirmación de Emergencias)
+    description: |
+      Emergencias confirma que recibió una alerta climática confirmada de
+      Espacios (`com.citypass.espacios.CriticidadClimaticaConfirmada`). Mismo
+      contrato que publica Residuos: `alertaId`, `NivelCriticidad` y
+      `fenomeno`, reenviados tal cual llegaron. Uno por alerta recibida, eleve
+      o no la prioridad. Sale por el outbox en la misma transacción que el
+      contexto de zona. Topic configurable con `TOPIC_CONFIRMACION_CLIMA`.
+    messages:
+      criticidadClimaticaRecibida:
+        $ref: '#/components/messages/CriticidadClimaticaRecibida'
+
   emergenciaVinculadaAContextoZona:
     address: com.citypass.emergencias.EmergenciaVinculadaAContextoZona
     title: EmergenciaVinculadaAContextoZona
@@ -264,6 +278,14 @@ operations:
     summary: Publica un cambio de estado de una emergencia.
     messages:
       - $ref: '#/channels/emergenciaActualizada/messages/emergenciaActualizada'
+
+  publicarConfirmacionCriticidadClimatica:
+    action: send
+    channel:
+      $ref: '#/channels/criticidadClimaticaRecibida'
+    summary: Confirma por el EDA que Emergencias recibió una alerta climática de Espacios.
+    messages:
+      - $ref: '#/channels/criticidadClimaticaRecibida/messages/criticidadClimaticaRecibida'
 
   publicarEmergenciaVinculadaAContextoZona:
     action: send
@@ -537,6 +559,30 @@ components:
               ciudadanoId: CIT-JuanPanico
               correlationId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
               createdAt: '2026-11-02T22:59:08.205Z'
+
+    CriticidadClimaticaRecibida:
+      name: CriticidadClimaticaConfirmada
+      title: Confirmación de alerta climática recibida
+      contentType: application/json
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/CriticidadClimaticaRecibidaData'
+      examples:
+        - name: ola-de-calor
+          payload:
+            metadata:
+              eventId: 3d9b2f6a-1c4e-4f8a-9b7d-2e5c8a1f4b60
+              eventType: CriticidadClimaticaConfirmada
+              source: com.citypass.emergencias
+            data:
+              alertaId: f6029e4f-e0ef-46b8-9f1a-66e814f1c90e
+              NivelCriticidad: ALTA
+              fenomeno: OLA_DE_CALOR
 
     EmergenciaActualizada:
       name: EmergenciaActualizada
@@ -1035,6 +1081,24 @@ components:
         createdAt:
           $ref: '#/components/schemas/Timestamp'
 
+    CriticidadClimaticaRecibidaData:
+      type: object
+      additionalProperties: false
+      description: |
+        Mismo record que `com.citypass.residuos.CriticidadClimaticaConfirmada`.
+        `NivelCriticidad` va con mayúscula, como en ese schema.
+      required: [alertaId, NivelCriticidad, fenomeno]
+      properties:
+        alertaId:
+          type: string
+          description: El `alertaId` de la alerta de Espacios.
+        NivelCriticidad:
+          type: string
+          description: El `nivelCriticidad` que mandó Espacios (BAJA, MEDIA, ALTA o CRITICA).
+        fenomeno:
+          type: string
+          description: El `fenomeno` que mandó Espacios.
+
     EmergenciaActualizadaData:
       type: object
       additionalProperties: false
@@ -1409,10 +1473,9 @@ components:
         fenomeno:
           type: string
           description: |
-            LLUVIA_FUERTE, TORMENTA_ELECTRICA y TORNADO salen del contrato; el resto
-            del catálogo (VIENTO_FUERTE, GRANIZO, INUNDACION, OLA_DE_CALOR,
-            FRIO_EXTREMO, NIEBLA) está por confirmar. Uno desconocido eleva solo
-            INFRAESTRUCTURA.
+            Catálogo de Espacios: TORMENTA_FUERTE, LLUVIA_INTENSA, VIENTO_FUERTE,
+            OLA_DE_CALOR, OLA_DE_FRIO, GRANIZO, TORMENTA_ELECTRICA, HURACAN y
+            NIEVE. Uno fuera del catálogo no eleva nada.
         gravedad:
           type: string
           description: LEVE, MEDIA, ALTA o EXTREMA. Por debajo de ALTA, o desconocida, no eleva.

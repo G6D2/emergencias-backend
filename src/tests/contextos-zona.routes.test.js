@@ -32,7 +32,7 @@ const ALERTA_LEVE = {
   ...ALERTA_ALTA,
   id: 'ctx-2',
   referenciaExterna: '0b0e5c1a-7f3e-4a8e-9a51-2d5f1c7e9b10',
-  fenomeno: 'NIEBLA',
+  fenomeno: 'GRANIZO',
   gravedad: 'LEVE',
   tiposEmergencia: [],
   barrios: ['RECOLETA'],

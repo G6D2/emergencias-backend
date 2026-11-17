@@ -24,10 +24,15 @@ const {
   createRegistrarContextoZonaHandler,
   createDarDeBajaContextoZonaHandler,
 } = require('../../listeners/cobertura-preventiva/handlers/contexto-zona.handler');
+const {
+  PUBLICAR_CONFIRMACION_CLIMA,
+  createPublicarConfirmacionClimaHandler,
+} = require('../../listeners/alerta-climatica/handlers/confirmacion-clima.handler');
 const { createLocationCrypto } = require('../../security/location-crypto');
 const { createLifecycleHarness } = require('../helpers/emergency-lifecycle');
 
 const CREATED_TOPIC = 'test.clima.emergencias.creada';
+const CONFIRMACION_TOPIC = 'test.clima.emergencias.confirmacion';
 
 // PALERMO (cerca del Rosedal, dentro del radio de un evento ahí), RECOLETA y
 // un punto fuera de CABA, sin barrio.
@@ -144,6 +149,8 @@ beforeAll(async () => {
   factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
   factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   factory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
+  process.env.TOPIC_CONFIRMACION_CLIMA = CONFIRMACION_TOPIC;
+  factory.register(PUBLICAR_CONFIRMACION_CLIMA, createPublicarConfirmacionClimaHandler({ emergencyRepository }));
 
   confirmada = new AlertaClimaticaConfirmadaListener(fakeKafka(), { factory });
   finalizada = new AlertaClimaticaFinalizadaListener(fakeKafka(), { factory });
@@ -157,7 +164,8 @@ afterEach(async () => {
 afterAll(async () => {
   await limpiarContextos();
   await pool.query('DELETE FROM eventos_procesados WHERE event_id = ANY($1::uuid[])', [eventIds]);
-  await pool.query('DELETE FROM outbox_events WHERE topic = $1', [CREATED_TOPIC]);
+  await pool.query('DELETE FROM outbox_events WHERE topic = ANY($1::text[])', [[CREATED_TOPIC, CONFIRMACION_TOPIC]]);
+  delete process.env.TOPIC_CONFIRMACION_CLIMA;
   await h.cleanup();
   await pool.end();
 });
@@ -444,6 +452,25 @@ describe('alerta climática con el contrato real de Espacios (integration)', () 
     expect(elevada.dispatchPriority).toBe('high');
     expect(elevada.priorityContext).toMatchObject({ tipo: 'ALERTA_CLIMATICA', fenomeno: 'OLA_DE_CALOR', gravedad: 'ALTA' });
     expect((await detalle(disturbio)).dispatchPriority).toBe('medium');
+  });
+
+  it('encola una sola confirmación por el EDA con alertaId, NivelCriticidad y fenomeno', async () => {
+    const evento = criticidadConfirmada();
+
+    await confirmada.onMessage(buildMessage(evento));
+    await confirmada.onMessage(buildMessage(evento)); // reentrega: el dedup la frena
+
+    const { rows } = await pool.query(
+      `SELECT payload FROM outbox_events WHERE topic = $1 AND payload->'data'->>'alertaId' = $2`,
+      [CONFIRMACION_TOPIC, evento.data.alertaId]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].payload).toMatchObject({
+      type: 'CriticidadClimaticaConfirmada',
+      correlationId: evento.data.alertaId,
+      causationId: evento.metadata.eventId,
+      data: { alertaId: evento.data.alertaId, NivelCriticidad: 'ALTA', fenomeno: 'OLA_DE_CALOR' },
+    });
   });
 
   it('con barrios vacío deriva el barrio de las ubicaciones y eleva igual', async () => {
