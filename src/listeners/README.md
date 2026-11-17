@@ -39,8 +39,10 @@ listeners/
 3. El `OutcomeFactory` ejecuta los resultados: busca el handler registrado
    para cada `type` (un `type` sin handler falla antes de abrir la
    transaccion), abre una sola transaccion, marca el `metadata.eventId` en
-   `eventos_procesados` (si ya estaba, ROLLBACK y no hace nada) y corre los
-   handlers con el mismo `client`. Los handlers escriben por los repositorios
+   `eventos_procesados` y corre los handlers con el mismo `client`. Si el
+   `eventId` ya estaba (`PROCESSED` o `DISCARDED`), hace ROLLBACK sin efectos
+   y el listener deja un log `info` `<Listener> descarto un duplicado` con
+   `topic`, `eventId`, `eventType`, `source` y `offset` (sin datos de `data`). Los handlers escriben por los repositorios
    (outbox e historial incluidos), nunca con SQL directo sobre `emergencies`.
    Los handlers se registran en `src/index.js`.
 

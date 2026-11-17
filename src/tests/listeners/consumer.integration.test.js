@@ -156,6 +156,28 @@ describe('cobertura preventiva (integration)', () => {
     expect(await coberturas()).toHaveLength(1);
   });
 
+  it('la reentrega deja en el log que se descartó un duplicado, con eventId, tipo y tópico', async () => {
+    const topic = 'com.citypass.espacios.EventoComunitarioPublicado';
+    const listener = new EventoComunitarioPublicadoListener(fakeKafka(), { factory: outcomeFactory, topic });
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await listener.onMessage(buildMessage(PUBLICADO));
+      expect(logSpy.mock.calls.some(([line]) => String(line).includes('descarto un duplicado'))).toBe(false);
+
+      await listener.onMessage({ ...buildMessage(PUBLICADO), offset: '7' });
+
+      const lineas = logSpy.mock.calls.map(([line]) => String(line)).filter((line) => line.includes('descarto un duplicado'));
+      expect(lineas).toHaveLength(1);
+      expect(lineas[0]).toContain(`"eventId":"${PUBLICADO.metadata.eventId}"`);
+      expect(lineas[0]).toContain(`"eventType":"${PUBLICADO.metadata.eventType}"`);
+      expect(lineas[0]).toContain(`"topic":"${topic}"`);
+      expect(lineas[0]).not.toContain('Sarmiento');
+    } finally {
+      logSpy.mockRestore();
+    }
+    expect(await coberturas()).toHaveLength(1);
+  });
+
   it('una republicación del evento (otro eventId, cambian los inscriptos) no duplica la cobertura', async () => {
     await publicado.onMessage(buildMessage(PUBLICADO));
     await publicado.onMessage(buildMessage({
