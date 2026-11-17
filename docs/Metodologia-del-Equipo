@@ -1,0 +1,37 @@
+# Proceso de trabajo — Emergencias y Seguridad
+
+> **Borrador.** Las cifras salen del historial de Git y de los PRs de `emergencias-backend`,
+> `Frontend`, `ADRs`, `BusinessCase_TestBench` y `presentaciones` al 16/11/2026.
+
+## 1. Cómo trabajamos
+
+Utilizamos como metodologia principal Extreme Programming más prácticas de Scrum para el día a día del equipo, como sprints de una semana, de jueves a miércoles, y sesiones de planeamiento donde encapsulamos Review, Planning y Retros.
+## 2. Roles
+
+| Rol | Persona | De qué es dueño |
+|---|---|---|
+| Arquitectura / Scrum  | Sebastián Alterman | Metodologia, Proceso, Gestion de Decisiones, cadencia y llegada a las entregas |
+| Producto / Backend | Juan Ignacio Molina | Backlog, prioridad, aprobación de producto, revision de casos de uso,  |
+| ML & Back End  | Matías Amistadi, Lucca Perazzo | Exploracion de ML, API, dominio, eventos |
+| Frontend | Santino TG | Pantallas y BFF |
+| DevOps | Kevin Alajarin | CI/CD, hosting, base |
+| Seguridad | Valen Fiumana | Identidad, cifrado, retención |
+
+Los roles salen de los decisores que firman cada ADR. [completar: corregir lo que no coincida.]
+
+## 3. Sprints
+
+Commits sin contar merges; PRs mergeados en backend y Frontend.
+
+| Sprint | Semana | Commits | PRs mergeados | Personas activas | Qué se entregó |
+|---|---|---|---|---|---|
+| 0 | 13/08 – 19/08 | 9 | 0 | 1 | Registro de ADRs, sitio en GitHub Pages, ADR de hosting. Establecimos la mecanica de Spec Driven Development basada en ADRs. |
+| 1 | 20/08 – 26/08 | 5 | 0 | 1 | Esqueleto del backend, casos de uso principales, sub equipos y responsabilidades |
+| 2 | 27/08 – 02/09 | 27 | 6 | 6 | Persistencia en Postgres, JWT y roles, listado y cancelación, primer Frontend. |
+| 3 | 03/09 – 09/09 | 53 | 27 | 6 | Personas, Roles y asignación de emergencias, detalle con historial, severidad, cierre |
+| 4 | 10/09 – 16/09 | 47 | 34 | 5 | Dirección cifrada, keep-warm en horario de clase  |
+| 5 | 17/09 – 23/09 | 52 | 37 | 5 | Motor de incidentes y prioridad efectiva en la central, login email y contraseña, perfil cifrado. **Hito 1 (24/09)** |
+| 6 – 10 | 24/09 – 28/10 | 10 | 1 | 4 | Inicio de etapa 2 - Cinco ADRs de diseño del Hito 2 (08/10 y 16/10). Sin entregas de código. Ver sección 5 |
+| 11 | 29/10 – 04/11 | 13 | 4 | 2 | Contrato AsyncAPI, cliente OAuth del bus, publicación por el gateway, consumer con dedup |
+| 12 | 05/11 – 11/11 | 76 | 26 | 7 | Reclamo de ciclovía, prioridad por evento público, coordenadas aproximadas en los eventos |
+| 13 | 12/11 – 18/11 | 77 | 35 | 5 | Login Federado para el personal, vista del oficial, listeners de Movilidad y de reservas, testeo de integracion. |
