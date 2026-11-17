@@ -242,7 +242,7 @@ function mapEmergencyWithIncident(row, locationCrypto) {
 // OFFICER_SCOPE_STATUSES). `officer` y `statuses` son placeholders ($n) ya
 // cargados. El historial suma las que le devolvieron: dejaron de estar a su
 // nombre (la devolución libera al oficial), pero el historial de estados
-// guarda cada asignación con su officer_id (V34).
+// guarda cada asignación con su officer_id (V35).
 function officerScopeCondition(scope, officer, statuses) {
   const own = `e.assigned_officer_id = ${officer} AND e.status = ANY(${statuses})`;
   if (scope === 'active') return own;

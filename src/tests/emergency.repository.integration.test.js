@@ -438,7 +438,7 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
       expect(await idsFor(officerB, 'history')).toEqual([]);
     });
 
-    it('V34 guarda el oficial en cada fila de asignación del historial', async () => {
+    it('V35 guarda el oficial en cada fila de asignación del historial', async () => {
       const id = await dispatchedTo(officerB);
 
       const { rows } = await getPool().query(
