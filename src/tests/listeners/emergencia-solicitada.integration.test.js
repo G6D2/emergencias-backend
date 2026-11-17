@@ -262,6 +262,17 @@ describe('EmergenciaSolicitada de Movilidad → intervención', () => {
 
     const [row] = await intervenciones(reclamoId);
     expect(row).toMatchObject({ severity: 'medium', description: 'Reclamo por ciclovía obstruida', barrio: null });
+    // El correlationId de Movilidad se conserva aunque no sea UUID (#77).
+    expect(row.correlation_id).toBe('req-7c9e6679');
+  });
+
+  it('un correlationId con caracteres de control no se guarda: usa el id propio', async () => {
+    const { solicitada } = listenersCon();
+    const reclamoId = nuevoReclamoId();
+
+    await solicitada.onMessage(buildMessage(emergenciaSolicitada(reclamoId, { correlationId: 'req-1\r\nX-Falso: 1' })));
+
+    const [row] = await intervenciones(reclamoId);
     expect(row.correlation_id).toBe(row.id);
   });
 

@@ -228,6 +228,13 @@ describe('filas reales del outbox contra el contrato', () => {
     expect(errors).toEqual([]);
   });
 
+  it('la cobertura sale con el correlationId de Espacios aunque no sea UUID (#77) y cumple el contrato', () => {
+    const cobertura = rows.find((row) => row.topic === COBERTURA_TOPIC);
+    expect(cobertura.payload.correlationId).toBe(coberturaEvent.data.correlationId);
+    expect(cobertura.payload.data.correlationId).toBe(coberturaEvent.data.correlationId);
+    expect(contractErrors(cobertura.payload)).toEqual([]);
+  });
+
   it('el correlationId del sobre coincide con el de data y el eventId con la fila', () => {
     for (const row of rows) {
       expect(row.payload.data.correlationId).toBe(row.payload.correlationId);

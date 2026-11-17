@@ -163,16 +163,29 @@ describe('createCrearIntervencionHandler', () => {
     });
   });
 
-  it('prioridad desconocida o ausente cae a la del tipo; correlationId no UUID usa el id propio', async () => {
+  it('prioridad desconocida o ausente cae a la del tipo; el correlationId que no es UUID se conserva (#77)', async () => {
     const emergencyRepository = buildRepository();
     const handler = createCrearIntervencionHandler({ emergencyRepository });
-    const result = await handler(client, { ...PAYLOAD, prioridad: 'URGENTISIMA', correlationId: 'req-7c9e6679', titulo: null });
+    await handler(client, { ...PAYLOAD, prioridad: 'URGENTISIMA', correlationId: 'req-7c9e6679', titulo: null });
 
     expect(emergencyRepository.create.mock.calls[0][0]).toMatchObject({
       severity: 'medium',
-      correlationId: result.emergencyId,
+      correlationId: 'req-7c9e6679',
       description: 'Reclamo por ciclovía obstruida',
     });
+  });
+
+  it.each([
+    ['no viene', undefined],
+    ['está vacío', ''],
+    ['tiene caracteres de control', 'req-1\u0000'],
+    ['supera los 128 caracteres', 'r'.repeat(129)],
+  ])('sin un correlationId usable (%s) usa el id propio, como antes', async (_caso, correlationId) => {
+    const emergencyRepository = buildRepository();
+    const handler = createCrearIntervencionHandler({ emergencyRepository });
+    const result = await handler(client, { ...PAYLOAD, correlationId });
+
+    expect(emergencyRepository.create.mock.calls[0][0].correlationId).toBe(result.emergencyId);
   });
 
   it('recorta la descripción a 200 caracteres y falla sin reclamoId', async () => {

@@ -44,6 +44,12 @@ listeners/
    (outbox e historial incluidos), nunca con SQL directo sobre `emergencies`.
    Los handlers se registran en `src/index.js`.
 
+Las altas externas conservan el `correlationId` que llega aunque no sea UUID
+(`evento-<id>`, `act-<id>`, `EMG-...`): `src/domain/correlation-id.js` solo
+descarta lo que no es un string, está vacío, pasa de 128 caracteres o trae
+caracteres de control. En ese caso, o si no viene, la emergencia usa su
+propio id.
+
 `EmergenciaBicicleta` de Movilidad tiene un listener independiente de
 `EmergenciaSolicitada`: crea una emergencia médica por `data.emergenciaId`,
 deduplica además por la causa única `MOVILIDAD_BICICLETA`, y conserva ese ID
