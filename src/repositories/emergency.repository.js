@@ -1,6 +1,7 @@
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
 const {
   assertTransition, isTerminal, expirationTarget, TERMINAL_STATUSES, ACTIVE_STATUSES,
+  OFFICER_SCOPE_STATUSES,
 } = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { resolveBarrio } = require('../domain/barrio');
@@ -235,6 +236,19 @@ function mapEmergencyWithIncident(row, locationCrypto) {
     dispatchPriority: dispatchPriority(priority, Boolean(priorityContext)),
     priorityContext,
   };
+}
+
+// Condición de la vista del oficial (scope=active|history, ver
+// OFFICER_SCOPE_STATUSES). `officer` y `statuses` son placeholders ($n) ya
+// cargados. El historial suma las que le devolvieron: dejaron de estar a su
+// nombre (la devolución libera al oficial), pero el historial de estados
+// guarda cada asignación con su officer_id (V35).
+function officerScopeCondition(scope, officer, statuses) {
+  const own = `e.assigned_officer_id = ${officer} AND e.status = ANY(${statuses})`;
+  if (scope === 'active') return own;
+  return `((${own}) OR (e.assigned_officer_id IS DISTINCT FROM ${officer} AND EXISTS (
+    SELECT 1 FROM emergency_status_history h WHERE h.emergency_id = e.id AND h.officer_id = ${officer}
+  )))`;
 }
 
 function mapHistoryEntry(row) {
@@ -1022,7 +1036,12 @@ class EmergencyRepository {
     return { updatedCount: ids.length, ids };
   }
 
-  async findPage({ userId, statuses, severity, from, to, assignedOfficerId, emergencyType, page, limit, sortBy, order }) {
+  async findPage({
+    userId, statuses, severity, from, to, assignedOfficerId, officerScope, emergencyType, page, limit, sortBy, order,
+  }) {
+    if (officerScope && !assignedOfficerId) {
+      throw new Error('findPage: officerScope requires assignedOfficerId');
+    }
     const conditions = [];
     const values = [];
 
@@ -1036,7 +1055,12 @@ class EmergencyRepository {
     if (severity) addCondition('e.severity = ?', severity);
     if (from) addCondition('e.created_at >= ?', from);
     if (to) addCondition('e.created_at <= ?', to);
-    if (assignedOfficerId) addCondition('e.assigned_officer_id = ?', assignedOfficerId);
+    if (officerScope) {
+      values.push(assignedOfficerId, [...OFFICER_SCOPE_STATUSES[officerScope]]);
+      conditions.push(officerScopeCondition(officerScope, `$${values.length - 1}`, `$${values.length}`));
+    } else if (assignedOfficerId) {
+      addCondition('e.assigned_officer_id = ?', assignedOfficerId);
+    }
     // El filtro acepta canónico o alias del front; inválido → ValidationError.
     const normalizedType = assertEmergencyType(emergencyType);
     if (normalizedType) addCondition('e.emergency_type = ?', normalizedType);
@@ -1423,10 +1447,12 @@ class EmergencyRepository {
         [officerId]
       );
 
+      // officer_id deja la asignación consultable (vista del oficial,
+      // scope=history); el reason queda igual para el historial del detalle.
       const history = await client.query(
-        `INSERT INTO emergency_status_history (emergency_id, previous_status, new_status, actor, reason)
-         VALUES ($1, $2, 'DISPATCHED', $3, $4) RETURNING *`,
-        [id, previousStatus, actor, `Assigned officer ${officerId}`]
+        `INSERT INTO emergency_status_history (emergency_id, previous_status, new_status, actor, reason, officer_id)
+         VALUES ($1, $2, 'DISPATCHED', $3, $4, $5) RETURNING *`,
+        [id, previousStatus, actor, `Assigned officer ${officerId}`, officerId]
       );
 
       const officer = mapOfficer(officerRow);
