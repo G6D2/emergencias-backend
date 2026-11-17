@@ -896,7 +896,7 @@ Contrato cerrado por Juani el 2026-11-02 en el [comentario del issue #48](https:
 | `ubicacion.barrio` | string \| null | el mismo valor, anidado (Espacios) |
 | `latitud`, `longitud` | number \| null | en claro, redondeadas a 3 decimales (~100 m); `null` si la emergencia no tiene ubicación. Es lo que leen Movilidad, Residuos, Reclamos, Espacios y Analítica |
 | `ubicacion.latitud`, `ubicacion.longitud` | string \| null | la coordenada exacta, ciphertext AES-256-GCM (clave **de bus**). Plaintext `{"value": <number>}` + AAD `emergenciaId\|campo`. Sin clave de bus → null |
-| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `PREVENTIVA`, `TRANSITO`; `false` para `MEDICA`, `PANICO`, `OTRO`; `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
+| `afectaCirculacion` | boolean \| null | derivado por `categoria`: `true` para `INCENDIO`, `INFRAESTRUCTURA`, `DISTURBIO_EVENTO_MASIVO`, `TRANSITO`; `false` para `MEDICA`, `PANICO`, `OTRO` y `PREVENTIVA` (una cobertura programada no corta la calle, desde el 17/11); `null` si no hay tipo. Con `false`, Reclamos descarta el evento |
 | `causaId`, `causaTipo` | string \| null | `causa_id` / `causa_tipo`. En un alta ciudadana, `null`. En las externas: `EVENTO_PUBLICO` (`eventoId`), `RESERVA` (`reservaId`), `EVENTO_CLIMATICO` (`alertaId`), `RECLAMO` (`reclamoId`) o `MOVILIDAD_BICICLETA` (`emergenciaId` de Movilidad) |
 | `prioridadOriginal` | enum \| null | con `causaTipo = EVENTO_CLIMATICO`, la prioridad sin ajuste climático (hoy igual a `prioridad`); en el resto, `null` |
 | `ciudadanoId` | string \| null | `user_id`; `null` en las emergencias externas |
