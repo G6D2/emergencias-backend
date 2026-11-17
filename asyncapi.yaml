@@ -12,11 +12,9 @@ info:
       (`OutboxPublisher`).
     - **Consume** `EventoComunitarioPublicado`, `EventoCancelado` y `ReservaCreada`
       de Espacios Públicos (cobertura preventiva, `src/listeners/cobertura-preventiva`).
-    - **Consume** la alerta climática confirmada y finalizada de Espacios
-      Públicos (prioridad por barrio, `src/listeners/alerta-climatica`):
-      `CriticidadClimaticaConfirmada` y `CriticidadClimaticaFinalizada`
-      (contrato real). Los canales `espaciospublicos.alerta-climatica.*` son el
-      formato del ejemplo anterior, que el listener sigue aceptando.
+    - **Consume** `CriticidadClimaticaConfirmada` y `CriticidadClimaticaFinalizada`
+      de Espacios Públicos (alerta climática, `src/listeners/alerta-climatica`;
+      ADR "Responder a las alertas climáticas de Espacios"). Opt-in.
     - **Consume** `EmergenciaBicicleta` de Movilidad (asistencia durante un viaje,
       `src/listeners/movilidad-bicicleta`), sin reemplazar `EmergenciaSolicitada`
       (intervención por obstrucción de ciclovía).
@@ -86,20 +84,6 @@ channels:
       emergenciaActualizada:
         $ref: '#/components/messages/EmergenciaActualizada'
 
-  criticidadClimaticaRecibida:
-    address: com.citypass.emergencias.CriticidadClimaticaConfirmada
-    title: CriticidadClimaticaConfirmada (confirmación de Emergencias)
-    description: |
-      Emergencias confirma que recibió una alerta climática confirmada de
-      Espacios (`com.citypass.espacios.CriticidadClimaticaConfirmada`). Mismo
-      contrato que publica Residuos: `alertaId`, `NivelCriticidad` y
-      `fenomeno`, reenviados tal cual llegaron. Uno por alerta recibida, eleve
-      o no la prioridad. Sale por el outbox en la misma transacción que el
-      contexto de zona. Topic configurable con `TOPIC_CONFIRMACION_CLIMA`.
-    messages:
-      criticidadClimaticaRecibida:
-        $ref: '#/components/messages/CriticidadClimaticaRecibida'
-
   emergenciaVinculadaAContextoZona:
     address: com.citypass.emergencias.EmergenciaVinculadaAContextoZona
     title: EmergenciaVinculadaAContextoZona
@@ -162,6 +146,29 @@ channels:
       reservaCreada:
         $ref: '#/components/messages/ReservaCreada'
 
+  criticidadClimaticaConfirmada:
+    address: com.citypass.espacios.CriticidadClimaticaConfirmada
+    title: CriticidadClimaticaConfirmada (Espacios Públicos)
+    description: |
+      Opt-in: solo se consume con `EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA`
+      cargada (no tiene default; confirmar el nombre en el catálogo del gateway
+      antes de cargarla). Un administrador de Espacios confirmó una alerta
+      climática (schemaId 28).
+    messages:
+      criticidadClimaticaConfirmada:
+        $ref: '#/components/messages/CriticidadClimaticaConfirmada'
+
+  criticidadClimaticaFinalizada:
+    address: com.citypass.espacios.CriticidadClimaticaFinalizada
+    title: CriticidadClimaticaFinalizada (Espacios Públicos)
+    description: |
+      Opt-in: solo se consume con `EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA`
+      cargada (no tiene default). La alerta venció o se cerró a mano; trae el
+      mismo `alertaId` (schemaId 27).
+    messages:
+      criticidadClimaticaFinalizada:
+        $ref: '#/components/messages/CriticidadClimaticaFinalizada'
+
   emergenciaSolicitada:
     address: com.citypass.movilidad.EmergenciaSolicitada
     title: EmergenciaSolicitada (Movilidad)
@@ -183,55 +190,6 @@ channels:
     messages:
       emergenciaBicicleta:
         $ref: '#/channels/emergenciaBicicleta/messages/emergenciaBicicleta'
-
-  criticidadClimaticaConfirmada:
-    address: com.citypass.espacios.CriticidadClimaticaConfirmada
-    title: CriticidadClimaticaConfirmada (Espacios Públicos)
-    description: |
-      Contrato real (guía "CityPass Eventos climáticos" de Espacios, 13/11/2026).
-      Topic configurable con `EDA_TOPIC_ALERTA_CLIMATICA_CONFIRMADA`, sin default
-      en el código: este FQN es el valor a cargar.
-    messages:
-      criticidadClimaticaConfirmada:
-        $ref: '#/components/messages/CriticidadClimaticaConfirmada'
-
-  criticidadClimaticaFinalizada:
-    address: com.citypass.espacios.CriticidadClimaticaFinalizada
-    title: CriticidadClimaticaFinalizada (Espacios Públicos)
-    description: |
-      Contrato real. Topic configurable con `EDA_TOPIC_ALERTA_CLIMATICA_FINALIZADA`,
-      sin default en el código: este FQN es el valor a cargar.
-    messages:
-      criticidadClimaticaFinalizada:
-        $ref: '#/components/messages/CriticidadClimaticaFinalizada'
-
-  alertaClimaticaConfirmada:
-    address: espaciospublicos.alerta-climatica.confirmada
-    title: Alerta climática confirmada (formato de ejemplo, no real)
-    description: |
-      Formato del ejemplo anterior al contrato real; el listener lo sigue
-      aceptando. El contrato real es `criticidadClimaticaConfirmada`.
-      Topic configurable con `EDA_TOPIC_ALERTA_CLIMATICA_CONFIRMADA`, sin default:
-      el nombre sale del ejemplo de Espacios y no sigue la convención
-      `com.citypass.<ns>.<PascalCase>` del gateway, así que está por confirmar.
-      Un cambio de gravedad o de barrios llega como otra confirmación con
-      `version` mayor.
-    messages:
-      alertaClimaticaConfirmada:
-        $ref: '#/components/messages/AlertaClimaticaConfirmada'
-
-  alertaClimaticaFinalizada:
-    address: espaciospublicos.alerta-climatica.finalizada
-    title: Alerta climática finalizada (formato de ejemplo, no real)
-    description: |
-      Formato del ejemplo anterior al contrato real. El contrato real es
-      `criticidadClimaticaFinalizada`.
-      Topic configurable con `EDA_TOPIC_ALERTA_CLIMATICA_FINALIZADA`, sin default.
-      El nombre y el payload están por confirmar con Espacios; Emergencias solo
-      lee `alertaId`.
-    messages:
-      alertaClimaticaFinalizada:
-        $ref: '#/components/messages/AlertaClimaticaFinalizada'
 
   reclamoCreado:
     address: com.citypass.reclamos.ReclamoCreado.v3
@@ -278,14 +236,6 @@ operations:
     summary: Publica un cambio de estado de una emergencia.
     messages:
       - $ref: '#/channels/emergenciaActualizada/messages/emergenciaActualizada'
-
-  publicarConfirmacionCriticidadClimatica:
-    action: send
-    channel:
-      $ref: '#/channels/criticidadClimaticaRecibida'
-    summary: Confirma por el EDA que Emergencias recibió una alerta climática de Espacios.
-    messages:
-      - $ref: '#/channels/criticidadClimaticaRecibida/messages/criticidadClimaticaRecibida'
 
   publicarEmergenciaVinculadaAContextoZona:
     action: send
@@ -372,6 +322,46 @@ operations:
     messages:
       - $ref: '#/channels/reservaCreada/messages/reservaCreada'
 
+  recibirCriticidadClimaticaConfirmada:
+    action: receive
+    channel:
+      $ref: '#/channels/criticidadClimaticaConfirmada'
+    summary: |
+      Solo con `nivelCriticidad` `ALTA` o `CRITICA` (`BAJA` y `MEDIA` no generan
+      nada). Registra un contexto de zona `ALERTA_CLIMATICA` por cada punto de
+      `ubicaciones`, con el radio del nivel (`CRITICA` 1000 m,
+      `CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS`; `ALTA` 500 m,
+      `CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS`) y la ventana
+      `vigenciaDesde`–`vigenciaHasta`. Si la alerta todavía está vigente, crea
+      una única emergencia `PREVENTIVA` por `alertaId` (causa
+      `EVENTO_CLIMATICO`, severidad `high` o `critical`), que sale en
+      `EmergenciaCreada` con `prioridadOriginal`. Si la alerta ya se finalizó,
+      no crea nada.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.CriticidadClimaticaConfirmadaListener
+    messages:
+      - $ref: '#/channels/criticidadClimaticaConfirmada/messages/criticidadClimaticaConfirmada'
+
+  recibirCriticidadClimaticaFinalizada:
+    action: receive
+    channel:
+      $ref: '#/channels/criticidadClimaticaFinalizada'
+    summary: |
+      Da de baja los contextos de la alerta y cancela su emergencia climática si
+      todavía no fue despachada (`PENDING`/`VALIDATED`), con
+      `EmergenciaActualizada`. Si llega antes que la confirmación, la
+      confirmación tardía no crea contextos ni emergencia.
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          const: com.citypass.emergencias.CriticidadClimaticaFinalizadaListener
+    messages:
+      - $ref: '#/channels/criticidadClimaticaFinalizada/messages/criticidadClimaticaFinalizada'
+
   recibirEmergenciaSolicitada:
     action: receive
     channel:
@@ -404,78 +394,6 @@ operations:
           const: com.citypass.emergencias.EmergenciaBicicletaListener
     messages:
       - $ref: '#/channels/emergenciaBicicleta/messages/emergenciaBicicleta'
-
-  recibirCriticidadClimaticaConfirmada:
-    action: receive
-    channel:
-      $ref: '#/channels/criticidadClimaticaConfirmada'
-    summary: |
-      Registra un contexto de zona por alerta (`alertaId`) con los `barrios` del
-      catálogo; si viene vacío, los deriva de `ubicaciones` por polígono (hasta
-      50). Mientras dura (`vigenciaDesde` a `vigenciaHasta` + 3 h de tope), las
-      emergencias abiertas de esos barrios suben un nivel de prioridad de
-      despacho, solo para los tipos que afecta el `fenomeno` y solo con
-      `nivelCriticidad` ALTA o CRITICA. Con BAJA o MEDIA el contexto existe y se
-      avisa en el tablero, pero no eleva.
-    bindings:
-      kafka:
-        groupId:
-          type: string
-          const: com.citypass.emergencias.AlertaClimaticaConfirmadaListener
-    messages:
-      - $ref: '#/channels/criticidadClimaticaConfirmada/messages/criticidadClimaticaConfirmada'
-
-  recibirCriticidadClimaticaFinalizada:
-    action: receive
-    channel:
-      $ref: '#/channels/criticidadClimaticaFinalizada'
-    summary: |
-      Da de baja el contexto de zona de ese `alertaId`: la prioridad de las
-      emergencias de esos barrios vuelve a la normal en la próxima lectura.
-      `finalizadaEn` no se usa para ordenar (es reloj de Espacios).
-    bindings:
-      kafka:
-        groupId:
-          type: string
-          const: com.citypass.emergencias.AlertaClimaticaFinalizadaListener
-    messages:
-      - $ref: '#/channels/criticidadClimaticaFinalizada/messages/criticidadClimaticaFinalizada'
-
-  recibirAlertaClimaticaConfirmada:
-    action: receive
-    channel:
-      $ref: '#/channels/alertaClimaticaConfirmada'
-    summary: |
-      Registra un contexto de zona por alerta (`alertaId`) con sus barrios del
-      catálogo. Mientras dura, las emergencias abiertas de esos barrios suben un
-      nivel de prioridad de despacho, solo para los tipos que afecta el
-      `fenomeno` y solo con `gravedad` ALTA o EXTREMA
-      (`CONTEXTO_CLIMA_GRAVEDAD_MINIMA`). Con LEVE o MEDIA el contexto existe y
-      se avisa en el tablero, pero no eleva. Una `version` menor que la guardada
-      no pisa nada.
-    bindings:
-      kafka:
-        groupId:
-          type: string
-          const: com.citypass.emergencias.AlertaClimaticaConfirmadaListener
-    messages:
-      - $ref: '#/channels/alertaClimaticaConfirmada/messages/alertaClimaticaConfirmada'
-
-  recibirAlertaClimaticaFinalizada:
-    action: receive
-    channel:
-      $ref: '#/channels/alertaClimaticaFinalizada'
-    summary: |
-      Da de baja el contexto de zona de la alerta: la prioridad de las
-      emergencias de esos barrios vuelve a la normal en la próxima lectura. Si
-      llega antes que la confirmación, la confirmación tardía se ignora.
-    bindings:
-      kafka:
-        groupId:
-          type: string
-          const: com.citypass.emergencias.AlertaClimaticaFinalizadaListener
-    messages:
-      - $ref: '#/channels/alertaClimaticaFinalizada/messages/alertaClimaticaFinalizada'
 
   recibirReclamoCreado:
     action: receive
@@ -559,30 +477,6 @@ components:
               ciudadanoId: CIT-JuanPanico
               correlationId: 5d1e9a7c-3b2f-4f61-9c8e-0a4b7d2e6f13
               createdAt: '2026-11-02T22:59:08.205Z'
-
-    CriticidadClimaticaRecibida:
-      name: CriticidadClimaticaConfirmada
-      title: Confirmación de alerta climática recibida
-      contentType: application/json
-      payload:
-        type: object
-        required: [metadata, data]
-        properties:
-          metadata:
-            $ref: '#/components/schemas/Metadata'
-          data:
-            $ref: '#/components/schemas/CriticidadClimaticaRecibidaData'
-      examples:
-        - name: ola-de-calor
-          payload:
-            metadata:
-              eventId: 3d9b2f6a-1c4e-4f8a-9b7d-2e5c8a1f4b60
-              eventType: CriticidadClimaticaConfirmada
-              source: com.citypass.emergencias
-            data:
-              alertaId: f6029e4f-e0ef-46b8-9f1a-66e814f1c90e
-              NivelCriticidad: ALTA
-              fenomeno: OLA_DE_CALOR
 
     EmergenciaActualizada:
       name: EmergenciaActualizada
@@ -722,6 +616,34 @@ components:
           data:
             $ref: '#/components/schemas/ReservaCreadaData'
 
+    CriticidadClimaticaConfirmada:
+      name: CriticidadClimaticaConfirmada
+      title: Criticidad climática confirmada
+      contentType: application/json
+      description: Producido por Espacios Públicos (schemaId 28 en el gateway). Solo se documentan los campos que lee Emergencias.
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/CriticidadClimaticaConfirmadaData'
+
+    CriticidadClimaticaFinalizada:
+      name: CriticidadClimaticaFinalizada
+      title: Criticidad climática finalizada
+      contentType: application/json
+      description: Producido por Espacios Públicos (schemaId 27 en el gateway).
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/CriticidadClimaticaFinalizadaData'
+
     EmergenciaSolicitada:
       name: EmergenciaSolicitada
       title: Emergencia solicitada por Movilidad
@@ -782,142 +704,6 @@ components:
                 nombre: Usuario
                 apellido: Demo
                 email: demo@example.invalid
-
-    CriticidadClimaticaConfirmada:
-      name: CriticidadClimaticaConfirmada
-      title: Criticidad climática confirmada
-      contentType: application/json
-      description: |
-        Producido por Espacios Públicos cuando el administrador confirma una
-        alerta. Espacios POSTea solo `data` al gateway; el gateway agrega
-        `metadata` y lo publica en Avro (formato Confluent).
-      payload:
-        type: object
-        required: [data]
-        additionalProperties: true
-        properties:
-          metadata:
-            $ref: '#/components/schemas/Metadata'
-          data:
-            $ref: '#/components/schemas/CriticidadClimaticaConfirmadaData'
-      examples:
-        - name: olaDeCalorEnBalvaneraYSanNicolas
-          summary: Ejemplo de la guía de Espacios, con el envelope del gateway
-          payload:
-            metadata:
-              eventId: 3c9a7d21-5b6e-4f80-9a1b-2c3d4e5f6a7b
-              eventType: com.citypass.espacios.CriticidadClimaticaConfirmada
-              source: grupo7
-            data:
-              alertaId: f6029e4f-e0ef-46b8-9f1a-66e814f1c90e
-              nivelCriticidad: ALTA
-              fenomeno: OLA_DE_CALOR
-              ubicaciones:
-                - latitud: -34.6037
-                  longitud: -58.3816
-                - latitud: -34.609099
-                  longitud: -58.403062
-              barrios: [BALVANERA, SAN NICOLAS]
-              vigenciaDesde: 1794603600000
-              vigenciaHasta: 1794625200000
-              temperaturaMinC: 28.0
-              temperaturaMaxC: 38.0
-              actorSub: admin-ejemplo
-
-    CriticidadClimaticaFinalizada:
-      name: CriticidadClimaticaFinalizada
-      title: Criticidad climática finalizada
-      contentType: application/json
-      description: |
-        Producido por Espacios Públicos al finalizar la alerta, a mano o por el
-        cierre automático (`actorSub = system:weather-scheduler`). No repite
-        ubicaciones, barrios ni criticidad.
-      payload:
-        type: object
-        required: [data]
-        additionalProperties: true
-        properties:
-          metadata:
-            $ref: '#/components/schemas/Metadata'
-          data:
-            $ref: '#/components/schemas/CriticidadClimaticaFinalizadaData'
-      examples:
-        - name: cierreDeLaOlaDeCalor
-          summary: Ejemplo de la guía de Espacios, con el envelope del gateway
-          payload:
-            metadata:
-              eventId: 8d2e4f60-1a3b-4c5d-8e9f-0a1b2c3d4e5f
-              eventType: com.citypass.espacios.CriticidadClimaticaFinalizada
-              source: grupo7
-            data:
-              alertaId: f6029e4f-e0ef-46b8-9f1a-66e814f1c90e
-              finalizadaEn: 1794625200000
-              actorSub: admin-ejemplo
-
-    AlertaClimaticaConfirmada:
-      name: AlertaClimaticaConfirmada
-      title: Alerta climática confirmada
-      contentType: application/json
-      description: |
-        Producido por Espacios Públicos. Se aceptan dos envelopes: el del gateway
-        (`{ metadata, data }`) y el del ejemplo de Espacios, con `eventId`,
-        `eventType`, `occurredAt` y `source` en la raíz. Solo se documentan los
-        campos que lee Emergencias.
-      payload:
-        type: object
-        required: [data]
-        additionalProperties: true
-        properties:
-          metadata:
-            $ref: '#/components/schemas/Metadata'
-          eventId:
-            type: string
-          eventType:
-            type: string
-          occurredAt:
-            type: string
-            format: date-time
-          source:
-            type: string
-          data:
-            $ref: '#/components/schemas/AlertaClimaticaConfirmadaData'
-      examples:
-        - name: tormentaElectricaEnPalermo
-          summary: Envelope plano del ejemplo de Espacios
-          payload:
-            eventId: 6b1f7c2e-4d3a-4f5b-8a9c-1d2e3f4a5b6c
-            eventType: espaciospublicos.alerta-climatica.confirmada
-            occurredAt: '2026-11-12T20:00:00Z'
-            source: espacios-publicos
-            data:
-              alertaId: 0b0e5c1a-7f3e-4a8e-9a51-2d5f1c7e9b10
-              version: 1
-              fenomeno: TORMENTA_ELECTRICA
-              gravedad: ALTA
-              barrios: [PALERMO, VILLA CRESPO]
-              fechaInicio: '2026-11-12T21:00:00Z'
-              fechaFinEstimada: '2026-11-13T03:00:00Z'
-              descripcion: Tormentas fuertes con ráfagas y caída de granizo
-
-    AlertaClimaticaFinalizada:
-      name: AlertaClimaticaFinalizada
-      title: Alerta climática finalizada
-      contentType: application/json
-      description: |
-        Producido por Espacios Públicos cuando el administrador cierra la alerta.
-        Nombre y payload por confirmar: Emergencias solo lee `alertaId`. Acepta
-        los mismos dos envelopes que la confirmación.
-      payload:
-        type: object
-        required: [data]
-        additionalProperties: true
-        properties:
-          metadata:
-            $ref: '#/components/schemas/Metadata'
-          eventId:
-            type: string
-          data:
-            $ref: '#/components/schemas/AlertaClimaticaFinalizadaData'
 
     ReclamoCreado:
       name: ReclamoCreado
@@ -1081,24 +867,6 @@ components:
         createdAt:
           $ref: '#/components/schemas/Timestamp'
 
-    CriticidadClimaticaRecibidaData:
-      type: object
-      additionalProperties: false
-      description: |
-        Mismo record que `com.citypass.residuos.CriticidadClimaticaConfirmada`.
-        `NivelCriticidad` va con mayúscula, como en ese schema.
-      required: [alertaId, NivelCriticidad, fenomeno]
-      properties:
-        alertaId:
-          type: string
-          description: El `alertaId` de la alerta de Espacios.
-        NivelCriticidad:
-          type: string
-          description: El `nivelCriticidad` que mandó Espacios (BAJA, MEDIA, ALTA o CRITICA).
-        fenomeno:
-          type: string
-          description: El `fenomeno` que mandó Espacios.
-
     EmergenciaActualizadaData:
       type: object
       additionalProperties: false
@@ -1249,7 +1017,10 @@ components:
           description: Módulo que originó el contexto (hoy, espacios).
         referenciaExterna:
           type: string
-          description: Id en el módulo de origen (el eventoId de Espacios). Clave para agrupar por evento.
+          description: |
+            Id en el módulo de origen. Con `EVENTO_ESPACIO_PUBLICO`, el `eventoId` de
+            Espacios; con `ALERTA_CLIMATICA`, `<alertaId>#<índice del punto>`. Clave
+            para agrupar por evento o alerta.
         radioMetros:
           type: integer
           minimum: 1
@@ -1394,118 +1165,50 @@ components:
     CriticidadClimaticaConfirmadaData:
       type: object
       additionalProperties: true
-      description: |
-        Campos del contrato real de Espacios. Las fechas son Unix en
-        milisegundos (Avro `long` con `timestamp-millis`).
-      required: [alertaId, nivelCriticidad, fenomeno, ubicaciones, vigenciaDesde, vigenciaHasta, actorSub]
+      required: [alertaId, nivelCriticidad]
       properties:
         alertaId:
           type: string
-          format: uuid
-          description: Relaciona la confirmación con su finalización. Un contexto de zona por alerta.
+          minLength: 1
         nivelCriticidad:
           type: string
           enum: [BAJA, MEDIA, ALTA, CRITICA]
-          description: Emergencias la traduce a gravedad (CRITICA = EXTREMA). Solo ALTA y CRITICA elevan.
+          description: Solo `ALTA` y `CRITICA` generan contextos y emergencia.
         fenomeno:
           type: string
-          enum: [TORMENTA_FUERTE, LLUVIA_INTENSA, VIENTO_FUERTE, OLA_DE_CALOR, OLA_DE_FRIO, GRANIZO, TORMENTA_ELECTRICA, HURACAN, NIEVE]
-          description: Qué tipos de emergencia afecta cada uno lo define Emergencias (`src/domain/alerta-climatica.js`).
+          examples: [TORMENTA_FUERTE, LLUVIA_INTENSA, GRANIZO]
         ubicaciones:
           type: array
+          description: Puntos de la consulta meteorológica. No son un polígono ni traen radio.
           items:
             type: object
-            required: [latitud, longitud]
             properties:
               latitud:
                 type: number
               longitud:
                 type: number
-          description: Puntos consultados. Si `barrios` viene vacío, Emergencias deriva los barrios de acá.
         barrios:
           type: array
-          default: []
           items:
             type: string
-          description: Barrios de CABA calculados por Espacios con polígonos, en mayúsculas.
         vigenciaDesde:
           type: integer
-          description: Inicio de la vigencia, Unix ms.
+          description: Epoch en milisegundos (timestamp-millis de Avro).
         vigenciaHasta:
           type: integer
-          description: Fin previsto, Unix ms. Si la finalización no llega, la alerta deja de pesar 3 h después.
-        temperaturaMinC:
-          type: [number, 'null']
-        temperaturaMaxC:
-          type: [number, 'null']
-        actorSub:
-          type: string
-          description: Quién confirmó. Emergencias no lo usa.
+          description: Epoch en milisegundos (timestamp-millis de Avro).
 
     CriticidadClimaticaFinalizadaData:
-      type: object
-      additionalProperties: true
-      required: [alertaId, finalizadaEn, actorSub]
-      properties:
-        alertaId:
-          type: string
-          format: uuid
-        finalizadaEn:
-          type: integer
-          description: Cierre registrado por Espacios, Unix ms. Puede diferir de `vigenciaHasta`.
-        actorSub:
-          type: string
-          description: Quién cerró; `system:weather-scheduler` en el cierre automático.
-
-    AlertaClimaticaConfirmadaData:
-      type: object
-      additionalProperties: true
-      required: [alertaId, barrios]
-      properties:
-        alertaId:
-          type: string
-          format: uuid
-          description: Identifica la alerta. Un solo contexto de zona por alerta.
-        version:
-          type: integer
-          minimum: 0
-          description: Una versión menor que la ya registrada no pisa nada.
-        fenomeno:
-          type: string
-          description: |
-            Catálogo de Espacios: TORMENTA_FUERTE, LLUVIA_INTENSA, VIENTO_FUERTE,
-            OLA_DE_CALOR, OLA_DE_FRIO, GRANIZO, TORMENTA_ELECTRICA, HURACAN y
-            NIEVE. Uno fuera del catálogo no eleva nada.
-        gravedad:
-          type: string
-          description: LEVE, MEDIA, ALTA o EXTREMA. Por debajo de ALTA, o desconocida, no eleva.
-        barrios:
-          type: array
-          items:
-            type: string
-          description: |
-            Barrios de CABA. Se comparan con el catálogo sin importar mayúsculas ni
-            acentos. Los que no están se ignoran; sin ninguno válido no hay contexto.
-        fechaInicio:
-          $ref: '#/components/schemas/Timestamp'
-        fechaFinEstimada:
-          type: string
-          format: date-time
-          description: |
-            Informativa. Si la finalización no llega, la alerta deja de pesar
-            `CONTEXTO_CLIMA_MARGEN_HORAS` (3) después; sin este campo,
-            `CONTEXTO_CLIMA_TOPE_HORAS` (24) después del inicio.
-        descripcion:
-          type: string
-
-    AlertaClimaticaFinalizadaData:
       type: object
       additionalProperties: true
       required: [alertaId]
       properties:
         alertaId:
           type: string
-          format: uuid
+          minLength: 1
+        finalizadaEn:
+          type: integer
+          description: Epoch en milisegundos (timestamp-millis de Avro).
 
     ReclamoCreadoData:
       type: object

@@ -14,13 +14,14 @@ flowchart TB
     end
 
     subgraph rbe["Render · Backend (Docker, plan free)"]
-        api["Express API<br/>/api/*, /auth/* (AUTH_MODE=local o hybrid)<br/>+ listeners Kafka en el mismo proceso"]
+        api["Express API<br/>/api/*, /auth/* (AUTH_MODE=hybrid en producción)<br/>+ 8 listeners Kafka y OutboxPublisher en el mismo proceso"]
     end
 
     neon[("Neon Postgres<br/>(pooled, sslmode=require)")]
 
     subgraph edaGroup["Bus de eventos (Grupo 1)"]
         kafka["Kafka SASL_SSL<br/>test.citypass.mrfranco.net.ar:9092"]
+        gateway["Event gateway (HTTP)<br/>POST /api/v1/event-types/{fqn}/events"]
         registry["Schema registry del gateway<br/>/api/v1"]
     end
 
@@ -45,10 +46,11 @@ flowchart TB
     ciudadano -->|HTTPS| bff
     bff -->|"Bearer JWT (cookie httpOnly server-side) + retry 502/503/504"| api
     api -->|"pg pool, DB_POOL_MAX"| neon
-    kafka -->|"consume EventoComunitarioPublicado / EventoCancelado"| api
+    kafka -->|"consume 8 tipos de evento:<br/>Espacios (EventoComunitarioPublicado, EventoCancelado, ActividadCreada, ReservaCreada),<br/>Movilidad (EmergenciaSolicitada, EmergenciaBicicleta),<br/>Reclamos (ReclamoCreado, ReclamoActualizado)<br/>+ alerta climática de Espacios (opt-in)"| api
     api -->|"decodifica Avro (Bearer)"| registry
     api -->|"client-credentials"| login
-    api -->|"outbox -> GatewayPublisher (EDA_PUBLISHER_MODE=gateway)"| kafka
+    api -->|"outbox -> GatewayPublisher (EDA_PUBLISHER_MODE=gateway):<br/>EmergenciaCreada, EmergenciaActualizada"| gateway
+    gateway -->|"sella metadata y publica"| kafka
     api -->|"verify RS256 via JWKS (tokens del personal)"| idp
     bff -->|"GET reverse-geocode"| bdc
     bff -.->|"respaldo si BigDataCloud falla"| nom
@@ -90,14 +92,15 @@ flowchart TB
     strategy["incident-detection-strategy<br/>detectGroups(candidates, options, {primary, fallback})"]:::incident
     dbscanGrouper["dbscan-grouper<br/>(estrategia primaria, DBSCAN vía density-clustering)"]:::incident
     ruleGrouper["rule-based-grouper<br/>(estrategia fallback, Union-Find + Haversine)"]:::incident
-    repositories["repositories<br/>emergency, officer, incident, citizen-profile, auth-user, eventos-procesados"]
-    services["services<br/>emergency-events, kafka.service, outbox-publisher, eda-auth-client"]
-    listeners["listeners<br/>EventListener + cobertura-preventiva + reclamo-intervencion<br/>(reglas, OutcomeFactory con dedup)"]:::consumer
+    repositories["repositories<br/>emergency, officer, incident, citizen-profile, auth-user,<br/>eventos-procesados, contexto-zona"]
+    services["services<br/>emergency-events, kafka.service, outbox-publisher,<br/>gateway-publisher, eda-auth-client"]
+    listeners["listeners<br/>EventConsumer (un solo consumer) + cobertura-preventiva +<br/>reclamo-intervencion + movilidad-bicicleta<br/>(reglas por evento, OutcomeFactory con dedup)"]:::consumer
     detectionJob["incident-detection-job<br/>cada 60s, pg_try_advisory_lock"]:::incident
     security["security<br/>location-crypto, location-retention, cors, rate-limit, secure-log, security-headers"]
-    jobs["jobs / procesos en background<br/>OutboxPublisher (apagado en prod), location-retention,<br/>citizen-profile-retention, incident-detection-job, keep-warm"]
+    jobs["jobs / procesos en background<br/>OutboxPublisher (prendido en prod, publica por el gateway),<br/>location-retention, citizen-profile-retention,<br/>emergency-expiration-job, incident-detection-job, keep-warm"]
     db[("Neon Postgres")]
-    kafkaC["Kafka (KafkaService: consumer + producer)"]
+    kafkaC["Kafka (KafkaService: consumer; el producer solo se usa en local)"]
+    gatewayC["Event gateway del Grupo 1 (HTTP)"]
 
     routes --> auth
     routes --> controllers
@@ -110,8 +113,9 @@ flowchart TB
     jobs --> domain
     jobs --> repositories
     jobs --> services
-    services --> kafkaC
-    kafkaC -->|"mensajes de Espacios"| listeners
+    services -->|"consumer (SASL/OAUTHBEARER)"| kafkaC
+    services -->|"GatewayPublisher: EmergenciaCreada / EmergenciaActualizada"| gatewayC
+    kafkaC -->|"mensajes de Espacios, Movilidad y Reclamos"| listeners
     listeners -->|"create / updateStatus en la transacción del OutcomeFactory"| repositories
 
     detectionJob --> incidentDomain
@@ -145,8 +149,8 @@ flowchart TB
 |---|---|
 | Línea sólida | Conexión activa hoy en el ambiente productivo |
 | Línea punteada | Deshabilitado, previsto o de respaldo (no es el camino feliz actual) |
-| `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) para consumir: los listeners de cobertura preventiva leen los eventos de Espacios. Los eventos propios salen por HTTP al gateway (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`), no por el producer de Kafka (ver `06-eventos.md`) |
-| `Login Federado` | En uso solo para el token client-credentials del bus (`EDA_OAUTH_*`, `src/services/eda-auth-client.js`) |
+| `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) para consumir: ocho listeners sobre un único consumer (`EventConsumer`) leen eventos de Espacios (`EventoComunitarioPublicado`, `EventoCancelado`, `ActividadCreada`, `ReservaCreada`), Movilidad (`EmergenciaSolicitada`, `EmergenciaBicicleta`) y Reclamos (`ReclamoCreado`, `ReclamoActualizado`). Los ocho figuran `running` en `GET /health` de producción (verificado el 16/11/2026). Los dos de alerta climática (`CriticidadClimaticaConfirmada` y `CriticidadClimaticaFinalizada`) son opt-in y figuran `disabled` hasta cargar `EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA` y `_FINALIZADA`. Los eventos propios salen por HTTP al gateway (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`), no por el producer de Kafka (ver `06-eventos.md`) |
+| `Login Federado` (token de servicio) | Token client-credentials del bus y del schema registry (`EDA_OAUTH_*`, `src/services/eda-auth-client.js`) |
 | `IdP Grupo 2` | En uso desde el 12/11/2026: producción corre `AUTH_MODE=hybrid`. Los tokens del personal se validan contra el JWKS del Login Federado y los de ciudadanos y atajos de demo contra la clave local, según el `iss` (ver `src/auth/setup.js` y `src/auth/hybrid-verifier.js`) |
 | Render free | El backend duerme sin tráfico; mientras duerme no consume. Al despertar, el consumer group sigue desde su último offset confirmado |
 | SonarCloud | Corre en los dos repos (secret `SONAR_TOKEN` cargado en backend y, desde el 21/09, en `Frontend`); sigue siendo `continue-on-error: true`, no bloquea el pipeline |
@@ -157,7 +161,7 @@ flowchart TB
 
 - `src/app.js` (montaje de rutas y middlewares), `src/index.js` (composition root, arranca `startIncidentDetectionJob`)
 - `src/routes/*.js` (incluido `incidents.routes.js`), `src/controllers/*.js` (incluido `incident.controller.js`), `src/domain/*.js` (incluidos `rule-based-grouper.js`, `dbscan-grouper.js`, `incident-detection-strategy.js`, `risk-engine.js`, `incident-detector.js`), `src/repositories/*.js` (incluido `incident.repository.js`), `src/services/*.js` (incluido `incident-detection-job.js`), `src/security/*.js`, `src/auth/*.js`, `scripts/demo-dbscan.js` (dataset sintético de demo)
-- `src/listeners/` (consumer y cobertura preventiva), `src/services/eda-auth-client.js`
+- `src/listeners/` (`event-consumer.js`, `cobertura-preventiva/`, `reclamo-intervencion/`, `movilidad-bicicleta/`), `src/services/eda-auth-client.js`, `src/services/gateway-publisher.js`
 - `render.yaml` (backend), `Frontend/render.yaml`, `Frontend/app/api/backend/[...path]/route.js`, `Frontend/app/api/geocode/route.js`, `Frontend/lib/geocode-server.js`
 - `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/workflows/keep-warm.yml`, `.github/workflows/activate-backup.yml` (backend) y sus equivalentes en `Frontend/.github/workflows/`
 - `sonar-project.properties` (backend y frontend)

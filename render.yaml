@@ -14,12 +14,12 @@ services:
     # dispara el deploy hook.
     autoDeployTrigger: "off"
     envVars:
-      # Producción NO corre con NODE_ENV=production: las respuestas no traen
-      # Strict-Transport-Security (verificado el 12/11/2026). El valor vive en
-      # el dashboard. Con production se prenden HSTS + redirect a HTTPS y CORS
-      # estricto, y AUTH_MODE=local pasa a exigir ALLOW_LOCAL_AUTH=true.
+      # Producción corre con NODE_ENV=production desde el 17/11/2026 (antes no
+      # mandaba Strict-Transport-Security). Prende HSTS + redirect a HTTPS
+      # (salvo /health), deja DEV_LOGIN_STRICT en true por default y, con
+      # AUTH_MODE=local, exige ALLOW_LOCAL_AUTH=true (hybrid no lo necesita).
       - key: NODE_ENV
-        sync: false
+        value: production
       # Nivel mínimo de los logs (debug, info, warn, error). Sin esta variable
       # vale el default del código: info, sin los mensajes de debug.
       # - key: LOG_LEVEL
@@ -114,6 +114,11 @@ services:
       # Pedido de asistencia en bicicleta: listener independiente y tópico propio.
       - key: EDA_TOPIC_EMERGENCIA_BICICLETA
         value: com.citypass.movilidad.EmergenciaBicicleta
+      # Alerta climática: opt-in, sin default. Para activarla, confirmar los
+      # nombres en el catálogo del gateway y cargar a mano
+      # EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA y _FINALIZADA (las dos).
+      # Radios por nivel: CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS (default
+      # 1000) y CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS (default 500).
       # Piso de consumo: un grupo sin offset lee desde el principio y saltea lo
       # anterior a esta fecha. Tiene que quedar cargada siempre.
       - key: EDA_CONSUMER_SINCE
@@ -164,8 +169,8 @@ services:
       - key: LOCATION_RETENTION_ENABLED
         value: "true"
 
-      # Obligatoria mientras NODE_ENV no sea production: sin ella, CORS cae a
-      # http://localhost:3001 y el frontend de Render queda bloqueado.
+      # Explícita aunque NODE_ENV=production ya caiga al frontend de Render si
+      # falta (con un warn): fuera de production el default es localhost:3001.
       - key: CORS_ALLOWED_ORIGINS
         value: https://frontend-krds.onrender.com
       # Rate limit por IP (ver README > Rate limiting). 'false' lo apaga.

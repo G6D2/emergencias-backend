@@ -90,6 +90,15 @@ describe('schemas de docs/contratos', () => {
 
   it('el builder real produce eventos válidos', () => {
     expect(contractErrors(sampleCreada())).toEqual([]);
+    // Alerta climática: PREVENTIVA sin ciudadano, con prioridadOriginal.
+    expect(contractErrors(json(buildEmergencyCreatedEvent({
+      ...SAMPLE_EMERGENCY,
+      userId: null,
+      emergencyType: 'PREVENTIVA',
+      severity: 'critical',
+      causaTipo: 'EVENTO_CLIMATICO',
+      causaId: 'a7f0e2c4-1b3d-4e5f-8a9b-0c1d2e3f4a5b',
+    }, randomUUID())))).toEqual([]);
     for (const [from, to] of Object.entries({
       PENDING: 'VALIDATED', VALIDATED: 'DISPATCHED', ON_SCENE: 'RESOLVED', RESOLVED: 'CLOSED',
     })) {

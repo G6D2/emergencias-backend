@@ -6,6 +6,12 @@ const ALLOWED_DEV_GROUPS = new Set(['citizen', 'dispatcher', 'officer']);
 /**
  * Sujetos demo permitidos cuando DEV_LOGIN_STRICT / production.
  * Claims fijos: el cliente no elige groups a mano.
+ *
+ * Solo ciudadanos: el endpoint es público y no pide contraseña, así que
+ * cualquiera que conozca un sub de esta lista obtiene su token. Dispatchers y
+ * oficiales entran por el Login Federado (issue #73 del board). Fuera del modo
+ * estricto (dev/test) se sigue pudiendo pedir dispatcher u officer con un sub
+ * libre.
  */
 const DEV_LOGIN_ALLOWLIST = Object.freeze({
   U000042: {
@@ -21,25 +27,6 @@ const DEV_LOGIN_ALLOWLIST = Object.freeze({
   'CIT-LuciaTranquila': {
     preferred_username: 'LuciaTranquila',
     groups: ['citizen'],
-    has_antipanic_button: false,
-  },
-  'DISP-Demo001': {
-    preferred_username: 'Dispatcher Demo',
-    groups: ['dispatcher'],
-    has_antipanic_button: false,
-  },
-  // Oficiales demo: el sub es el id del catálogo `officers` (V11), porque el
-  // permiso de avanzar estado compara sub === assigned_officer_id
-  // (canAdvanceEmergencyStatus). Dos oficiales permiten demostrar que uno no
-  // puede tocar la emergencia del otro.
-  'of-001': {
-    preferred_username: 'Oficial Carlos Gómez',
-    groups: ['officer'],
-    has_antipanic_button: false,
-  },
-  'of-002': {
-    preferred_username: 'Oficial Mariana López',
-    groups: ['officer'],
     has_antipanic_button: false,
   },
 });

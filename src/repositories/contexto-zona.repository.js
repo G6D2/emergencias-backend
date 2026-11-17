@@ -140,6 +140,55 @@ class ContextoZonaRepository {
     );
     return mapContextoZona(result.rows[0]);
   }
+
+  // Grupo de contextos de un mismo objeto externo con varios puntos (una
+  // alerta climática): cada punto es `<referenciaBase>#<n>` y la fila
+  // `<referenciaBase>` sola es la marca de baja del grupo, que deja ignorar
+  // un alta que llega después de la baja (igual que darDeBaja con un
+  // contexto suelto).
+
+  // Serializa alta y baja del mismo grupo dentro de la transacción del
+  // caller: los dos eventos vienen por tópicos distintos y pueden procesarse
+  // a la vez. El lock se suelta con el COMMIT/ROLLBACK.
+  async bloquearGrupo(executor, { tipo, origen, referenciaBase }) {
+    await executor.query(
+      'SELECT pg_advisory_xact_lock(hashtext($1))',
+      [`contexto_zona:${tipo}:${origen}:${referenciaBase}`]
+    );
+  }
+
+  async grupoDadoDeBaja(executor, { tipo, origen, referenciaBase }) {
+    const client = executor || this.pool;
+    const result = await client.query(
+      `SELECT 1 FROM contexto_zona
+       WHERE tipo = $1 AND origen = $2 AND referencia_externa = $3
+         AND dado_de_baja_en IS NOT NULL`,
+      [tipo, origen, referenciaBase]
+    );
+    return result.rowCount > 0;
+  }
+
+  // Baja lógica del grupo: deja la marca y da de baja los puntos que sigan
+  // en curso. Devuelve cuántos puntos dio de baja esta llamada.
+  async darDeBajaGrupo(executor, {
+    tipo, origen, referenciaBase, causationId = null, sourceUpdatedAt,
+  }) {
+    const client = executor || this.pool;
+    await this.darDeBaja(client, {
+      tipo, origen, referenciaExterna: referenciaBase, causationId, sourceUpdatedAt,
+    });
+    const result = await client.query(
+      `UPDATE contexto_zona
+         SET dado_de_baja_en = now(),
+             source_updated_at = GREATEST(source_updated_at, $4),
+             updated_at = now()
+       WHERE tipo = $1 AND origen = $2
+         AND left(referencia_externa, length($3) + 1) = $3 || '#'
+         AND dado_de_baja_en IS NULL`,
+      [tipo, origen, referenciaBase, sourceUpdatedAt]
+    );
+    return result.rowCount;
+  }
 }
 
 module.exports = { ContextoZonaRepository, mapContextoZona };

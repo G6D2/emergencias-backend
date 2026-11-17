@@ -1,151 +1,131 @@
-// Alerta climática de Espacios como contexto de zona (ADR "Elevar la prioridad
-// con contextos de zona por radio o por barrio"). La zona son los barrios de
-// la alerta. Mientras está vigente, sube un nivel la prioridad de despacho de
-// las emergencias abiertas de esos barrios, solo para los tipos que el
-// fenómeno afecta y solo si la gravedad llega al umbral.
+// Alerta climática de Espacios (issues #80 y #88 del board; ADR "Responder a
+// las alertas climáticas de Espacios").
 //
-// Puro, sin I/O: lo usan las reglas de listeners/alerta-climatica/.
-
-const { parseInstante } = require('./contexto-zona');
-
-// De menor a mayor: el orden se usa para comparar contra el umbral.
-const GRAVEDADES = Object.freeze(['LEVE', 'MEDIA', 'ALTA', 'EXTREMA']);
-const GRAVEDAD_MINIMA_DEFAULT = 'ALTA';
-
-// Qué tipos de emergencia eleva cada fenómeno. Un tipo sube solo si el
-// fenómeno aumenta el riesgo de ese tipo de emergencia o el daño que causa.
-// "Todo se demora con lluvia" afecta a todos por igual y no reordena la cola.
+// Espacios consulta Open-Meteo, un administrador confirma la criticidad y
+// publica `CriticidadClimaticaConfirmada`; al vencer o cerrarse a mano publica
+// `CriticidadClimaticaFinalizada` con el mismo `alertaId`. El payload
+// confirmado trae `alertaId`, `nivelCriticidad`, `fenomeno`,
+// `ubicaciones: [{ latitud, longitud }]`, `barrios`, `vigenciaDesde` y
+// `vigenciaHasta` (epoch ms). Una alerta confirmada no cambia de cobertura:
+// si cambia, Espacios genera otra alerta.
 //
-// Nunca se elevan por clima: DISTURBIO_EVENTO_MASIVO (el clima no lo agrava),
-// OTRO (no sabemos qué es), PANICO (ya nace critical) y PREVENTIVA (es
-// cobertura, no un llamado).
-//
-// Solo los 9 fenómenos del catálogo de Espacios (guía "CityPass Eventos
-// climáticos", 13/11/2026). Espacios define el catálogo; qué tipos sube cada
-// uno lo decide Emergencias. Sumar un fenómeno es sumar una entrada.
-const TIPOS_POR_FENOMENO = Object.freeze({
-  TORMENTA_FUERTE: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']), // lluvia y viento, sin rayos
-  LLUVIA_INTENSA: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']), // anegamientos, calzada resbaladiza
-  VIENTO_FUERTE: Object.freeze(['INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']), // propaga el fuego, árboles caídos
-  OLA_DE_CALOR: Object.freeze(['MEDICA', 'INCENDIO', 'INFRAESTRUCTURA']), // golpes de calor, cortes de luz
-  OLA_DE_FRIO: Object.freeze(['MEDICA']), // hipotermia
-  GRANIZO: Object.freeze(['INFRAESTRUCTURA', 'TRANSITO']), // techos, vehículos, visibilidad
-  TORMENTA_ELECTRICA: Object.freeze(['INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']), // rayos, cables caídos
-  HURACAN: Object.freeze(['MEDICA', 'INCENDIO', 'INFRAESTRUCTURA', 'TRANSITO']), // heridos, estructuras, vías
-  NIEVE: Object.freeze(['MEDICA', 'INFRAESTRUCTURA', 'TRANSITO']), // hipotermia, estructuras, calzada
+// Política por nivel (punto 2 del ADR). Solo ALTA y CRITICA son accionables,
+// igual que en Espacios:
+// - un contexto de zona ALERTA_CLIMATICA por cada punto de `ubicaciones`,
+//   con el radio del nivel (CRITICA 1000 m, ALTA 500 m, configurables);
+// - una emergencia PREVENTIVA por `alertaId` (causaTipo EVENTO_CLIMATICO),
+//   con la severidad del nivel.
+// BAJA y MEDIA no generan nada.
+
+const { CONTEXTO_TIPO, ORIGEN_ESPACIOS, puntoDelEvento } = require('./contexto-zona');
+
+const CAUSA_TIPO_CLIMA = 'EVENTO_CLIMATICO';
+
+const NIVELES = Object.freeze(['BAJA', 'MEDIA', 'ALTA', 'CRITICA']);
+
+// Severidad de la PREVENTIVA y radio de cada contexto, por nivel accionable.
+// Cada contexto guarda el radio con el que se registró: un cambio de la
+// variable vale para las alertas que se confirmen después.
+const POLITICA_POR_NIVEL = Object.freeze({
+  ALTA: Object.freeze({
+    severity: 'high',
+    radioDefaultMetros: 500,
+    radioEnv: 'CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS',
+  }),
+  CRITICA: Object.freeze({
+    severity: 'critical',
+    radioDefaultMetros: 1000,
+    radioEnv: 'CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS',
+  }),
 });
 
-// Un fenómeno fuera del catálogo no sube nada: el contexto se registra (sale
-// en el banner) y la regla deja un warn en el log.
-const TIPOS_FENOMENO_DESCONOCIDO = Object.freeze([]);
-
-const MARGEN_HORAS_DEFAULT = 3;
-const TOPE_HORAS_DEFAULT = 24;
-const MS_POR_HORA = 60 * 60 * 1000;
-
-function normalizarCodigo(valor) {
-  return typeof valor === 'string' && valor.trim() ? valor.trim().toUpperCase() : null;
-}
-
-/** Gravedad canónica (LEVE, MEDIA, ALTA, EXTREMA) o null si no es ninguna. */
-function normalizarGravedad(valor) {
-  const gravedad = normalizarCodigo(valor);
-  return GRAVEDADES.includes(gravedad) ? gravedad : null;
-}
-
-// Criticidad de Espacios (nivelCriticidad, contrato real) → gravedad
-// canónica. El umbral (ALTA) no cambia: suben ALTA y CRITICA.
-const CRITICIDAD_A_GRAVEDAD = Object.freeze({
-  BAJA: 'LEVE',
-  MEDIA: 'MEDIA',
-  ALTA: 'ALTA',
-  CRITICA: 'EXTREMA',
+const RADIO_CLIMA_DEFAULT_METROS = Object.freeze({
+  ALTA: POLITICA_POR_NIVEL.ALTA.radioDefaultMetros,
+  CRITICA: POLITICA_POR_NIVEL.CRITICA.radioDefaultMetros,
 });
 
-/**
- * Gravedad canónica del evento: `gravedad` (formato del ejemplo) o
- * `nivelCriticidad` (contrato real de Espacios). Si vienen los dos, gana
- * `gravedad`. null si ninguno es válido.
- */
-function gravedadDesdeEvento(data = {}) {
-  return normalizarGravedad(data.gravedad)
-    || CRITICIDAD_A_GRAVEDAD[normalizarCodigo(data.nivelCriticidad)]
-    || null;
+function politicaDelNivel(nivel) {
+  return typeof nivel === 'string' && Object.hasOwn(POLITICA_POR_NIVEL, nivel) ? POLITICA_POR_NIVEL[nivel] : null;
 }
 
-/** Fenómeno en mayúsculas sin espacios alrededor, o null. No valida el catálogo. */
-function normalizarFenomeno(valor) {
-  return normalizarCodigo(valor);
+// ALTA y CRITICA (ya normalizados). BAJA, MEDIA o cualquier otro valor, no.
+function esNivelAccionable(nivel) {
+  return politicaDelNivel(nivel) !== null;
 }
 
-function esFenomenoConocido(fenomeno) {
-  const codigo = normalizarFenomeno(fenomeno);
-  return codigo !== null && Object.prototype.hasOwnProperty.call(TIPOS_POR_FENOMENO, codigo);
+function severityDelNivel(nivel) {
+  const politica = politicaDelNivel(nivel);
+  return politica ? politica.severity : null;
 }
 
-// Umbral configurable con CONTEXTO_CLIMA_GRAVEDAD_MINIMA. Un valor inválido
-// usa el default.
-function gravedadMinima(env = process.env) {
-  return normalizarGravedad(env.CONTEXTO_CLIMA_GRAVEDAD_MINIMA) || GRAVEDAD_MINIMA_DEFAULT;
+// Radio en metros de los contextos de un nivel accionable, o null para el
+// resto. Un valor de entorno inválido (no numérico o <= 0) deja el default.
+function radioClimaMetros(nivel, env = process.env) {
+  const politica = politicaDelNivel(nivel);
+  if (!politica) return null;
+  const metros = Number(env[politica.radioEnv]);
+  return Number.isFinite(metros) && metros > 0 ? Math.round(metros) : politica.radioDefaultMetros;
 }
 
-/**
- * Tipos de emergencia que eleva la alerta. Una gravedad por debajo del umbral,
- * nula o desconocida devuelve []: el contexto existe y se avisa en el banner,
- * pero no sube nada.
- * @returns {string[]}
- */
-function tiposAfectados({ fenomeno, gravedad, env = process.env } = {}) {
-  const canonica = normalizarGravedad(gravedad);
-  if (!canonica || GRAVEDADES.indexOf(canonica) < GRAVEDADES.indexOf(gravedadMinima(env))) {
-    return [];
-  }
-  const tipos = esFenomenoConocido(fenomeno)
-    ? TIPOS_POR_FENOMENO[normalizarFenomeno(fenomeno)]
-    : TIPOS_FENOMENO_DESCONOCIDO;
-  return [...tipos];
+// Nivel en mayúsculas sin tilde (CRÍTICA → CRITICA), o null si no es del catálogo.
+function nivelNormalizado(nivel) {
+  if (typeof nivel !== 'string') return null;
+  const limpio = nivel.trim().toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return NIVELES.includes(limpio) ? limpio : null;
 }
 
-function horas(env, nombre, porDefecto) {
-  const valor = Number(env[nombre]);
-  return Number.isFinite(valor) && valor > 0 ? valor : porDefecto;
+function alertaIdValido(alertaId) {
+  return typeof alertaId === 'string' && alertaId.trim().length > 0 && alertaId === alertaId.trim();
 }
 
-/**
- * Ventana de vigencia de la alerta. Lo normal es que termine antes, con el
- * evento de finalización: el fin calculado acá es un tope de seguridad, por
- * si ese evento no llega (todo contexto nace con vencimiento).
- *
- * - vigenteDesde: fechaInicio, o `ahora` si no viene o es inválida.
- * - vigenteHasta: fechaFinEstimada + CONTEXTO_CLIMA_MARGEN_HORAS (3). Si no
- *   viene, es inválida o no es posterior al inicio: vigenteDesde +
- *   CONTEXTO_CLIMA_TOPE_HORAS (24).
- * @returns {{ vigenteDesde: Date, vigenteHasta: Date }}
- */
-function ventanaAlertaClimatica({
-  fechaInicio, fechaFinEstimada, ahora = new Date(), env = process.env,
-} = {}) {
-  const vigenteDesde = parseInstante(fechaInicio) || ahora;
-  const finEstimado = parseInstante(fechaFinEstimada);
-  const vigenteHasta = finEstimado && finEstimado.getTime() > vigenteDesde.getTime()
-    ? new Date(finEstimado.getTime() + horas(env, 'CONTEXTO_CLIMA_MARGEN_HORAS', MARGEN_HORAS_DEFAULT) * MS_POR_HORA)
-    : new Date(vigenteDesde.getTime() + horas(env, 'CONTEXTO_CLIMA_TOPE_HORAS', TOPE_HORAS_DEFAULT) * MS_POR_HORA);
-  return { vigenteDesde, vigenteHasta };
+// TORMENTA_FUERTE → "tormenta fuerte", para las descripciones.
+function fenomenoLegible(fenomeno) {
+  return typeof fenomeno === 'string' && fenomeno.trim()
+    ? fenomeno.trim().replaceAll('_', ' ').toLowerCase()
+    : 'evento climático';
+}
+
+// Puntos con coordenadas numéricas y en rango, en el orden en que llegaron.
+// Un punto inválido se descarta sin correr el índice de los demás: el índice
+// es parte de la referencia del contexto y tiene que ser estable entre
+// reentregas del mismo evento.
+function ubicacionesDeLaAlerta(data = {}) {
+  const ubicaciones = Array.isArray(data.ubicaciones) ? data.ubicaciones : [];
+  return ubicaciones
+    .map((ubicacion, indice) => ({ indice, punto: puntoDelEvento(ubicacion || {}) }))
+    .filter(({ punto }) => punto !== null);
+}
+
+// Un contexto por punto: la referencia es `<alertaId>#<índice>`. La alerta en
+// sí (`<alertaId>` solo) es la marca de baja del grupo.
+function referenciaDeUbicacion(alertaId, indice) {
+  return `${alertaId}#${indice}`;
+}
+
+// Grupo de contextos de la alerta: lo usan el advisory lock que serializa
+// confirmación y finalización, y la marca de baja.
+function grupoDeLaAlerta(alertaId, origen = ORIGEN_ESPACIOS) {
+  return { tipo: CONTEXTO_TIPO.ALERTA_CLIMATICA, origen, referenciaBase: alertaId };
+}
+
+function barriosDeLaAlerta(data = {}) {
+  return Array.isArray(data.barrios)
+    ? data.barrios.filter((b) => typeof b === 'string' && b.trim()).map((b) => b.trim())
+    : [];
 }
 
 module.exports = {
-  GRAVEDADES,
-  GRAVEDAD_MINIMA_DEFAULT,
-  TIPOS_POR_FENOMENO,
-  TIPOS_FENOMENO_DESCONOCIDO,
-  MARGEN_HORAS_DEFAULT,
-  TOPE_HORAS_DEFAULT,
-  CRITICIDAD_A_GRAVEDAD,
-  normalizarGravedad,
-  gravedadDesdeEvento,
-  normalizarFenomeno,
-  esFenomenoConocido,
-  gravedadMinima,
-  tiposAfectados,
-  ventanaAlertaClimatica,
+  CAUSA_TIPO_CLIMA,
+  NIVELES,
+  RADIO_CLIMA_DEFAULT_METROS,
+  esNivelAccionable,
+  severityDelNivel,
+  radioClimaMetros,
+  nivelNormalizado,
+  alertaIdValido,
+  fenomenoLegible,
+  ubicacionesDeLaAlerta,
+  referenciaDeUbicacion,
+  grupoDeLaAlerta,
+  barriosDeLaAlerta,
 };

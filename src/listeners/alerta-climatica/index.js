@@ -1,12 +1,10 @@
-const { AlertaClimaticaConfirmadaListener } = require('./alerta-climatica-confirmada/alerta-climatica-confirmada.listener');
-const { AlertaClimaticaFinalizadaListener } = require('./alerta-climatica-finalizada/alerta-climatica-finalizada.listener');
+const { CriticidadClimaticaConfirmadaListener } = require('./criticidad-climatica-confirmada/criticidad-climatica-confirmada.listener');
+const { CriticidadClimaticaFinalizadaListener } = require('./criticidad-climatica-finalizada/criticidad-climatica-finalizada.listener');
 
-// Alerta climática: Espacios Públicos confirma una alerta por barrios y
-// Emergencias sube la prioridad de despacho de las emergencias abiertas de
-// esos barrios, para los tipos que afecta el fenómeno, hasta que la alerta se
-// finaliza o vence.
+// Alerta climática: Espacios Públicos confirma o finaliza la criticidad
+// climática de una zona (issues #80 y #88 del board).
 module.exports = {
-  AlertaClimaticaConfirmadaListener,
-  AlertaClimaticaFinalizadaListener,
-  listeners: [AlertaClimaticaConfirmadaListener, AlertaClimaticaFinalizadaListener],
+  CriticidadClimaticaConfirmadaListener,
+  CriticidadClimaticaFinalizadaListener,
+  listeners: [CriticidadClimaticaConfirmadaListener, CriticidadClimaticaFinalizadaListener],
 };
