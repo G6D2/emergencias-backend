@@ -34,6 +34,18 @@ const {
   createRegistrarContextoZonaHandler,
   createDarDeBajaContextoZonaHandler,
 } = require('./listeners/cobertura-preventiva/handlers/contexto-zona.handler');
+const {
+  CREAR_EMERGENCIA_CLIMATICA,
+  CANCELAR_EMERGENCIA_CLIMATICA,
+  createCrearEmergenciaClimaticaHandler,
+  createCancelarEmergenciaClimaticaHandler,
+} = require('./listeners/alerta-climatica/handlers/emergencia-climatica.handler');
+const {
+  REGISTRAR_CONTEXTOS_CLIMATICOS,
+  DAR_DE_BAJA_CONTEXTOS_CLIMATICOS,
+  createRegistrarContextosClimaticosHandler,
+  createDarDeBajaContextosClimaticosHandler,
+} = require('./listeners/alerta-climatica/handlers/contextos-climaticos.handler');
 const { ContextoZonaRepository } = require('./repositories/contexto-zona.repository');
 const { gracefulShutdown, closeServer } = require('./utils/graceful-shutdown');
 const { installProcessSafetyNet } = require('./utils/process-safety-net');
@@ -107,6 +119,26 @@ async function start() {
   const contextoZonaRepository = new ContextoZonaRepository(pool);
   outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
+  // Alerta climática de Espacios (#80 y #88, ADR "Responder a las alertas
+  // climáticas de Espacios"): con nivel ALTA o CRITICA, contextos por punto
+  // con el radio del nivel y una emergencia PREVENTIVA por alerta. Los
+  // listeners son opt-in (EDA_TOPIC_CRITICIDAD_CLIMATICA_*).
+  outcomeFactory.register(
+    CREAR_EMERGENCIA_CLIMATICA,
+    createCrearEmergenciaClimaticaHandler({ emergencyRepository, contextoZonaRepository })
+  );
+  outcomeFactory.register(
+    CANCELAR_EMERGENCIA_CLIMATICA,
+    createCancelarEmergenciaClimaticaHandler({ emergencyRepository, contextoZonaRepository })
+  );
+  outcomeFactory.register(
+    REGISTRAR_CONTEXTOS_CLIMATICOS,
+    createRegistrarContextosClimaticosHandler({ contextoZonaRepository })
+  );
+  outcomeFactory.register(
+    DAR_DE_BAJA_CONTEXTOS_CLIMATICOS,
+    createDarDeBajaContextosClimaticosHandler({ contextoZonaRepository })
+  );
 
   const listeners = process.env.KAFKA_CONSUMER_ENABLED === 'true'
     ? createListeners(kafkaService.kafka, {

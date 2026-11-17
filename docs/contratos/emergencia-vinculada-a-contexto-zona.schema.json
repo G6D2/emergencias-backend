@@ -49,7 +49,7 @@
           "minLength": 1
         },
         "referenciaExterna": {
-          "description": "Id del objeto en el módulo de origen: el eventoId de Espacios. Es la clave para agrupar por evento.",
+          "description": "Id del objeto en el módulo de origen: el eventoId de Espacios (EVENTO_ESPACIO_PUBLICO) o <alertaId>#<índice del punto> (ALERTA_CLIMATICA). Es la clave para agrupar por evento o alerta.",
           "type": "string",
           "minLength": 1
         },

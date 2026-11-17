@@ -46,7 +46,7 @@ flowchart TB
     ciudadano -->|HTTPS| bff
     bff -->|"Bearer JWT (cookie httpOnly server-side) + retry 502/503/504"| api
     api -->|"pg pool, DB_POOL_MAX"| neon
-    kafka -->|"consume 8 tipos de evento:<br/>Espacios (EventoComunitarioPublicado, EventoCancelado, ActividadCreada, ReservaCreada),<br/>Movilidad (EmergenciaSolicitada, EmergenciaBicicleta),<br/>Reclamos (ReclamoCreado, ReclamoActualizado)"| api
+    kafka -->|"consume 8 tipos de evento:<br/>Espacios (EventoComunitarioPublicado, EventoCancelado, ActividadCreada, ReservaCreada),<br/>Movilidad (EmergenciaSolicitada, EmergenciaBicicleta),<br/>Reclamos (ReclamoCreado, ReclamoActualizado)<br/>+ alerta climática de Espacios (opt-in)"| api
     api -->|"decodifica Avro (Bearer)"| registry
     api -->|"client-credentials"| login
     api -->|"outbox -> GatewayPublisher (EDA_PUBLISHER_MODE=gateway):<br/>EmergenciaCreada, EmergenciaActualizada"| gateway
@@ -149,7 +149,7 @@ flowchart TB
 |---|---|
 | Línea sólida | Conexión activa hoy en el ambiente productivo |
 | Línea punteada | Deshabilitado, previsto o de respaldo (no es el camino feliz actual) |
-| `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) para consumir: ocho listeners sobre un único consumer (`EventConsumer`) leen eventos de Espacios (`EventoComunitarioPublicado`, `EventoCancelado`, `ActividadCreada`, `ReservaCreada`), Movilidad (`EmergenciaSolicitada`, `EmergenciaBicicleta`) y Reclamos (`ReclamoCreado`, `ReclamoActualizado`). Los ocho figuran `running` en `GET /health` de producción (verificado el 16/11/2026). Los eventos propios salen por HTTP al gateway (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`), no por el producer de Kafka (ver `06-eventos.md`) |
+| `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) para consumir: ocho listeners sobre un único consumer (`EventConsumer`) leen eventos de Espacios (`EventoComunitarioPublicado`, `EventoCancelado`, `ActividadCreada`, `ReservaCreada`), Movilidad (`EmergenciaSolicitada`, `EmergenciaBicicleta`) y Reclamos (`ReclamoCreado`, `ReclamoActualizado`). Los ocho figuran `running` en `GET /health` de producción (verificado el 16/11/2026). Los dos de alerta climática (`CriticidadClimaticaConfirmada` y `CriticidadClimaticaFinalizada`) son opt-in y figuran `disabled` hasta cargar `EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA` y `_FINALIZADA`. Los eventos propios salen por HTTP al gateway (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`), no por el producer de Kafka (ver `06-eventos.md`) |
 | `Login Federado` (token de servicio) | Token client-credentials del bus y del schema registry (`EDA_OAUTH_*`, `src/services/eda-auth-client.js`) |
 | `IdP Grupo 2` | En uso desde el 12/11/2026: producción corre `AUTH_MODE=hybrid`. Los tokens del personal se validan contra el JWKS del Login Federado y los de ciudadanos y atajos de demo contra la clave local, según el `iss` (ver `src/auth/setup.js` y `src/auth/hybrid-verifier.js`) |
 | Render free | El backend duerme sin tráfico; mientras duerme no consume. Al despertar, el consumer group sigue desde su último offset confirmado |
