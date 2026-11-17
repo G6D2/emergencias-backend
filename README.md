@@ -157,7 +157,7 @@ Cuentas demo seed (V16, password `abracadabra`): `juanpanico@gmail.com` (antipá
 
 ### Producción (Render)
 
-Producción corre con `AUTH_MODE=hybrid` desde el 12/11/2026 (antes `local`) y `DEV_LOGIN_STRICT=true`: el personal entra por el Login Federado del Grupo 2 y los ciudadanos y los atajos de demo siguen con cuenta local (ver [Login Federado + cuentas locales](#login-federado--cuentas-locales-auth_modehybrid)). **No** corre con `NODE_ENV=production`: las respuestas no traen `Strict-Transport-Security` (verificado el 12/11/2026). La configuración está en [`render.yaml`](render.yaml).
+Producción corre con `AUTH_MODE=hybrid` desde el 12/11/2026 (antes `local`) y `DEV_LOGIN_STRICT=true`: el personal entra por el Login Federado del Grupo 2 y los ciudadanos y los atajos de demo siguen con cuenta local (ver [Login Federado + cuentas locales](#login-federado--cuentas-locales-auth_modehybrid)). Desde el 17/11/2026 corre además con `NODE_ENV=production`: manda `Strict-Transport-Security` y redirige a HTTPS todo menos `/health` (ver [HTTPS / headers](#https--headers)); antes no mandaba HSTS. La configuración está en [`render.yaml`](render.yaml).
 
 Una sesión local dura lo que el token: `LOCAL_TOKEN_TTL_SECONDS`, 900 s por default. A los 15 minutos el front vuelve a la pantalla de acceso; las sesiones del Login Federado se renuevan solas con su refresh token.
 
@@ -404,7 +404,7 @@ No se loguean JWT ni coordenadas. Los eventos se loguean solo como resumen (`top
 Un token rechazado responde siempre `401 Invalid or expired token`, sin contarle la causa al cliente. La causa queda en un `warn` `Token rechazado` con quién lo rechazó (`verifier`: `local`, `federated`, `idp`, `hybrid` o `authenticate`) y el `code` y `name` del error, sin el token ni sus claims. `ERR_JWT_EXPIRED` es un token vencido. Con `verifier: "federated"`, un `ERR_JWKS_TIMEOUT`, un `ERR_JOSE_GENERIC` o un código de red (`ECONNREFUSED`, `ENOTFOUND`) dicen que no se pudo leer el JWKS del Login Federado: el problema es del proveedor de identidad, no de los tokens.
 
 ### HTTPS / headers
-Siempre: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, etc. Con `NODE_ENV=production` o `FORCE_HTTPS=true`, además HSTS + redirect a HTTPS (vía `X-Forwarded-Proto`, típico en Render). Producción hoy no tiene ninguna de las dos, así que no manda HSTS.
+Siempre: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, etc. Con `NODE_ENV=production` o `FORCE_HTTPS=true`, además HSTS (`max-age=31536000; includeSubDomains`) + redirect 301 a HTTPS (vía `X-Forwarded-Proto`, típico en Render). `/health` queda afuera del redirect para que respondan los probes internos; el header HSTS sale igual. Producción corre con `NODE_ENV=production` desde el 17/11/2026, así que manda HSTS y redirige.
 
 ### Auditoría de lectura
 Los dos endpoints de detalle dejan registro, `GET /api/emergencies/:id` y `GET /api/panic-button/:id`: después de autorizar la lectura, insertan una fila en `emergency_access_audit` (`emergency_id`, `actor_sub`, `action = 'emergency:read'`, `created_at`). Si ese insert falla, la lectura responde igual y el error queda en el log.
