@@ -14,7 +14,9 @@ function loadRules(dir) {
   return fs
     .readdirSync(dir)
     .filter((file) => file.endsWith(RULE_SUFFIX))
-    .sort()
+    // Orden por código de carácter, el mismo que daba sort() sin comparador:
+    // con nombres 01-, 02-... no depende del locale (Sonar S2871).
+    .sort((a, b) => (a < b ? -1 : Number(a > b)))
     .map((file) => {
       const exported = require(path.join(dir, file));
       const candidates = typeof exported === 'function' ? [exported] : Object.values(exported);
