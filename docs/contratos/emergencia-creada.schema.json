@@ -95,7 +95,7 @@
         },
         "causaTipo": {
           "description": "null si causaId es null.",
-          "enum": ["EVENTO_CLIMATICO", "RECLAMO", "INCIDENTE_VIAL", "EVENTO_PUBLICO", "RESERVA", null]
+          "enum": ["EVENTO_CLIMATICO", "RECLAMO", "INCIDENTE_VIAL", "EVENTO_PUBLICO", "RESERVA", "MOVILIDAD_BICICLETA", null]
         },
         "prioridadOriginal": {
           "description": "La prioridad sin el clima. Obligatoria si causaTipo = EVENTO_CLIMATICO; si no, null.",
