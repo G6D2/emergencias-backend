@@ -12,7 +12,15 @@ const { detectGroups } = require('./incident-detection-strategy');
 const RULE_BASED_ALGORITHM_VERSION = 'rule-based-v1';
 const DBSCAN_ALGORITHM_VERSION = 'dbscan-v1';
 
-function pairwiseDistances(members) {
+function hasLocation(member) {
+  return Number.isFinite(member.latitude) && Number.isFinite(member.longitude);
+}
+
+// Un miembro sin ubicación (fila legacy o anonimizada) cuenta como reporte,
+// pero no entra en las distancias: Haversine lo tomaría como si estuviera en
+// (0, 0) y la cercanía del incidente se iría a cero.
+function pairwiseDistances(allMembers) {
+  const members = allMembers.filter(hasLocation);
   if (members.length < 2) {
     return { minDistanceMeters: 0, maxDistanceMeters: 0 };
   }
@@ -27,6 +35,29 @@ function pairwiseDistances(members) {
     }
   }
   return { minDistanceMeters, maxDistanceMeters };
+}
+
+// Suma al grupo de DBSCAN los demás miembros activos del incidente: los que
+// ya salieron de la ventana (o que esta pasada no cayeron en el grupo). Sin
+// repetir: si un miembro viene en los dos lados, queda el del grupo.
+function withActiveIncidentMembers(groupMembers, activeIncidentMembers) {
+  const byEmergencyId = new Map(groupMembers.map((member) => [member.emergencyId, member]));
+  for (const member of activeIncidentMembers) {
+    if (!byEmergencyId.has(member.emergencyId)) {
+      byEmergencyId.set(member.emergencyId, member);
+    }
+  }
+  return [...byEmergencyId.values()];
+}
+
+function indexByIncidentId(incidentMembers) {
+  const byIncidentId = new Map();
+  for (const member of incidentMembers) {
+    const list = byIncidentId.get(member.incidentId) || [];
+    list.push({ ...member, emergencyId: member.id });
+    byIncidentId.set(member.incidentId, list);
+  }
+  return byIncidentId;
 }
 
 function newestCreatedAtMinutesAgo(members) {
@@ -48,11 +79,26 @@ function maxSeverityOf(members) {
  * Agrupa candidatos de un mismo emergencyType y calcula, por grupo válido,
  * una decisión de scoring lista para persistir. No toca la base de datos.
  *
+ * La ventana (los candidatos) decide la membresía: qué reportes forman un
+ * grupo nuevo y cuáles se suman a un incidente. El score de un incidente que
+ * ya existe se calcula con todos sus miembros activos (`incidentMembers`),
+ * también los que ya salieron de la ventana: que un reporte cumpla
+ * INCIDENT_WINDOW_MIN no le baja el score ni la prioridad. Uno que pasa a un
+ * estado terminal sí deja de contar (no viene ni en los candidatos ni en
+ * `incidentMembers`).
+ *
  * @param {Array<{ id: string, correlationId: string, userId: string, latitude: number, longitude: number, createdAt: string|Date, severity: string, incidentId: string|null }>} candidates
- * @param {{ radiusMeters: number, minUniqueCitizens: number, emergencyType: string }} options
+ * @param {{ radiusMeters: number, minUniqueCitizens: number, emergencyType: string, incidentMembers?: Array<object> }} options
+ *   `incidentMembers`: miembros activos de los incidentes ya vinculados a
+ *   algún candidato, con el mismo formato que los candidatos.
  * @returns {Promise<Array<object>>} decisiones, una por grupo detectado
  */
-async function processEmergencyTypeCandidates(candidates, { radiusMeters, minUniqueCitizens, emergencyType }) {
+async function processEmergencyTypeCandidates(candidates, {
+  radiusMeters,
+  minUniqueCitizens,
+  emergencyType,
+  incidentMembers = [],
+}) {
   // groupNearbyEmergencies identifica cada candidato por emergencyId; los
   // candidatos de findRecentByType usan id (ver discrepancia resuelta con Mati).
   const withEmergencyId = candidates.map((candidate) => ({ ...candidate, emergencyId: candidate.id }));
@@ -71,14 +117,15 @@ async function processEmergencyTypeCandidates(candidates, { radiusMeters, minUni
   );
   const algorithmVersion = strategy === 'fallback' ? RULE_BASED_ALGORITHM_VERSION : DBSCAN_ALGORITHM_VERSION;
   const candidatesByEmergencyId = new Map(withEmergencyId.map((c) => [c.emergencyId, c]));
+  const activeMembersByIncidentId = indexByIncidentId(incidentMembers);
 
   const decisions = [];
 
   for (const emergencyIds of groups) {
-    const members = emergencyIds.map((emergencyId) => candidatesByEmergencyId.get(emergencyId));
+    const groupMembers = emergencyIds.map((emergencyId) => candidatesByEmergencyId.get(emergencyId));
 
     const existingIncidentIds = new Set(
-      members.map((member) => member.incidentId).filter((incidentId) => incidentId != null)
+      groupMembers.map((member) => member.incidentId).filter((incidentId) => incidentId != null)
     );
 
     if (existingIncidentIds.size > 1) {
@@ -98,6 +145,12 @@ async function processEmergencyTypeCandidates(candidates, { radiusMeters, minUni
     }
 
     const incidentId = existingIncidentIds.size === 1 ? [...existingIncidentIds][0] : null;
+    // Incidente existente: se puntúa con todos sus miembros activos, no solo
+    // con los que siguen en la ventana. Así también reciben la
+    // EmergenciaPriorizada si la prioridad cambia.
+    const members = incidentId == null
+      ? groupMembers
+      : withActiveIncidentMembers(groupMembers, activeMembersByIncidentId.get(incidentId) || []);
 
     const { minDistanceMeters, maxDistanceMeters } = pairwiseDistances(members);
     const factors = {

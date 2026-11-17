@@ -44,6 +44,9 @@ Tres detalles que cambian cómo leer los resultados:
 - **La ventana no limita la duración de un incidente.** Si un reporte nuevo cae cerca de un miembro
   de un incidente que todavía está dentro de la ventana, se suma a ese incidente. Lo que no se suma
   es un reporte cuyos vecinos ya salieron de la ventana.
+- **La ventana tampoco recorta el score.** Decide quién entra a un incidente, pero el Risk Engine
+  puntúa un incidente existente con todos sus miembros activos, también los que ya salieron de la
+  ventana (ver [el hallazgo corregido](#hallazgo-corregido-el-score-de-un-incidente-bajaba-cuando-sus-primeros-reportes-salían-de-la-ventana)).
 - **En producción rigen los defaults.** `render.yaml` no fija ninguna de estas variables, así que
   salvo que alguien las haya cargado a mano en el dashboard de Render, producción usa los valores de
   la tabla.
@@ -91,8 +94,9 @@ Cada escenario se corre sobre 20 réplicas (semillas 1711 a 1730) y se promedia.
 El script no copia el algoritmo. Corre el job real (`detectIncidents`, que llama a
 `processEmergencyTypeCandidates` → `detectGroups` → `DbscanGrouper`) una vez por minuto sobre un
 reloj simulado, contra repositorios en memoria que imitan lo que el job usa de los reales:
-`findRecentByType` (ventana, tipo y miembros ya vinculados) y `create`/`addMember`/
-`applyScoringDecision`. Así, la ventana, el prefiltro por tipo, el filtro de ciudadanos únicos y la
+`findRecentByType` (ventana, tipo y miembros ya vinculados), `findActiveByIncidentIds` (todos los
+miembros de cada incidente, para el score) y `create`/`addMember`/`applyScoringDecision`. Así, la
+ventana, el prefiltro por tipo, el filtro de ciudadanos únicos y la
 vinculación incremental a incidentes ya existentes funcionan como en el backend. En las
 64 × 3 × 20 simulaciones, todos los incidentes quedaron con `algorithmVersion` = `dbscan-v1`: el
 fallback no se activó nunca.
@@ -246,27 +250,65 @@ confirmados por despachadores tiene reportes a menos de ~200 m entre sí, convie
 `INCIDENT_RADIUS_M` a 250 en Render: en el escenario de GPS razonable baja las fusiones sin perder
 hechos. `minPts` = 3 no se recomienda mientras haya hechos con solo dos testigos.
 
-## Hallazgo: el score de un incidente baja cuando sus primeros reportes salen de la ventana
+## Hallazgo (corregido): el score de un incidente bajaba cuando sus primeros reportes salían de la ventana
 
-El job vuelve a puntuar cada incidente en cada pasada, pero solo con los miembros que siguen
-dentro de la ventana. Cuando el primer reporte cumple 15 minutos, el incidente se recalcula con
-menos reportes y su prioridad puede bajar. Ejemplo simulado con el job real: tres reportes de
-`DISTURBIO_EVENTO_MASIVO` (severidad media) en un minuto, a menos de 71 m entre sí.
+> **Corregido en [#134](https://github.com/G6D2/emergencias-backend/pull/134).** Lo que sigue
+> describe el problema y cómo quedó.
 
-| Minutos desde el primer reporte | Reportes que ve el job | Score | Prioridad del incidente |
-|---:|---:|---:|---|
-| 1,5 | 3 | 70 | Alta |
-| 14,5 | 3 | 57 | Alta |
-| 15,5 | 2 | 43 | Media |
+El job volvía a puntuar cada incidente en cada pasada, pero solo con los miembros que seguían
+dentro de la ventana (`processEmergencyTypeCandidates` armaba los factores con el grupo que DBSCAN
+encontraba entre los candidatos de `findRecentByType`). Cuando el primer reporte cumplía 15
+minutos, el incidente se recalculaba con menos reportes y su prioridad podía bajar. No era un
+problema de los parámetros sino del job.
 
-Como `effectivePriority` es el máximo entre la severidad y la prioridad del incidente, los tres
-reportes vuelven a Media, aunque el incidente siga teniendo tres miembros (el tablero sigue
-mostrando "Incidente · 3 reportes"). Además, como cambió la prioridad, se publica
-`EmergenciaPriorizada` con la baja. No es un problema de los parámetros sino del job, y este cambio
-no lo toca. Para decidirlo en el equipo, hay dos opciones:
+Ejemplo con el job real, una pasada en cada minuto de la tabla: tres reportes de
+`DISTURBIO_EVENTO_MASIVO` (severidad media) en un minuto, a menos de 71 m entre sí (el caso del
+[guion de demo](guion-demo-dbscan.md)).
 
-1. Puntuar con todos los miembros del incidente, no solo con los de la ventana.
-2. No bajar la prioridad de un incidente ya escalado mientras tenga miembros activos.
+| Minutos desde el primer reporte | Reportes en la ventana | Antes: score · prioridad | Ahora: score · prioridad |
+|---:|---:|---|---|
+| 1,5 | 3 | 69 · Alta | 69 · Alta |
+| 14,5 | 3 | 56 · Alta | 56 · Alta |
+| 15,5 | 2 | 42 · Media | 55 · Alta |
+| 16 o más | 1 | 42 · Media | 55 · Alta |
+
+Antes, como `effectivePriority` es el máximo entre la severidad y la prioridad del incidente, los
+tres reportes volvían a Media aunque el incidente siguiera teniendo tres miembros (el tablero
+seguía mostrando "Incidente · 3 reportes"), y como cambiaba la prioridad, se publicaba
+`EmergenciaPriorizada` con la baja.
+
+Había dos opciones: puntuar con todos los miembros del incidente, o no bajar nunca la prioridad de
+un incidente ya escalado mientras tuviera miembros activos. Se eligió la primera porque es lo que
+dicen los ADR: el Risk Engine calcula la prioridad "a partir del `Incident` ya agrupado"
+([Detectar incidentes y priorizar con motor determinístico](https://github.com/G6D2/ADRs/blob/main/adr/detectar-incidentes-y-priorizar-con-motor-deterministico.md))
+y la ventana es un prefiltro de candidatos para el agrupamiento
+([Usar DBSCAN para agrupar emergencias](https://github.com/G6D2/ADRs/blob/main/adr/usar-dbscan-para-agrupar-emergencias.md)).
+La segunda dejaba el score y la prioridad guardados desalineados, y también frenaba bajas que sí
+corresponden, como la de un reporte cancelado.
+
+Cómo funciona ahora:
+
+- **La ventana sigue decidiendo la membresía.** DBSCAN corre solo sobre los candidatos de los
+  últimos 15 minutos: con ellos se forman grupos nuevos y se suman miembros a un incidente. Un
+  reporte que ya salió de la ventana no atrae reportes nuevos.
+- **El score de un incidente existente usa todos sus miembros activos.** Si algún candidato ya
+  pertenece a un incidente, el job trae en una segunda query (`findActiveByIncidentIds`) los
+  miembros no terminales de ese incidente, aunque hayan salido de la ventana, y el Risk Engine
+  puntúa con todos. Esos miembros también reciben la `EmergenciaPriorizada` cuando la prioridad
+  cambia (antes solo la recibían los de la ventana).
+- **Un miembro que pasa a un estado terminal deja de contar**, como antes: si los demás siguen
+  formando grupo en la ventana, el score se recalcula sin él y puede bajar, con su
+  `EmergenciaPriorizada`.
+- **Cuando ya no queda ningún par en la ventana, el job no vuelve a puntuar el incidente**: score y
+  prioridad quedan como estaban (antes también). Por eso, en la tabla, desde el minuto 16 queda en 55.
+- **La recencia sigue restando** alrededor de 1 punto por minuto mientras el grupo está en la
+  ventana (es uno de los factores del Risk Engine, no tiene que ver con la ventana). Con dos
+  reportes a 44 m, el score arranca en 62 y baja a 49 cerca del minuto 13,5: el incidente vuelve a
+  Media y se publica `EmergenciaPriorizada`, antes y después de esta corrección. Con tres reportes,
+  como en la demo, no llega a bajar de Alta.
+
+La corrección no cambia ningún número de la calibración: los grupos son los mismos y
+`scripts/calibrar-dbscan.js` da la misma salida que antes.
 
 ## Limitaciones
 
@@ -302,3 +344,6 @@ no lo toca. Para decidirlo en el equipo, hay dos opciones:
 - `src/services/incident-detection-job.js` (variables y defaults), `src/domain/dbscan-grouper.js`,
   `src/domain/rule-based-grouper.js`, `src/domain/incident-detector.js`,
   `src/domain/incident-detection-strategy.js`, `src/domain/risk-engine.js`
+- `src/repositories/emergency.repository.js` (`findRecentByType`, `findActiveByIncidentIds`)
+- `src/tests/incident-detection-job.test.js` y `src/tests/incident-detection-job.integration.test.js`:
+  el caso del hallazgo, con el reloj más allá de la ventana

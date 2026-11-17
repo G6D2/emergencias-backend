@@ -14,7 +14,8 @@ arranca el backend). En cada pasada:
 1. Trae las emergencias de los últimos 15 min que no estén cerradas, canceladas ni descartadas.
 2. Las separa por tipo.
 3. DBSCAN junta las que están a menos de 300 m, con al menos 2 ciudadanos distintos.
-4. El Risk Engine calcula el score y la prioridad del incidente.
+4. El Risk Engine calcula el score y la prioridad del incidente, con todos sus miembros activos
+   (también los que ya salieron de la ventana).
 
 El front del despachador vuelve a pedir la lista cada 30 s. Entre el segundo reporte y el incidente
 en pantalla pasan, como mucho, unos 90 s.
@@ -68,11 +69,10 @@ climática), la prioridad mostrada sube un nivel más (Alta pasa a Crítica) y a
 
 De dónde sale el 70: 3 reportes × 5 = 15; 3 ciudadanos × 8 = 24; cercanía 20 × (1 − 71/100) ≈ 6
 (los reportes más alejados están a 71 m); recencia ≈ 15; severidad Media = 10. El score baja
-alrededor de 1 punto por minuto, porque la recencia pesa cada vez menos.
-
-**Mostrarlo dentro de los 15 minutos del primer reporte.** Cuando el primer reporte sale de la
-ventana, el job recalcula el incidente con dos reportes: el score baja a ≈ 43 y la prioridad vuelve a
-Media. Es el comportamiento actual del job, descrito en la calibración.
+alrededor de 1 punto por minuto, porque la recencia pesa cada vez menos, hasta ≈ 55 a los 16
+minutos. Ahí queda fijo y en **Alta**, con los 3 reportes: el job puntúa el incidente con todos
+sus miembros, también los que ya salieron de la ventana de 15 minutos (hasta #134 bajaba a Media).
+No hace falta apurarse a mostrarlo.
 
 ## Qué decir
 

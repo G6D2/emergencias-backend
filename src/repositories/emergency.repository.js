@@ -149,6 +149,11 @@ function mapIncidentSummary(row) {
   };
 }
 
+// Columnas que el job de detección de incidentes lee de cada emergencia
+// (findRecentByType y findActiveByIncidentIds).
+const DETECTION_CANDIDATE_FIELDS = `id, correlation_id, user_id, emergency_type, latitude, longitude, location_encrypted,
+              severity, incident_id, created_at`;
+
 // Fragmento de SELECT/JOIN reusado por findPage y findDetailById (las dos
 // lecturas que exponen el resultado del motor de incidentes al dispatcher/
 // ciudadano, tarea de visibilidad apilada sobre #36). El resto de los
@@ -1332,8 +1337,7 @@ class EmergencyRepository {
    */
   async findRecentByType({ emergencyType, emergencyTypes = [emergencyType], since }) {
     const result = await this.pool.query(
-      `SELECT id, correlation_id, user_id, emergency_type, latitude, longitude, location_encrypted,
-              severity, incident_id, created_at
+      `SELECT ${DETECTION_CANDIDATE_FIELDS}
        FROM emergencies
        WHERE emergency_type = ANY($1::text[])
          AND created_at >= $2
@@ -1341,44 +1345,62 @@ class EmergencyRepository {
       [emergencyTypes, since, TERMINAL_STATUSES]
     );
 
+    return this.toDetectionCandidates(result.rows, 'findRecentByType');
+  }
+
+  /**
+   * Miembros activos (no terminales) de los incidentes pedidos, con el mismo
+   * formato que findRecentByType y sin mirar la ventana: el job puntúa un
+   * incidente existente con todos sus miembros activos, también los que ya
+   * salieron de la ventana. Si no, el score baja cuando los primeros
+   * reportes cumplen INCIDENT_WINDOW_MIN aunque el incidente los siga
+   * teniendo (docs/ml/calibracion-dbscan.md).
+   */
+  async findActiveByIncidentIds(incidentIds) {
+    if (incidentIds.length === 0) return [];
+
+    const result = await this.pool.query(
+      `SELECT ${DETECTION_CANDIDATE_FIELDS}
+       FROM emergencies
+       WHERE incident_id = ANY($1::uuid[])
+         AND status <> ALL($2::text[])`,
+      [incidentIds, TERMINAL_STATUSES]
+    );
+
+    return this.toDetectionCandidates(result.rows, 'findActiveByIncidentIds');
+  }
+
+  // Fila -> candidato del job de detección, con lat/lng descifrados. Una fila
+  // sin ciphertext (legacy o anonimizada) queda con lat/lng null; una con
+  // ciphertext indescifrable se excluye y queda en el log.
+  toDetectionCandidates(rows, source) {
     const candidates = [];
-    for (const row of result.rows) {
-      if (!row.location_encrypted) {
-        candidates.push({
-          id: row.id,
-          correlationId: row.correlation_id,
-          userId: row.user_id,
-          emergencyType: row.emergency_type,
-          latitude: null,
-          longitude: null,
-          severity: row.severity,
-          incidentId: row.incident_id,
-          createdAt: row.created_at,
-        });
-        continue;
+    for (const row of rows) {
+      let location = { latitude: null, longitude: null };
+      if (row.location_encrypted) {
+        try {
+          location = this.locationCrypto.decryptLocation(row.location_encrypted);
+        } catch (error) {
+          secureLog('warn', `Emergency excluded from ${source}: location ciphertext could not be decrypted`, {
+            emergencyId: row.id,
+            message: error.message,
+          });
+          continue;
+        }
       }
 
-      try {
-        const location = this.locationCrypto.decryptLocation(row.location_encrypted);
-        candidates.push({
-          id: row.id,
-          correlationId: row.correlation_id,
-          userId: row.user_id,
-          emergencyType: row.emergency_type,
-          latitude: location.latitude,
-          longitude: location.longitude,
-          severity: row.severity,
-          incidentId: row.incident_id,
-          createdAt: row.created_at,
-        });
-      } catch (error) {
-        secureLog('warn', 'Emergency excluded from findRecentByType: location ciphertext could not be decrypted', {
-          emergencyId: row.id,
-          message: error.message,
-        });
-      }
+      candidates.push({
+        id: row.id,
+        correlationId: row.correlation_id,
+        userId: row.user_id,
+        emergencyType: row.emergency_type,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        severity: row.severity,
+        incidentId: row.incident_id,
+        createdAt: row.created_at,
+      });
     }
-
     return candidates;
   }
 

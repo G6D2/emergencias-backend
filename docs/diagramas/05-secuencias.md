@@ -183,7 +183,11 @@ sequenceDiagram
                     Strategy-->>Job: { groups, strategy: 'fallback' }
                     Note over Job: algorithmVersion = rule-based-v1
                 end
-                Job->>Rules: calculateIncidentScore + scoreToPriority
+                opt algún candidato ya pertenece a un incidente
+                    Job->>DB: findActiveByIncidentIds (miembros no terminales, aunque hayan salido de la ventana)
+                    DB-->>Job: miembros activos de esos incidentes
+                end
+                Job->>Rules: calculateIncidentScore + scoreToPriority (incidente existente: con todos sus miembros activos)
                 Rules-->>Job: score, reasonCodes, priority del incidente
                 Job->>Rules: applyPriorityInvariant(severity individual, priority incidente)
                 Rules-->>Job: finalPriority por miembro, nunca por debajo de su severity

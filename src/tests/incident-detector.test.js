@@ -167,6 +167,116 @@ describe('incident-detector', () => {
       expect(decisions[0].algorithmVersion).toBe('dbscan-v1');
     });
 
+    describe('incidente existente con miembros que ya salieron de la ventana (calibración DBSCAN)', () => {
+      // Caso de la demo: tres ciudadanos, DISTURBIO_EVENTO_MASIVO (medium), a
+      // menos de 71 m entre sí, en t = 0, 30 s y 60 s. Ahora es t = 15,5 min:
+      // e1 ya salió de la ventana de 15 min y el job solo ve a e2 y e3.
+      const MINUTE = 60000;
+      const minutesAgo = (minutes) => new Date(Date.now() - minutes * MINUTE);
+      const demo = {
+        e1: closeCandidate({
+          id: 'e1', correlationId: 'e1', userId: 'u1', severity: 'medium', incidentId: 'inc-1', createdAt: minutesAgo(15.5),
+        }),
+        e2: closeCandidate({
+          id: 'e2',
+          correlationId: 'e2',
+          userId: 'u2',
+          severity: 'medium',
+          incidentId: 'inc-1',
+          createdAt: minutesAgo(15),
+          latitude: -34.6033,
+        }),
+        e3: closeCandidate({
+          id: 'e3',
+          correlationId: 'e3',
+          userId: 'u3',
+          severity: 'medium',
+          incidentId: 'inc-1',
+          createdAt: minutesAgo(14.5),
+          longitude: -58.3810,
+        }),
+      };
+      const OPTIONS = { ...DEFAULT_OPTIONS, emergencyType: 'DISTURBIO_EVENTO_MASIVO' };
+
+      it('puntúa con todos los miembros activos del incidente: el score y la prioridad no bajan', async () => {
+        const soloVentana = await processEmergencyTypeCandidates([demo.e2, demo.e3], OPTIONS);
+        const conTodos = await processEmergencyTypeCandidates([demo.e2, demo.e3], {
+          ...OPTIONS,
+          incidentMembers: [demo.e1, demo.e2, demo.e3],
+        });
+
+        // Sin los miembros del incidente (el comportamiento viejo) el score
+        // cae a ~42 y la prioridad vuelve a medium.
+        expect(soloVentana[0].factors.reportCount).toBe(2);
+        expect(soloVentana[0].priority).toBe('medium');
+
+        expect(conTodos).toHaveLength(1);
+        expect(conTodos[0].incidentId).toBe('inc-1');
+        expect(conTodos[0].factors.reportCount).toBe(3);
+        expect(conTodos[0].factors.uniqueCitizenCount).toBe(3);
+        expect(conTodos[0].reasonCodes).toContain('MULTI_REPORT_THRESHOLD');
+        expect(conTodos[0].score).toBeGreaterThanOrEqual(50);
+        expect(conTodos[0].priority).toBe('high');
+      });
+
+      it('el miembro fuera de la ventana queda en la decisión como ya vinculado, con su finalPriority', async () => {
+        const [decision] = await processEmergencyTypeCandidates([demo.e2, demo.e3], {
+          ...OPTIONS,
+          incidentMembers: [demo.e1, demo.e2, demo.e3],
+        });
+
+        expect(decision.members.map((m) => m.emergencyId).sort()).toEqual(['e1', 'e2', 'e3']);
+        decision.members.forEach((member) => {
+          expect(member.alreadyLinked).toBe(true);
+          expect(member.finalPriority).toBe('high');
+        });
+      });
+
+      it('la recencia sale del reporte más nuevo, no del que salió de la ventana', async () => {
+        const [decision] = await processEmergencyTypeCandidates([demo.e2, demo.e3], {
+          ...OPTIONS,
+          incidentMembers: [demo.e1],
+        });
+
+        expect(decision.factors.recencyMinutes).toBeCloseTo(14.5, 1);
+      });
+
+      it('no suma miembros de otro incidente ni a un grupo nuevo', async () => {
+        const otroIncidente = closeCandidate({
+          id: 'x1', correlationId: 'x1', userId: 'u9', severity: 'medium', incidentId: 'inc-2', createdAt: minutesAgo(20),
+        });
+
+        const [existente] = await processEmergencyTypeCandidates([demo.e2, demo.e3], {
+          ...OPTIONS,
+          incidentMembers: [otroIncidente, demo.e1],
+        });
+        expect(existente.members.map((m) => m.emergencyId).sort()).toEqual(['e1', 'e2', 'e3']);
+
+        const nuevos = [
+          closeCandidate({ id: 'n1', correlationId: 'n1', userId: 'u1' }),
+          closeCandidate({ id: 'n2', correlationId: 'n2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002 }),
+        ];
+        const [nuevo] = await processEmergencyTypeCandidates(nuevos, { ...OPTIONS, incidentMembers: [otroIncidente] });
+        expect(nuevo.incidentId).toBeNull();
+        expect(nuevo.members.map((m) => m.emergencyId).sort()).toEqual(['n1', 'n2']);
+      });
+
+      it('un miembro sin ubicación cuenta como reporte, pero no entra en las distancias', async () => {
+        const sinUbicacion = { ...demo.e1, latitude: null, longitude: null };
+
+        const [decision] = await processEmergencyTypeCandidates([demo.e2, demo.e3], {
+          ...OPTIONS,
+          incidentMembers: [sinUbicacion],
+        });
+
+        expect(decision.factors.reportCount).toBe(3);
+        // e2–e3 están a ~71 m; con (0, 0) la distancia máxima serían miles de km.
+        expect(decision.factors.maxDistanceMeters).toBeGreaterThan(60);
+        expect(decision.factors.maxDistanceMeters).toBeLessThan(80);
+        expect(decision.reasonCodes).toContain('PROXIMITY_CLUSTER');
+      });
+    });
+
     // DBSCAN falla en runtime (excepcion tecnica real de la libreria, no un
     // resultado vacio): se usa RuleBasedGrouper real -- sin mockear -- y el
     // resultado debe tener algorithmVersion 'rule-based-v1'. No existe un

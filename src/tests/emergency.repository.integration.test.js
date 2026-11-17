@@ -947,4 +947,36 @@ describe('EmergencyRepository (integración contra Postgres real)', () => {
       expect(ids).not.toContain(terminal.id);
     });
   });
+
+  describe('findActiveByIncidentIds (miembros activos de un incidente para el score, sin ventana)', () => {
+    it('trae los miembros activos del incidente aunque estén fuera de la ventana, sin los terminales ni los de otro incidente', async () => {
+      const { rows: [incident] } = await getPool().query(
+        "INSERT INTO incidents (emergency_type) VALUES ('INCENDIO') RETURNING id"
+      );
+      const { rows: [otherIncident] } = await getPool().query(
+        "INSERT INTO incidents (emergency_type) VALUES ('INCENDIO') RETURNING id"
+      );
+      const old = buildEmergency({ emergencyType: 'INCENDIO' });
+      const recent = buildEmergency({ emergencyType: 'INCENDIO' });
+      const cancelled = buildEmergency({ emergencyType: 'INCENDIO' });
+      const fromOther = buildEmergency({ emergencyType: 'INCENDIO' });
+      for (const emergency of [old, recent, cancelled, fromOther]) {
+        await repository.create(emergency);
+      }
+      await repository.setIncidentId(old.id, incident.id);
+      await repository.setIncidentId(recent.id, incident.id);
+      await repository.setIncidentId(cancelled.id, incident.id);
+      await repository.setIncidentId(fromOther.id, otherIncident.id);
+      await getPool().query(`UPDATE emergencies SET created_at = now() - interval '2 hours' WHERE id = $1`, [old.id]);
+      await getPool().query("UPDATE emergencies SET status = 'CANCELLED' WHERE id = $1", [cancelled.id]);
+
+      const members = await repository.findActiveByIncidentIds([incident.id]);
+
+      expect(members.map((member) => member.id).sort()).toEqual([old.id, recent.id].sort());
+      const foundOld = members.find((member) => member.id === old.id);
+      expect(foundOld.incidentId).toBe(incident.id);
+      expect(foundOld.latitude).toBeCloseTo(old.latitude);
+      expect(foundOld.longitude).toBeCloseTo(old.longitude);
+    });
+  });
 });
