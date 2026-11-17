@@ -31,7 +31,7 @@
   "author": "Grupo 6 - Emergencias y Seguridad",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@kafkajs/confluent-schema-registry": "^4.1.0",
