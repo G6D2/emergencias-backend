@@ -34,6 +34,14 @@ services:
       # sslmode=require. No se usa Postgres de Render.
       - key: DATABASE_URL
         sync: false
+      # Verificar el certificado de Neon (cargada el 17/11/2026). Con pg 8,
+      # el sslmode=require de la URL ya se trata como verify-full (lo avisa
+      # pg en el log) y pisa la opción ssl del código; esta variable deja la
+      # intención explícita y cubre una URL sin sslmode. Ojo con pg 9: ahí
+      # require pasa a la semántica de libpq (sin verificar), así que conviene
+      # usar sslmode=verify-full en la URL antes de subir de versión.
+      - key: DATABASE_SSL_VERIFY
+        value: "true"
       # Máximo de conexiones del pool de pg (ver README > Pool de conexiones).
       - key: DB_POOL_MAX
         value: "10"
