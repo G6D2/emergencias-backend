@@ -26,6 +26,7 @@ function createRegistrarContextosClimaticosHandler({ contextoZonaRepository }) {
     const {
       origen, alertaId, ubicaciones, radioMetros, vigenteDesde, vigenteHasta,
       descripcion = null, causationId = null, sourceUpdatedAt,
+      nivel = null, fenomeno = null, barrios = [],
     } = payload;
     if (!Array.isArray(ubicaciones) || ubicaciones.length === 0) {
       throw new ValidationError('RegistrarContextosClimaticos requiere al menos una ubicación');
@@ -58,6 +59,10 @@ function createRegistrarContextosClimaticosHandler({ contextoZonaRepository }) {
         descripcion,
         causationId,
         sourceUpdatedAt,
+        // Solo para mostrar la alerta (banner): no cambian la zona ni la suba.
+        nivelCriticidad: nivel,
+        fenomeno,
+        barrios: Array.isArray(barrios) && barrios.length > 0 ? barrios : null,
       });
       if (contexto) applied += 1;
     }

@@ -173,6 +173,8 @@ async function start() {
     officerRepository,
     incidentRepository,
     citizenProfileRepository,
+    // GET /api/contextos-zona/activos: alertas climáticas para el banner.
+    contextoZonaRepository,
   });
 
   const server = app.listen(PORT, () => {

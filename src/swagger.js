@@ -35,6 +35,7 @@ const options = {
       { name: 'Incidents', description: 'Resultado del motor de detección de incidentes (dispatcher)' },
       { name: 'CitizenProfile', description: 'Perfil personal y ubicaciones frecuentes del ciudadano' },
       { name: 'Outbox', description: 'Estado operativo de los eventos pendientes de publicar (dispatcher)' },
+      { name: 'ContextosZona', description: 'Alertas climáticas activas para el banner del tablero (dispatcher)' },
     ],
     components: {
       securitySchemes: {
@@ -467,6 +468,38 @@ const options = {
             access_token: { type: 'string' },
             token_type: { type: 'string', example: 'Bearer' },
             expires_in: { type: 'integer', example: 900 },
+          },
+        },
+        AlertaClimaticaActiva: {
+          type: 'object',
+          description: 'Una alerta climática de Espacios con contextos de zona activos o por empezar '
+            + '(GET /api/contextos-zona/activos). Una entrada por alerta, no por punto.',
+          properties: {
+            alertaId: { type: 'string', example: 'a7f0e2c4-1b3d-4e5f-8a9b-0c1d2e3f4a5b', description: 'alertaId de Espacios.' },
+            nivel: {
+              type: 'string',
+              nullable: true,
+              enum: ['ALTA', 'CRITICA'],
+              description: 'Nivel de la alerta. Solo ALTA y CRITICA generan contextos (MEDIA y BAJA no aparecen).',
+            },
+            fenomeno: { type: 'string', nullable: true, example: 'TORMENTA_FUERTE', description: 'Código del catálogo de Espacios.' },
+            fenomenoEtiqueta: { type: 'string', nullable: true, example: 'Tormenta fuerte' },
+            barrios: {
+              type: 'array',
+              items: { type: 'string' },
+              example: ['SAN NICOLAS', 'BELGRANO'],
+              description: 'Barrios que informa la alerta, tal como llegan. Solo para mostrar: la zona es punto + radio.',
+            },
+            vigenteDesde: { type: 'string', format: 'date-time' },
+            vigenteHasta: { type: 'string', format: 'date-time' },
+            enCurso: {
+              type: 'boolean',
+              description: 'true si la alerta ya empezó: las emergencias que se crean dentro del radio de '
+                + 'algún punto suben un nivel. false si todavía no empezó (vigenteDesde en el futuro).',
+            },
+            puntos: { type: 'integer', example: 2, description: 'Cantidad de puntos (contextos) de la alerta.' },
+            radioMetros: { type: 'integer', example: 500, description: 'Radio alrededor de cada punto (CRITICA 1000, ALTA 500).' },
+            descripcion: { type: 'string', nullable: true, example: 'Alerta climática ALTA: tormenta fuerte' },
           },
         },
         ErrorResponse: {
