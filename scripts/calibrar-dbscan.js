@@ -274,16 +274,32 @@ function primerIndiceDespuesDe(tiempos, valor) {
  * Corre el job real de detección (`detectIncidents`) una vez por intervalo
  * sobre un reloj simulado. Los repositorios en memoria imitan lo que el job
  * usa de los reales: findRecentByType (created_at >= since, sin estados
- * terminales: acá ninguno se cierra) y create/addMember/applyScoringDecision.
+ * terminales: acá ninguno se cierra), findActiveByIncidentIds (todos los
+ * miembros de cada incidente, sin mirar la ventana) y
+ * create/addMember/applyScoringDecision.
  *
  * @returns {Promise<{ incidentePorEmergencia: Map<string, string>, incidentes: Map<string, object> }>}
  */
 async function simularJob(reportes, { radiusMeters, minUniqueCitizens, windowMinutes, intervalMs = DEFAULTS_ACTUALES.intervalMs }) {
   const ordenados = [...reportes].sort((a, b) => a.createdAtMs - b.createdAtMs);
   const tiempos = ordenados.map((reporte) => reporte.createdAtMs);
+  const reportePorId = new Map(ordenados.map((reporte) => [reporte.id, reporte]));
   const incidentePorEmergencia = new Map();
+  const miembrosPorIncidente = new Map();
   const incidentes = new Map();
   let ahora = INICIO_MS;
+
+  const candidato = (reporte) => ({
+    id: reporte.id,
+    correlationId: reporte.id,
+    userId: reporte.userId,
+    emergencyType: reporte.emergencyType,
+    latitude: reporte.latitude,
+    longitude: reporte.longitude,
+    severity: reporte.severity,
+    incidentId: incidentePorEmergencia.get(reporte.id) ?? null,
+    createdAt: new Date(reporte.createdAtMs),
+  });
 
   const emergencyRepository = {
     async findRecentByType({ emergencyTypes, since }) {
@@ -293,19 +309,13 @@ async function simularJob(reportes, { radiusMeters, minUniqueCitizens, windowMin
       for (let i = desde; i < hasta; i += 1) {
         const reporte = ordenados[i];
         if (!emergencyTypes.includes(reporte.emergencyType)) continue;
-        candidatos.push({
-          id: reporte.id,
-          correlationId: reporte.id,
-          userId: reporte.userId,
-          emergencyType: reporte.emergencyType,
-          latitude: reporte.latitude,
-          longitude: reporte.longitude,
-          severity: reporte.severity,
-          incidentId: incidentePorEmergencia.get(reporte.id) ?? null,
-          createdAt: new Date(reporte.createdAtMs),
-        });
+        candidatos.push(candidato(reporte));
       }
       return candidatos;
+    },
+    async findActiveByIncidentIds(incidentIds) {
+      return incidentIds.flatMap((incidentId) => (miembrosPorIncidente.get(incidentId) || [])
+        .map((emergencyId) => candidato(reportePorId.get(emergencyId))));
     },
   };
 
@@ -313,10 +323,12 @@ async function simularJob(reportes, { radiusMeters, minUniqueCitizens, windowMin
     async create({ emergencyType }) {
       const id = `inc-${incidentes.size + 1}`;
       incidentes.set(id, { id, emergencyType });
+      miembrosPorIncidente.set(id, []);
       return { id };
     },
     async addMember(incidentId, emergencyId) {
       incidentePorEmergencia.set(emergencyId, incidentId);
+      miembrosPorIncidente.get(incidentId).push(emergencyId);
     },
     async applyScoringDecision(incidentId, { priority, score, algorithmVersion }) {
       Object.assign(incidentes.get(incidentId), { priority, score, algorithmVersion });

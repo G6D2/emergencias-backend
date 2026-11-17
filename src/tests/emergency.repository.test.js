@@ -1390,6 +1390,56 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
   });
 });
 
+describe('EmergencyRepository.findActiveByIncidentIds (miembros activos de un incidente, sin ventana)', () => {
+  const crypto = createLocationCrypto(Buffer.alloc(32, 3).toString('base64'));
+
+  it('sin ids no consulta la base', async () => {
+    const query = jest.fn();
+    const repo = new EmergencyRepository(createPool({ query }), { locationCrypto: crypto });
+
+    await expect(repo.findActiveByIncidentIds([])).resolves.toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('filtra por incident_id y estados no terminales, sin created_at, y devuelve el formato de los candidatos', async () => {
+    const ciphertext = crypto.encryptLocation({ latitude: -34.6, longitude: -58.4 });
+    const otherKeyCiphertext = createLocationCrypto(Buffer.alloc(32, 7).toString('base64'))
+      .encryptLocation({ latitude: -34.6, longitude: -58.4 });
+    const query = jest.fn(async () => ({
+      rows: [
+        {
+          id: 'e1', correlation_id: 'c1', user_id: 'u1', emergency_type: 'MEDICA', location_encrypted: ciphertext, severity: 'medium', incident_id: 'inc-1', created_at: 'c1',
+        },
+        {
+          id: 'e2', correlation_id: 'c2', user_id: 'u2', emergency_type: 'MEDICA', location_encrypted: null, severity: 'low', incident_id: 'inc-1', created_at: 'c2',
+        },
+        {
+          id: 'e3', correlation_id: 'c3', user_id: 'u3', emergency_type: 'MEDICA', location_encrypted: otherKeyCiphertext, severity: 'low', incident_id: 'inc-1', created_at: 'c3',
+        },
+      ],
+    }));
+    const repo = new EmergencyRepository(createPool({ query }), { locationCrypto: crypto });
+
+    const members = await repo.findActiveByIncidentIds(['inc-1']);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/incident_id = ANY\(\$1::uuid\[\]\)/);
+    expect(sql).toMatch(/status <> ALL\(\$2::text\[\]\)/);
+    expect(sql).not.toMatch(/created_at >=/);
+    expect(params).toEqual([['inc-1'], TERMINAL_STATUSES]);
+    // e3 no se puede descifrar: se excluye, igual que en findRecentByType.
+    expect(members).toEqual([
+      {
+        id: 'e1', correlationId: 'c1', userId: 'u1', emergencyType: 'MEDICA', latitude: -34.6, longitude: -58.4, severity: 'medium', incidentId: 'inc-1', createdAt: 'c1',
+      },
+      {
+        id: 'e2', correlationId: 'c2', userId: 'u2', emergencyType: 'MEDICA', latitude: null, longitude: null, severity: 'low', incidentId: 'inc-1', createdAt: 'c2',
+      },
+    ]);
+  });
+});
+
 describe('EmergencyRepository.expireStaleEmergencies', () => {
   const ROW = {
     id: 'e-1', status: 'PENDING', latitude: null, longitude: null, location_encrypted: 'blob',

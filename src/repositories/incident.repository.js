@@ -119,7 +119,9 @@ class IncidentRepository {
    * Persiste la decisión de scoring del rule-based grouper (tarea #60, parte
    * 2/2) y notifica EmergenciaPriorizada por cada miembro, pero solo si la
    * prioridad del incidente efectivamente cambió (NULL cuenta como "distinto
-   * de cualquier valor", así que la primera vez siempre notifica).
+   * de cualquier valor", así que la primera vez siempre notifica). Para un
+   * incidente existente, `members` trae todos sus miembros activos, también
+   * los que ya salieron de la ventana del job.
    */
   async applyScoringDecision(incidentId, { priority, score, reasonCodes, factors, algorithmVersion, members }) {
     const client = await this.pool.connect();

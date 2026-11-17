@@ -112,6 +112,11 @@ async function persistDecision(incidentRepository, decision) {
  * Una pasada del job: UNA sola query trae los candidatos activos de todos los
  * tipos agrupables, se separan en memoria por emergencyType y cada grupo
  * detectado se persiste. A diferencia de runOnce(), no traga errores.
+ *
+ * Si algún candidato ya pertenece a un incidente, una segunda query trae los
+ * miembros activos de esos incidentes, también los que ya salieron de la
+ * ventana: el score de un incidente existente se calcula con todos ellos (ver
+ * processEmergencyTypeCandidates).
  */
 async function detectIncidents({
   emergencyRepository,
@@ -123,11 +128,19 @@ async function detectIncidents({
 }) {
   const candidates = await emergencyRepository.findRecentByType({ emergencyTypes, since });
 
+  const linkedIncidentIds = [...new Set(
+    candidates.map((candidate) => candidate.incidentId).filter((incidentId) => incidentId != null)
+  )];
+  const incidentMembers = linkedIncidentIds.length > 0
+    ? await emergencyRepository.findActiveByIncidentIds(linkedIncidentIds)
+    : [];
+
   for (const [emergencyType, typeCandidates] of groupByEmergencyType(candidates)) {
     const decisions = await processEmergencyTypeCandidates(typeCandidates, {
       radiusMeters,
       minUniqueCitizens,
       emergencyType,
+      incidentMembers,
     });
 
     for (const decision of decisions) {

@@ -119,6 +119,76 @@ describe('incident-detection-job pipeline (integración contra Postgres real, si
     });
   });
 
+  // Hallazgo de docs/ml/calibracion-dbscan.md: cuando el primer reporte
+  // cumplía 15 min, el job puntuaba el incidente solo con los otros dos, la
+  // prioridad volvía de high a medium y salía EmergenciaPriorizada con la
+  // baja. Mismo caso que la demo: tres ciudadanos, DISTURBIO_EVENTO_MASIVO
+  // (medium), a menos de 71 m entre sí.
+  describe('incidente de la demo cuando el reloj pasa la ventana (DISTURBIO_EVENTO_MASIVO)', () => {
+    const BASE_LATITUDE = -26.8083;
+    const BASE_LONGITUDE = -65.2176;
+    const TYPE = 'DISTURBIO_EVENTO_MASIVO';
+
+    async function setCreatedSecondsAgo(emergencies, secondsAgo) {
+      for (let i = 0; i < emergencies.length; i += 1) {
+        await getPool().query(
+          'UPDATE emergencies SET created_at = now() - make_interval(secs => $1) WHERE id = $2',
+          [secondsAgo[i], emergencies[i].id]
+        );
+      }
+    }
+
+    async function prioritizedEventsFor(incidentId) {
+      const { rows } = await getPool().query(
+        "SELECT payload FROM outbox_events WHERE topic = 'emergencias.priorizada'"
+      );
+      return rows.map((row) => row.payload).filter((payload) => payload.data.incidentId === incidentId);
+    }
+
+    it('el score y la prioridad no bajan y no se publica una EmergenciaPriorizada de baja', async () => {
+      const reports = [
+        buildEmergency({
+          emergencyType: TYPE, severity: 'medium', userId: 'user-demo-1', latitude: BASE_LATITUDE, longitude: BASE_LONGITUDE,
+        }),
+        buildEmergency({
+          emergencyType: TYPE, severity: 'medium', userId: 'user-demo-2', latitude: BASE_LATITUDE + 0.0004, longitude: BASE_LONGITUDE,
+        }),
+        buildEmergency({
+          emergencyType: TYPE, severity: 'medium', userId: 'user-demo-3', latitude: BASE_LATITUDE, longitude: BASE_LONGITUDE + 0.0006,
+        }),
+      ];
+      for (const report of reports) {
+        await emergencyRepository.create(report);
+      }
+
+      // t = 1,5 min: los tres reportes llegaron en t = 0, 30 s y 60 s.
+      await setCreatedSecondsAgo(reports, [90, 60, 30]);
+      await runIncidentDetectionPipeline({ emergencyType: TYPE });
+
+      const { incidentId } = await emergencyRepository.findById(reports[0].id);
+      expect(incidentId).toBeTruthy();
+      const formed = (await getPool().query('SELECT priority, score, factors FROM incidents WHERE id = $1', [incidentId])).rows[0];
+      expect(formed.priority).toBe('high');
+      expect(formed.factors.reportCount).toBe(3);
+      const eventsWhenFormed = await prioritizedEventsFor(incidentId);
+      expect(eventsWhenFormed).toHaveLength(3);
+
+      // t = 15¼ min: el primer reporte ya salió de la ventana de 15 min y los
+      // otros dos siguen adentro, así que DBSCAN vuelve a armar el grupo.
+      await setCreatedSecondsAgo(reports, [915, 885, 855]);
+      await runIncidentDetectionPipeline({ emergencyType: TYPE });
+
+      const later = (await getPool().query('SELECT priority, score, factors FROM incidents WHERE id = $1', [incidentId])).rows[0];
+      expect(later.priority).toBe('high');
+      expect(later.factors.reportCount).toBe(3);
+      expect(Number(later.score)).toBeGreaterThanOrEqual(50);
+
+      const eventsLater = await prioritizedEventsFor(incidentId);
+      expect(eventsLater).toHaveLength(3);
+      expect(eventsLater.every((payload) => payload.data.incidentPriority === 'high')).toBe(true);
+    });
+  });
+
   describe('caso ambiguo (MEDICA)', () => {
     const BASE_LATITUDE = -38.0055;
     const BASE_LONGITUDE = -57.5426;
