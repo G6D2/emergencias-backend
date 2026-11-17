@@ -361,24 +361,18 @@ describe('EmergencyRepository lecturas', () => {
       latitud: -34.5711,
       longitud: -58.4167,
       radioMetros: 500,
-      barrios: null,
-      fenomeno: null,
-      gravedad: null,
       origen: 'espacios',
       referenciaExterna: 'ev-1',
       descripcion: null,
       vigenteDesde,
       vigenteHasta,
     });
-    // El contexto alcanza a la emergencia por el vínculo escrito al crearla
-    // (radio) o por su barrio (alerta climática), solo para los tipos que
-    // eleva, y tiene que seguir en curso; sin PREVENTIVA ni terminales. No se
-    // mide distancia acá.
-    expect(calls[0]).toMatch(/FROM contexto_zona c/);
+    // El contexto sale del vínculo escrito al crear la emergencia y tiene que
+    // seguir en curso; sin PREVENTIVA ni terminales. No se mide distancia acá.
     expect(calls[0]).toMatch(/FROM emergencia_contexto_zona ecz/);
-    expect(calls[0]).toMatch(/ecz\.emergency_id = e\.id AND ecz\.contexto_id = c\.id/);
-    expect(calls[0]).toMatch(/e\.barrio = ANY\(c\.barrios\)/);
-    expect(calls[0]).toMatch(/c\.tipos_emergencia IS NULL OR e\.emergency_type = ANY\(c\.tipos_emergencia\)/);
+    expect(calls[0]).toMatch(/JOIN contexto_zona c ON c\.id = ecz\.contexto_id/);
+    expect(calls[0]).toMatch(/ecz\.emergency_id = e\.id/);
+    expect(calls[0]).not.toMatch(/barrio/);
     expect(calls[0]).toMatch(/c\.dado_de_baja_en IS NULL/);
     expect(calls[0]).toMatch(/c\.suspendido_en IS NULL/);
     expect(calls[0]).toMatch(/c\.vigente_desde <= now\(\)/);

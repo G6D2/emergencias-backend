@@ -126,10 +126,6 @@ services:
       # Radio de la prioridad por evento (default 500 m): usa el default.
       # - key: CONTEXTO_ZONA_RADIO_DEFAULT_METROS
       #   value: "500"
-      # Alerta climática de Espacios: el código escucha por default los FQN
-      # reales (com.citypass.espacios.CriticidadClimaticaConfirmada y
-      # ...Finalizada), no hace falta cargar nada. EDA_TOPIC_ALERTA_CLIMATICA_*
-      # solo para pisarlos. CONTEXTO_CLIMA_* usan el default del código.
       # Schema registry del gateway (Avro); usa el mismo token que el broker.
       - key: EDA_SCHEMA_REGISTRY_URL
         value: https://test.citypass.mrfranco.net.ar/api/v1

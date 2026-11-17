@@ -390,8 +390,6 @@ describe('ContextoZonaRepository', () => {
     expect(values).toEqual([
       row.tipo, row.latitud, row.longitud, row.radio_metros, row.vigente_desde, row.vigente_hasta, row.origen, row.referencia_externa,
       null, null, row.source_updated_at, false, false,
-      // barrios, tiposEmergencia, fenomeno, gravedad, versionOrigen: un evento comunitario no los manda.
-      null, null, null, null, null,
     ]);
   });
 
@@ -405,8 +403,7 @@ describe('ContextoZonaRepository', () => {
     const [sql, values] = pool.query.mock.calls[0];
     expect(sql).toMatch(/suspendido_en = CASE WHEN \$12::boolean THEN COALESCE\(contexto_zona\.suspendido_en, now\(\)\) END/);
     expect(sql).toMatch(/vigente_hasta = CASE WHEN \$13::boolean THEN contexto_zona\.vigente_hasta ELSE EXCLUDED\.vigente_hasta END/);
-    // $12 (suspendido) y $13 (ventanaPorDefecto).
-    expect(values.slice(11, 13)).toEqual([true, true]);
+    expect(values.slice(-2)).toEqual([true, true]);
   });
 
   it('upsert devuelve null si la escritura no aplicó y usa el executor recibido', async () => {
