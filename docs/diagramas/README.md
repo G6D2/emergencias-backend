@@ -6,7 +6,9 @@ incidentes de los PRs #36/#39/#41, `address` cifrado del PR #37 y el workflow `a
 del PR #38; actualizada de nuevo al 2026-09-23 para incorporar `DbscanGrouper` e
 `IncidentDetectionStrategy` del PR #51, verificado en producción ese mismo día; y al
 2026-11-05 para incorporar el rol oficial y sus endpoints, `return`, el contrato de eventos del
-issue #48, el consumer de cobertura preventiva y el schema hasta V26), en
+issue #48, el consumer de cobertura preventiva y el schema hasta V26; y al 2026-11-17, después
+de la corrección de la cátedra, para llevar el schema a V35, sumar las secuencias de los casos
+transversales y dejar una sola versión de la semántica de orden), en
 [Mermaid](https://mermaid.js.org/) para que GitHub los renderice directo en el repo, sin
 herramientas externas.
 
@@ -19,10 +21,10 @@ de lo que aparece como implementado es especulación.
 
 1. [Contexto (C4 nivel 1)](00-contexto.md) — el módulo en el mapa de CityPass+: actores (ciudadano, dispatcher, oficial), bus del Grupo 1, Espacios y Login Federado, qué está conectado hoy
 2. [Casos de uso](01-casos-de-uso.md) — actores, épicas y qué caso de uso está implementado vs. planificado
-3. [Modelo entidad-relación](02-modelo-entidad-relacion.md) — schema Flyway hasta V26: emergencias (con `source` y causa), outbox (con `SKIPPED`), `eventos_procesados`, officers, incidents, perfil, auth local
+3. [Modelo entidad-relación](02-modelo-entidad-relacion.md) — schema Flyway hasta V35: emergencias (con `source` y causa), outbox (con `SKIPPED`), `eventos_procesados`, officers, incidents, contextos de zona y sus vínculos, `idempotency_keys`, oficial de cada asignación en el historial, perfil, auth local
 4. [Arquitectura](03-arquitectura.md) — contenedores (estilo C4) y componentes internos del backend, incluido el motor de incidentes con `IncidentDetectionStrategy` (`DbscanGrouper` primaria, `RuleBasedGrouper` fallback)
 5. [Máquina de estados](04-maquina-de-estados.md) — transiciones de una emergencia y el endpoint y rol de cada una
-6. [Secuencias](05-secuencias.md) — SOS del ciudadano, flujo del dispatcher y del oficial, cancelación + outbox, job de detección de incidentes, cobertura preventiva
+6. [Secuencias](05-secuencias.md) — SOS del ciudadano, flujo del dispatcher y del oficial, cancelación + outbox, job de detección de incidentes, cobertura preventiva y los dos casos transversales: reclamo por ciclovía → intervención y alerta climática
 7. [Eventos de dominio](06-eventos.md) — qué se publica y consume, envelope por modo de publicación, campos pendientes y semántica de orden y entrega (el contrato está en `asyncapi.yaml`)
 8. [CI/CD](07-ci-cd.md) — pipelines reales de backend y frontend, con sus gates, y el workflow manual de failover
 9. [Despliegue](08-despliegue.md) — Render (primario y backup), Neon, GitHub Actions, SonarCloud y variables de entorno
@@ -32,7 +34,8 @@ de lo que aparece como implementado es especulación.
 
 Cada bloque ` ```mermaid ` de estos archivos se extrajo a un `.mmd` y se renderizó con
 `@mermaid-js/mermaid-cli` (`npx -y @mermaid-js/mermaid-cli -i archivo.mmd -o archivo.svg`) antes
-de commitear: todos generan SVG sin errores de sintaxis.
+de commitear: todos generan SVG sin errores de sintaxis. En la actualización del 2026-11-17 todos
+los bloques de la carpeta se volvieron a validar con `mermaid.parse` (mermaid 11.4.1).
 
 ## Cómo se generaron
 
