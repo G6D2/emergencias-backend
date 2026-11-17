@@ -308,8 +308,8 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 | `GET /health` | público | estado en memoria de Kafka (`connected`, `disconnected` o `disabled`), del outbox y de cada listener |
 | `GET /api-docs`, `GET /api-docs.json` | público | Swagger UI y spec OpenAPI |
 | `POST /auth/register` | público, `AUTH_MODE=local` o `hybrid` | 20 req/min por IP |
-| `POST /auth/login` | público, `AUTH_MODE=local` o `hybrid` | 20 req/min por IP |
-| `POST /auth/dev/login` | público, `AUTH_MODE=local` o `hybrid` | 10 req/min por IP; allowlist con `DEV_LOGIN_STRICT` |
+| `POST /auth/login` | público, `AUTH_MODE=local` o `hybrid` | 20 intentos fallidos/min por email, 300 req/min por IP |
+| `POST /auth/dev/login` | público, `AUTH_MODE=local` o `hybrid` | 10 req/min por `sub`, 300 req/min por IP; allowlist con `DEV_LOGIN_STRICT` |
 | `GET /api/user` | autenticado | devuelve `sub`, `groups`, `username` del JWT; en `hybrid`, además `authSource` y, si el token es federado, `idpSub` e `idpGroups` |
 | `POST /api/panic-button` | `citizen` | 5 req/min por IP; `emergencyType=PREVENTIVA` → 400 |
 | `GET /api/panic-button/:id` | `citizen` o `dispatcher` | citizen: solo propias (404 si ajena); deja registro de auditoría |
@@ -436,8 +436,8 @@ El health check reporta el estado de Kafka (`connected`, `disconnected` o `disab
 
 | Endpoint | Límite | Respuesta al exceder |
 |----------|--------|-----------------------|
-| `POST /auth/dev/login` | 10 req/min por IP | `429 { "error": "TooManyRequests", "message": "..." }` |
-| `POST /auth/login` | 20 intentos fallidos/min por IP (los logins exitosos no cuentan) | idem |
+| `POST /auth/dev/login` | 10 req/min por `sub` pedido, más un tope de 300 req/min por IP compartido con `/auth/login` | `429 { "error": "TooManyRequests", "message": "..." }` |
+| `POST /auth/login` | 20 intentos fallidos/min por email (los logins exitosos no cuentan), más el tope de 300 req/min por IP. Por IP sola era un cupo global: detrás del BFF todos comparten IP | idem |
 | `POST /auth/register` | 20 req/min por IP, contador propio | idem |
 | `POST /api/panic-button` | 5 activaciones/min por ciudadano (`sub` del token; las que fallan no cuentan), más un tope de 300 req/min por IP antes de autenticar | `429 { "error": "TooManyRequests", "message": "..." }` |
 | `PUT`/`POST`/`PATCH`/`DELETE` en `/api/citizen/*` | 30 req/min por IP | idem |

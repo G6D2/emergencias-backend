@@ -5,6 +5,7 @@ const {
   createPanicButtonRateLimiter,
   createPanicButtonIpRateLimiter,
   createDevLoginRateLimiter,
+  createAuthLoginIpRateLimiter,
   createAuthLoginRateLimiter,
   createAuthRegisterRateLimiter,
 } = require('../security/rate-limit');
@@ -144,6 +145,40 @@ describe('per-user and per-IP budgets', () => {
       await request(app).post('/login').send({ password: 'mal' }).expect(401);
     }
     await request(app).post('/login').send({ password: 'ok' }).expect(429);
+  });
+
+  it('auth login limiter keys by email: wrong passwords on one account do not lock out another behind the same IP (BFF)', async () => {
+    const app = express();
+    app.use(express.json());
+    app.post('/login', createAuthLoginRateLimiter({ RATE_LIMIT_ENABLED: 'true' }), (req, res) => {
+      res.status(req.body.password === 'ok' ? 200 : 401).json({});
+    });
+
+    for (let i = 0; i < 20; i += 1) {
+      await request(app).post('/login').send({ email: 'a@x.com', password: 'mal' }).expect(401);
+    }
+    await request(app).post('/login').send({ email: ' A@X.com ', password: 'ok' }).expect(429);
+    await request(app).post('/login').send({ email: 'b@x.com', password: 'ok' }).expect(200);
+  });
+
+  it('dev login limiter keys by sub: one demo account hitting the limit does not block another', async () => {
+    const app = express();
+    app.use(express.json());
+    app.post('/dev/login', createDevLoginRateLimiter({ RATE_LIMIT_ENABLED: 'true' }), (req, res) => {
+      res.json({});
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      await request(app).post('/dev/login').send({ sub: 'CIT-a' }).expect(200);
+    }
+    await request(app).post('/dev/login').send({ sub: 'CIT-a' }).expect(429);
+    await request(app).post('/dev/login').send({ sub: 'CIT-b' }).expect(200);
+  });
+
+  it('login IP limiter is a wide net (300/min)', async () => {
+    const app = buildApp(createAuthLoginIpRateLimiter({ RATE_LIMIT_ENABLED: 'true' }));
+    const response = await request(app).get('/ping').expect(200);
+    expect(response.headers['ratelimit-limit']).toBe('300');
   });
 
   it('auth register limiter counts successful sign-ups too (no unlimited account creation)', async () => {
