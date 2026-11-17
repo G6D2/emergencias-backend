@@ -1,5 +1,5 @@
 const {
-  createProgramarCoberturaHandler,
+  createProgramarCoberturaHandler: crearHandler,
   PROGRAMAR_COBERTURA,
 } = require('../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { setBusLocationCryptoForTests } = require('../../security/bus-location-crypto');
@@ -17,6 +17,11 @@ function buildContextoZona({ cancelado = false } = {}) {
     bloquearGrupo: jest.fn().mockResolvedValue(undefined),
     grupoDadoDeBaja: jest.fn().mockResolvedValue(cancelado),
   };
+}
+
+// Por default, un evento sin marca de baja; los tests del #88 pasan la suya.
+function createProgramarCoberturaHandler(deps) {
+  return crearHandler({ contextoZonaRepository: buildContextoZona(), ...deps });
 }
 
 const client = { query: jest.fn() };
@@ -47,9 +52,8 @@ describe('createProgramarCoberturaHandler', () => {
   });
 
   it('falla sin emergencyRepository o sin contextoZonaRepository', () => {
-    expect(() => createProgramarCoberturaHandler({})).toThrow(/emergencyRepository/);
-    expect(() => createProgramarCoberturaHandler({ emergencyRepository: buildRepository() }))
-      .toThrow(/contextoZonaRepository/);
+    expect(() => crearHandler({})).toThrow(/emergencyRepository/);
+    expect(() => crearHandler({ emergencyRepository: buildRepository() })).toThrow(/contextoZonaRepository/);
   });
 
   it('toma el lock del evento y, sin marca de baja, sigue con el alta', async () => {
@@ -94,7 +98,7 @@ describe('createProgramarCoberturaHandler', () => {
 
   it('crea la emergencia PREVENTIVA por el repositorio, en la transacción del caller', async () => {
     const emergencyRepository = buildRepository();
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository, topic: 'emergencias.boton-panico' });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository, topic: 'emergencias.boton-panico' });
 
     const result = await handler(client, payload);
 
@@ -125,7 +129,7 @@ describe('createProgramarCoberturaHandler', () => {
 
   it('el outbox lleva EmergenciaCreada con la causa, barrio y sin ciudadano', async () => {
     const emergencyRepository = buildRepository();
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
     await handler(client, payload);
 
     const input = emergencyRepository.create.mock.calls[0][0];
@@ -167,7 +171,7 @@ describe('createProgramarCoberturaHandler', () => {
 
   it('pasa barrioText del evento al create para fallback sin coords', async () => {
     const emergencyRepository = buildRepository();
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
     await handler(client, {
       ...payload,
       latitud: null,
@@ -185,7 +189,7 @@ describe('createProgramarCoberturaHandler', () => {
 
   it('usa el correlationId del evento solo si es un UUID', async () => {
     const emergencyRepository = buildRepository();
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
 
     await handler(client, payload);
     const conTextoLibre = emergencyRepository.create.mock.calls[0][0];
@@ -198,7 +202,7 @@ describe('createProgramarCoberturaHandler', () => {
 
   it('sin coordenadas queda para validación manual', async () => {
     const emergencyRepository = buildRepository();
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
     await handler(client, { ...payload, latitud: null, longitud: null });
 
     expect(emergencyRepository.create.mock.calls[0][0]).toMatchObject({
@@ -210,7 +214,7 @@ describe('createProgramarCoberturaHandler', () => {
 
   it('no duplica la cobertura si el evento se republica', async () => {
     const emergencyRepository = buildRepository([{ id: 'em-1', status: 'PENDING' }]);
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
 
     await expect(handler(client, payload)).resolves.toEqual({ emergencyId: 'em-1', created: false });
     expect(emergencyRepository.create).not.toHaveBeenCalled();
@@ -218,7 +222,7 @@ describe('createProgramarCoberturaHandler', () => {
 
   it('con causaTipo RESERVA deduplica y crea la cobertura con esa causa', async () => {
     const emergencyRepository = buildRepository();
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
 
     await handler(client, { ...payload, eventoId: 'res-9', causaTipo: 'RESERVA', titulo: 'Reserva de espacio (PLAZA)' });
 
@@ -237,13 +241,13 @@ describe('createProgramarCoberturaHandler', () => {
 
   it('rechaza un causaTipo que no es de cobertura preventiva', async () => {
     const emergencyRepository = buildRepository();
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository });
     await expect(handler(client, { ...payload, causaTipo: 'RECLAMO' })).rejects.toThrow(/causaTipo RECLAMO/);
     expect(emergencyRepository.findByCausa).not.toHaveBeenCalled();
   });
 
   it('falla sin eventoId', async () => {
-    const handler = createProgramarCoberturaHandler({ contextoZonaRepository: buildContextoZona(), emergencyRepository: buildRepository() });
+    const handler = createProgramarCoberturaHandler({ emergencyRepository: buildRepository() });
     await expect(handler(client, { ...payload, eventoId: undefined })).rejects.toThrow(/eventoId/);
   });
 });

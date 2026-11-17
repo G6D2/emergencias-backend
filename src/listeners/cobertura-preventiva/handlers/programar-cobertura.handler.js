@@ -1,9 +1,9 @@
 const { randomUUID } = require('crypto');
 const { ValidationError } = require('../../../errors/app-errors');
+const { CONTEXTO_TIPO, ORIGEN_ESPACIOS } = require('../../../domain/contexto-zona');
 const { secureLog } = require('../../../security/secure-log');
 const { buildEmergencyCreatedEvent } = require('../../../services/emergency-events');
 const { severityForType } = require('../../../domain/severity');
-const { CONTEXTO_TIPO, ORIGEN_ESPACIOS } = require('../../../domain/contexto-zona');
 
 const PROGRAMAR_COBERTURA = 'ProgramarCobertura';
 const CAUSA_TIPO = 'EVENTO_PUBLICO';
