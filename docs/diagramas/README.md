@@ -26,6 +26,7 @@ de lo que aparece como implementado es especulación.
 7. [Eventos de dominio](06-eventos.md) — qué se publica y consume, envelope por modo de publicación, campos pendientes y semántica de orden y entrega (el contrato está en `asyncapi.yaml`)
 8. [CI/CD](07-ci-cd.md) — pipelines reales de backend y frontend, con sus gates, y el workflow manual de failover
 9. [Despliegue](08-despliegue.md) — Render (primario y backup), Neon, GitHub Actions, SonarCloud y variables de entorno
+10. [Vista 4+1](09-vista-4+1.md) — las cinco vistas de Kruchten (lógica, de procesos, de desarrollo, física y escenarios) y en qué diagrama de esta carpeta está cada una
 
 ## Cómo se validó el Mermaid
 

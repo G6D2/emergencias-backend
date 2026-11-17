@@ -10,6 +10,7 @@ const { EventosProcesadosRepository } = require('../../repositories/eventos-proc
 const { OutcomeFactory } = require('../../listeners/outcome-factory');
 const { EventoComunitarioPublicadoListener } = require('../../listeners/cobertura-preventiva/evento-comunitario-publicado/evento-comunitario-publicado.listener');
 const { EventoCanceladoListener } = require('../../listeners/cobertura-preventiva/evento-cancelado/evento-cancelado.listener');
+const { ReservaCreadaListener } = require('../../listeners/cobertura-preventiva/reserva-creada/reserva-creada.listener');
 const { PROGRAMAR_COBERTURA, createProgramarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/programar-cobertura.handler');
 const { CANCELAR_COBERTURA, createCancelarCoberturaHandler } = require('../../listeners/cobertura-preventiva/handlers/cancelar-cobertura.handler');
 const {
@@ -38,6 +39,7 @@ let eventosProcesadosRepo;
 let outcomeFactory;
 let publicado;
 let cancelado;
+let reservaCreada;
 
 beforeAll(() => {
   pool = getPool();
@@ -53,6 +55,7 @@ beforeAll(() => {
 
   publicado = new EventoComunitarioPublicadoListener(fakeKafka(), { factory: outcomeFactory });
   cancelado = new EventoCanceladoListener(fakeKafka(), { factory: outcomeFactory });
+  reservaCreada = new ReservaCreadaListener(fakeKafka(), { factory: outcomeFactory, topic: 'com.citypass.espacios.ReservaCreada' });
 });
 
 afterAll(async () => {
@@ -222,6 +225,106 @@ describe('cobertura preventiva (integration)', () => {
 
     const [despues] = await coberturas();
     expect(despues.status).toBe('DISPATCHED');
+  });
+});
+
+// ReservaCreada (#91): payload segun register-event-types.ts de Espacios.
+const RESERVA = {
+  metadata: {
+    eventId: 'b1000000-0000-4000-8000-000000000001',
+    eventType: 'com.citypass.espacios.ReservaCreada',
+    source: 'com.citypass.espacios',
+  },
+  data: {
+    reservaId: 'res-700',
+    tipoReserva: 'ESPACIO',
+    recursoId: 'esp-12',
+    espacioId: 'esp-12',
+    categoria: 'PLAZA',
+    zona: 'Palermo',
+    latitud: -34.58,
+    longitud: -58.42,
+    fechaHora: '2099-01-01T18:00:00Z',
+    fechaFin: '2099-01-01T23:00:00Z',
+    cantidadPersonas: 700,
+    cupoMaximo: 1000,
+    organizadorId: null,
+    createdAt: '2026-11-16T12:00:00Z',
+    correlationId: 'res-700',
+  },
+};
+
+async function coberturasDeReserva() {
+  const { rows } = await pool.query(
+    "SELECT * FROM emergencies WHERE source = 'EXTERNAL' AND causa_tipo = 'RESERVA' AND causa_id = $1",
+    [RESERVA.data.reservaId]
+  );
+  return rows;
+}
+
+describe('cobertura preventiva por reserva de espacio (integration, #91)', () => {
+  it('crea una PREVENTIVA con causa RESERVA y encola EmergenciaCreada', async () => {
+    await reservaCreada.onMessage(buildMessage(RESERVA));
+
+    const rows = await coberturasDeReserva();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      status: 'PENDING',
+      emergency_type: 'PREVENTIVA',
+      source: 'EXTERNAL',
+      causa_tipo: 'RESERVA',
+      causa_id: 'res-700',
+      user_id: null,
+      requires_manual_validation: false,
+    });
+
+    const { rows: outbox } = await pool.query('SELECT payload FROM outbox_events WHERE topic = $1', [CREATED_TOPIC]);
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0].payload.data).toMatchObject({
+      emergenciaId: rows[0].id,
+      categoria: 'PREVENTIVA',
+      causaTipo: 'RESERVA',
+      causaId: 'res-700',
+      prioridadOriginal: null,
+    });
+  });
+
+  it('otro evento de la misma reserva no duplica la cobertura', async () => {
+    await reservaCreada.onMessage(buildMessage(RESERVA));
+    await reservaCreada.onMessage(buildMessage({
+      metadata: { ...RESERVA.metadata, eventId: 'b1000000-0000-4000-8000-000000000002' },
+      data: RESERVA.data,
+    }));
+    expect(await coberturasDeReserva()).toHaveLength(1);
+  });
+
+  it('no choca con la cobertura de un evento comunitario que tenga el mismo id', async () => {
+    await publicado.onMessage(buildMessage({
+      ...PUBLICADO,
+      data: { ...PUBLICADO.data, eventoId: RESERVA.data.reservaId },
+    }));
+    await reservaCreada.onMessage(buildMessage(RESERVA));
+
+    const { rows } = await pool.query(
+      "SELECT causa_tipo FROM emergencies WHERE source = 'EXTERNAL' AND causa_id = $1 ORDER BY causa_tipo",
+      [RESERVA.data.reservaId]
+    );
+    expect(rows.map((r) => r.causa_tipo)).toEqual(['EVENTO_PUBLICO', 'RESERVA']);
+  });
+
+  it('no crea cobertura para una inscripcion, una reserva chica ni una que ya termino', async () => {
+    const variantes = [
+      { tipoReserva: 'EVENTO' },
+      { cantidadPersonas: 20 },
+      { fechaFin: '2020-01-01T00:00:00Z' },
+    ];
+    for (const [i, cambio] of variantes.entries()) {
+      await reservaCreada.onMessage(buildMessage({
+        metadata: { ...RESERVA.metadata, eventId: `b1000000-0000-4000-8000-00000000001${i}` },
+        data: { ...RESERVA.data, ...cambio },
+      }));
+    }
+    expect(await coberturasDeReserva()).toHaveLength(0);
   });
 });
 
