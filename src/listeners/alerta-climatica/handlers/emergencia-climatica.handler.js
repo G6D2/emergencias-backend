@@ -2,7 +2,12 @@ const { randomUUID } = require('crypto');
 const { ValidationError } = require('../../../errors/app-errors');
 const { secureLog } = require('../../../security/secure-log');
 const { buildEmergencyCreatedEvent, buildEmergencyUpdatedEvent } = require('../../../services/emergency-events');
-const { CAUSA_TIPO_CLIMA, NIVEL_TO_SEVERITY } = require('../../../domain/alerta-climatica');
+const {
+  CAUSA_TIPO_CLIMA,
+  fenomenoLegible,
+  grupoDeLaAlerta,
+  severityDelNivel,
+} = require('../../../domain/alerta-climatica');
 
 const CREAR_EMERGENCIA_CLIMATICA = 'CrearEmergenciaClimatica';
 const CANCELAR_EMERGENCIA_CLIMATICA = 'CancelarEmergenciaClimatica';
@@ -23,12 +28,24 @@ function emergenciaActualizadaTopic() {
   return process.env.TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO || 'emergencias.estado-actualizado';
 }
 
-function descriptionFor({ nivel, fenomeno, barrios = [] }) {
-  const que = typeof fenomeno === 'string' && fenomeno.trim()
-    ? fenomeno.trim().replace(/_/g, ' ').toLowerCase()
-    : 'evento climático';
+function descriptionFor({ nivel, fenomeno, barrios }) {
   const donde = barrios.length > 0 ? ` (${barrios.join(', ')})` : '';
-  return `Alerta climática ${nivel} — ${que}${donde}`.slice(0, MAX_DESCRIPTION_LENGTH);
+  return `Alerta climática ${nivel} — ${fenomenoLegible(fenomeno)}${donde}`.slice(0, MAX_DESCRIPTION_LENGTH);
+}
+
+function assertAlertaId(alertaId, type) {
+  if (typeof alertaId !== 'string' || !alertaId) {
+    throw new ValidationError(`${type} requiere alertaId`);
+  }
+}
+
+// Confirmación y finalización de una alerta llegan por tópicos distintos y el
+// consumer procesa varias particiones a la vez. Las dos transacciones toman
+// el mismo advisory lock (el del grupo de contextos) antes de tocar la
+// emergencia, así la finalización ve la PREVENTIVA ya confirmada, o la
+// confirmación ve la marca de baja que dejó la finalización.
+function bloquearAlerta(contextoZonaRepository, client, alertaId) {
+  return contextoZonaRepository.bloquearGrupo(client, grupoDeLaAlerta(alertaId));
 }
 
 function isDuplicate(error) {
@@ -38,24 +55,38 @@ function isDuplicate(error) {
 // Crea una emergencia PREVENTIVA por alerta climática confirmada (ALTA o
 // CRITICA): despliegue preventivo mientras dura la alerta. Una sola por
 // alertaId (índice único de V23 sobre las PREVENTIVA). La ubicación es el
-// primer punto de la alerta; sin puntos queda para validación manual.
+// primer punto válido de la alerta; sin puntos queda para validación manual.
+// Severidad: ALTA → high, CRITICA → critical.
+//
+// Si la alerta ya se finalizó (la finalización llegó antes y dejó la marca de
+// baja), no crea nada: la finalización gana (punto 4 del ADR).
 //
 // prioridadOriginal: la prioridad de la alerta no pasa por ningún ajuste
 // climático, así que en EmergenciaCreada sale igual a `prioridad`
 // (buildEmergencyCreatedEvent). Las PREVENTIVA no se vinculan a contextos de
 // zona, así que tampoco la sube su propia alerta.
-function createCrearEmergenciaClimaticaHandler({ emergencyRepository, topic = emergenciaCreadaTopic() }) {
+function createCrearEmergenciaClimaticaHandler({
+  emergencyRepository,
+  contextoZonaRepository,
+  topic = emergenciaCreadaTopic(),
+}) {
   if (!emergencyRepository) throw new Error('createCrearEmergenciaClimaticaHandler requiere emergencyRepository');
+  if (!contextoZonaRepository) throw new Error('createCrearEmergenciaClimaticaHandler requiere contextoZonaRepository');
 
   return async function crearEmergenciaClimatica(client, payload) {
     const {
       alertaId, nivel, fenomeno, latitud = null, longitud = null, barrios = [],
     } = payload || {};
-    if (typeof alertaId !== 'string' || !alertaId) {
-      throw new ValidationError('CrearEmergenciaClimatica requiere alertaId');
+    assertAlertaId(alertaId, CREAR_EMERGENCIA_CLIMATICA);
+    const severity = severityDelNivel(nivel);
+    if (!severity) {
+      throw new ValidationError('CrearEmergenciaClimatica requiere nivel ALTA o CRITICA');
     }
-    if (!Object.prototype.hasOwnProperty.call(NIVEL_TO_SEVERITY, nivel)) {
-      throw new ValidationError('CrearEmergenciaClimatica requiere nivel BAJA, MEDIA, ALTA o CRITICA');
+
+    await bloquearAlerta(contextoZonaRepository, client, alertaId);
+    if (await contextoZonaRepository.grupoDadoDeBaja(client, grupoDeLaAlerta(alertaId))) {
+      secureLog('info', 'Alerta climática ya finalizada: no se crea la emergencia', { alertaId });
+      return { emergencyId: null, created: false, finalizada: true };
     }
 
     const causa = { causaTipo: CAUSA_TIPO_CLIMA, causaId: alertaId, emergencyType: EMERGENCY_TYPE };
@@ -66,7 +97,6 @@ function createCrearEmergenciaClimaticaHandler({ emergencyRepository, topic = em
     }
 
     const hasLocation = Number.isFinite(latitud) && Number.isFinite(longitud);
-    const severity = NIVEL_TO_SEVERITY[nivel];
     const emergencyId = randomUUID();
 
     await client.query(`SAVEPOINT ${SAVEPOINT}`);
@@ -120,14 +150,19 @@ function createCrearEmergenciaClimaticaHandler({ emergencyRepository, topic = em
 
 // Cuando Espacios finaliza la alerta, la emergencia climática que nadie
 // despachó (PENDING/VALIDATED) se cancela. Si ya avanzó, queda como está.
-function createCancelarEmergenciaClimaticaHandler({ emergencyRepository, topic = emergenciaActualizadaTopic() }) {
+function createCancelarEmergenciaClimaticaHandler({
+  emergencyRepository,
+  contextoZonaRepository,
+  topic = emergenciaActualizadaTopic(),
+}) {
   if (!emergencyRepository) throw new Error('createCancelarEmergenciaClimaticaHandler requiere emergencyRepository');
+  if (!contextoZonaRepository) throw new Error('createCancelarEmergenciaClimaticaHandler requiere contextoZonaRepository');
 
   return async function cancelarEmergenciaClimatica(client, payload) {
     const { alertaId } = payload || {};
-    if (typeof alertaId !== 'string' || !alertaId) {
-      throw new ValidationError('CancelarEmergenciaClimatica requiere alertaId');
-    }
+    assertAlertaId(alertaId, CANCELAR_EMERGENCIA_CLIMATICA);
+
+    await bloquearAlerta(contextoZonaRepository, client, alertaId);
 
     const emergencias = await emergencyRepository.findByCausa(client, {
       causaTipo: CAUSA_TIPO_CLIMA,

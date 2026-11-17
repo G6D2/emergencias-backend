@@ -119,10 +119,18 @@ async function start() {
   const contextoZonaRepository = new ContextoZonaRepository(pool);
   outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
-  // Alerta climática de Espacios (#80 y #88): contextos por punto y, con
-  // nivel ALTA o CRITICA, una emergencia PREVENTIVA por alerta.
-  outcomeFactory.register(CREAR_EMERGENCIA_CLIMATICA, createCrearEmergenciaClimaticaHandler({ emergencyRepository }));
-  outcomeFactory.register(CANCELAR_EMERGENCIA_CLIMATICA, createCancelarEmergenciaClimaticaHandler({ emergencyRepository }));
+  // Alerta climática de Espacios (#80 y #88, ADR "Responder a las alertas
+  // climáticas de Espacios"): con nivel ALTA o CRITICA, contextos por punto
+  // con el radio del nivel y una emergencia PREVENTIVA por alerta. Los
+  // listeners son opt-in (EDA_TOPIC_CRITICIDAD_CLIMATICA_*).
+  outcomeFactory.register(
+    CREAR_EMERGENCIA_CLIMATICA,
+    createCrearEmergenciaClimaticaHandler({ emergencyRepository, contextoZonaRepository })
+  );
+  outcomeFactory.register(
+    CANCELAR_EMERGENCIA_CLIMATICA,
+    createCancelarEmergenciaClimaticaHandler({ emergencyRepository, contextoZonaRepository })
+  );
   outcomeFactory.register(
     REGISTRAR_CONTEXTOS_CLIMATICOS,
     createRegistrarContextosClimaticosHandler({ contextoZonaRepository })

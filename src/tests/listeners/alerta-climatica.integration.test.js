@@ -1,8 +1,11 @@
-// Alerta climática de punta a punta (issues #80 y #88): una
-// CriticidadClimaticaConfirmada de Espacios deja un contexto de zona por cada
-// punto de la alerta y, con nivel ALTA o CRITICA, una emergencia PREVENTIVA
-// con causa EVENTO_CLIMATICO. La CriticidadClimaticaFinalizada da de baja los
-// contextos y cancela la emergencia que nadie despachó.
+// Alerta climática de punta a punta (issues #80 y #88; ADR "Responder a las
+// alertas climáticas de Espacios"): una CriticidadClimaticaConfirmada ALTA o
+// CRITICA de Espacios deja un contexto de zona por cada punto de la alerta,
+// con el radio del nivel (ALTA 500 m, CRITICA 1000 m), y una emergencia
+// PREVENTIVA con causa EVENTO_CLIMATICO. BAJA y MEDIA no generan nada. La
+// CriticidadClimaticaFinalizada da de baja los contextos y cancela la
+// emergencia que nadie despachó, aunque llegue antes o a la vez que la
+// confirmación.
 //
 // Kafka no corre: se llama a EventListener.onMessage() con el mensaje
 // serializado. Postgres y la app HTTP son reales.
@@ -29,19 +32,23 @@ const {
   createRegistrarContextosClimaticosHandler,
   createDarDeBajaContextosClimaticosHandler,
 } = require('../../listeners/alerta-climatica/handlers/contextos-climaticos.handler');
+const { grupoDeLaAlerta } = require('../../domain/alerta-climatica');
 const { createLocationCrypto } = require('../../security/location-crypto');
 const { createLifecycleHarness } = require('../helpers/emergency-lifecycle');
 
 const CREATED_TOPIC = 'test.clima.emergencias.creada';
 const UPDATED_TOPIC = 'test.clima.emergencias.actualizada';
 
-// Puntos de la alerta: Obelisco y Belgrano. CERCA queda a ~1,1 km del
-// Obelisco (dentro del radio de clima de 2 km); el Rosedal, a más de 3 km de
-// los dos.
+// Puntos de las alertas que comparten el archivo: Obelisco y Belgrano.
 const OBELISCO = { latitude: -34.6037, longitude: -58.3816 };
 const BELGRANO = { latitude: -34.5631, longitude: -58.4584 };
-const CERCA = { latitude: -34.6100, longitude: -58.3900 };
-const ROSEDAL = { latitude: -34.5711, longitude: -58.4167 };
+// Puntos propios de la prueba de radio, lejos de los de arriba (> 4 km), para
+// que ninguna otra alerta del archivo alcance a las emergencias de prueba.
+// 0,0027° de latitud ≈ 300 m; 0,0072° ≈ 800 m.
+const CENTENARIO = { latitude: -34.6066, longitude: -58.4355 };
+const MATADEROS = { latitude: -34.6596, longitude: -58.5026 };
+const A_300_M = 0.0027;
+const A_800_M = 0.0072;
 
 const HORA = 60 * 60 * 1000;
 
@@ -53,10 +60,15 @@ function buildMessage(eventObject) {
   return { value: Buffer.from(JSON.stringify(eventObject)) };
 }
 
+function alNorte(punto, grados) {
+  return { latitude: punto.latitude + grados, longitude: punto.longitude };
+}
+
 let pool;
 let h;
 let confirmada;
 let finalizada;
+let contextoZonaRepository;
 const alertaIds = [];
 const eventIds = [];
 
@@ -78,6 +90,8 @@ function confirmacion(overrides = {}) {
       barrios: ['SAN NICOLAS', 'BELGRANO'],
       vigenciaDesde: Date.now() - HORA,
       vigenciaHasta: Date.now() + 2 * HORA,
+      temperaturaMinC: null,
+      temperaturaMaxC: null,
       actorSub: 'admin-1',
       ...overrides,
     },
@@ -87,6 +101,7 @@ function confirmacion(overrides = {}) {
 function finalizacion(alertaId) {
   const eventId = randomUUID();
   eventIds.push(eventId);
+  alertaIds.push(alertaId);
   return {
     metadata: { eventId, eventType: 'com.citypass.espacios.CriticidadClimaticaFinalizada', source: 'grupo7' },
     data: { alertaId, finalizadaEn: Date.now(), actorSub: 'admin-1' },
@@ -97,7 +112,7 @@ async function contextosDe(alertaId) {
   const { rows } = await pool.query(
     `SELECT * FROM contexto_zona
      WHERE tipo = 'ALERTA_CLIMATICA' AND origen = 'espacios'
-       AND left(referencia_externa, length($1)) = $1
+       AND split_part(referencia_externa, '#', 1) = $1
      ORDER BY referencia_externa`,
     [alertaId]
   );
@@ -112,20 +127,45 @@ async function emergenciasDe(alertaId) {
   return rows;
 }
 
+async function dispatchPriorityDe(location) {
+  const id = await h.createPending({ emergencyType: 'MEDICA', location });
+  const res = await h.call('get', `/api/emergencies/${id}`, 'dispatcher');
+  return res.body.data;
+}
+
+async function esperarLocksEnEspera(cantidad) {
+  const deadline = Date.now() + 10000;
+  for (;;) {
+    const { rows } = await pool.query(
+      "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+    );
+    if (rows[0].n >= cantidad) return;
+    if (Date.now() > deadline) throw new Error(`Timeout esperando ${cantidad} locks en espera`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 beforeAll(async () => {
   pool = getPool();
   h = await createLifecycleHarness(pool);
   const emergencyRepository = new EmergencyRepository(pool, { locationCrypto: createLocationCrypto() });
-  const contextoZonaRepository = new ContextoZonaRepository(pool);
+  contextoZonaRepository = new ContextoZonaRepository(pool);
 
   const factory = new OutcomeFactory(pool, { dedupRepo: new EventosProcesadosRepository(pool) });
-  factory.register(CREAR_EMERGENCIA_CLIMATICA, createCrearEmergenciaClimaticaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
-  factory.register(CANCELAR_EMERGENCIA_CLIMATICA, createCancelarEmergenciaClimaticaHandler({ emergencyRepository, topic: UPDATED_TOPIC }));
+  factory.register(
+    CREAR_EMERGENCIA_CLIMATICA,
+    createCrearEmergenciaClimaticaHandler({ emergencyRepository, contextoZonaRepository, topic: CREATED_TOPIC })
+  );
+  factory.register(
+    CANCELAR_EMERGENCIA_CLIMATICA,
+    createCancelarEmergenciaClimaticaHandler({ emergencyRepository, contextoZonaRepository, topic: UPDATED_TOPIC })
+  );
   factory.register(REGISTRAR_CONTEXTOS_CLIMATICOS, createRegistrarContextosClimaticosHandler({ contextoZonaRepository }));
   factory.register(DAR_DE_BAJA_CONTEXTOS_CLIMATICOS, createDarDeBajaContextosClimaticosHandler({ contextoZonaRepository }));
 
-  confirmada = new CriticidadClimaticaConfirmadaListener(fakeKafka(), { factory });
-  finalizada = new CriticidadClimaticaFinalizadaListener(fakeKafka(), { factory });
+  // Los tópicos son opt-in: acá se pasan explícitos.
+  confirmada = new CriticidadClimaticaConfirmadaListener(fakeKafka(), { factory, topic: 'test.clima.confirmada' });
+  finalizada = new CriticidadClimaticaFinalizadaListener(fakeKafka(), { factory, topic: 'test.clima.finalizada' });
 });
 
 afterAll(async () => {
@@ -145,7 +185,7 @@ afterAll(async () => {
 });
 
 describe('alerta climática (integration)', () => {
-  it('la confirmación ALTA deja un contexto por punto y una emergencia climática', async () => {
+  it('la confirmación ALTA deja un contexto de 500 m por punto y una emergencia climática', async () => {
     const evento = confirmacion();
     await confirmada.onMessage(buildMessage(evento));
     const { alertaId } = evento.data;
@@ -155,10 +195,12 @@ describe('alerta climática (integration)', () => {
     expect(contextos[0]).toMatchObject({
       latitud: OBELISCO.latitude,
       longitud: OBELISCO.longitude,
-      radioMetros: 2000,
+      radioMetros: 500,
+      descripcion: 'Alerta climática ALTA: tormenta fuerte',
       causationId: evento.metadata.eventId,
       dadoDeBajaEn: null,
     });
+    expect(contextos[1]).toMatchObject({ latitud: BELGRANO.latitude, radioMetros: 500 });
     expect(contextos[0].vigenteHasta.getTime()).toBe(evento.data.vigenciaHasta);
 
     const [emergencia] = await emergenciasDe(alertaId);
@@ -167,23 +209,38 @@ describe('alerta climática (integration)', () => {
       severity: 'high',
       status: 'PENDING',
       source: 'EXTERNAL',
+      user_id: null,
       requires_manual_validation: false,
+      description: 'Alerta climática ALTA — tormenta fuerte (SAN NICOLAS, BELGRANO)',
     });
 
     const { rows } = await pool.query(
       "SELECT payload FROM outbox_events WHERE topic = $1 AND payload->'data'->>'emergenciaId' = $2",
       [CREATED_TOPIC, emergencia.id]
     );
+    expect(rows).toHaveLength(1);
     expect(rows[0].payload.data).toMatchObject({
+      categoria: 'PREVENTIVA',
       causaTipo: 'EVENTO_CLIMATICO',
       causaId: alertaId,
       prioridad: 'ALTA',
       prioridadOriginal: 'ALTA',
+      ciudadanoId: null,
     });
 
     // La emergencia de la alerta no queda elevada por sus propios contextos.
     const vinculos = await pool.query('SELECT 1 FROM emergencia_contexto_zona WHERE emergency_id = $1', [emergencia.id]);
     expect(vinculos.rowCount).toBe(0);
+  });
+
+  it('la confirmación CRITICA crea la emergencia critical y contextos de 1000 m', async () => {
+    const evento = confirmacion({ nivelCriticidad: 'CRITICA' });
+    await confirmada.onMessage(buildMessage(evento));
+
+    const contextos = await contextosDe(evento.data.alertaId);
+    expect(contextos.map((c) => c.radioMetros)).toEqual([1000, 1000]);
+    const [emergencia] = await emergenciasDe(evento.data.alertaId);
+    expect(emergencia.severity).toBe('critical');
   });
 
   it('una reentrega con otro eventId no duplica contextos ni emergencia', async () => {
@@ -196,28 +253,49 @@ describe('alerta climática (integration)', () => {
     expect(await emergenciasDe(evento.data.alertaId)).toHaveLength(1);
   });
 
-  it('MEDIA deja contextos pero no crea emergencia', async () => {
-    const evento = confirmacion({ nivelCriticidad: 'MEDIA' });
+  it('MEDIA y BAJA no dejan contextos ni emergencia', async () => {
+    for (const nivelCriticidad of ['MEDIA', 'BAJA']) {
+      const evento = confirmacion({ nivelCriticidad });
+      await confirmada.onMessage(buildMessage(evento));
+      expect(await contextosDe(evento.data.alertaId)).toHaveLength(0);
+      expect(await emergenciasDe(evento.data.alertaId)).toHaveLength(0);
+    }
+  });
+
+  it('una alerta que ya venció deja los contextos (sin efecto) pero no crea emergencia', async () => {
+    const evento = confirmacion({ vigenciaDesde: Date.now() - 3 * HORA, vigenciaHasta: Date.now() - HORA });
     await confirmada.onMessage(buildMessage(evento));
-    expect(await contextosDe(evento.data.alertaId)).toHaveLength(2);
     expect(await emergenciasDe(evento.data.alertaId)).toHaveLength(0);
   });
 
-  it('una emergencia nueva dentro del radio de un punto sube un nivel; fuera, no', async () => {
-    const evento = confirmacion({ nivelCriticidad: 'BAJA' });
-    await confirmada.onMessage(buildMessage(evento));
+  it('el radio depende del nivel: CRITICA alcanza a 800 m, ALTA solo a 300 m', async () => {
+    const critica = confirmacion({
+      nivelCriticidad: 'CRITICA',
+      ubicaciones: [{ latitud: CENTENARIO.latitude, longitud: CENTENARIO.longitude }],
+    });
+    const alta = confirmacion({
+      nivelCriticidad: 'ALTA',
+      ubicaciones: [{ latitud: MATADEROS.latitude, longitud: MATADEROS.longitude }],
+    });
+    await confirmada.onMessage(buildMessage(critica));
+    await confirmada.onMessage(buildMessage(alta));
 
-    const dentro = await h.createPending({ emergencyType: 'MEDICA', location: CERCA });
-    const lejos = await h.createPending({ emergencyType: 'MEDICA', location: ROSEDAL });
+    const criticaA800 = await dispatchPriorityDe(alNorte(CENTENARIO, A_800_M));
+    expect(criticaA800.dispatchPriority).toBe('critical');
+    expect(criticaA800.priorityContext).toMatchObject({
+      tipo: 'ALERTA_CLIMATICA',
+      referenciaExterna: `${critica.data.alertaId}#0`,
+      radioMetros: 1000,
+      descripcion: 'Alerta climática CRITICA: tormenta fuerte',
+    });
 
-    const resDentro = await h.call('get', `/api/emergencies/${dentro}`, 'dispatcher');
-    expect(resDentro.body.data.dispatchPriority).toBe('critical');
-    // Otras alertas de este archivo siguen en curso sobre el Obelisco: se
-    // muestra una sola, así que solo se mira el tipo.
-    expect(resDentro.body.data.priorityContext).toMatchObject({ tipo: 'ALERTA_CLIMATICA' });
+    const altaA300 = await dispatchPriorityDe(alNorte(MATADEROS, A_300_M));
+    expect(altaA300.dispatchPriority).toBe('critical');
+    expect(altaA300.priorityContext).toMatchObject({ referenciaExterna: `${alta.data.alertaId}#0`, radioMetros: 500 });
 
-    const resLejos = await h.call('get', `/api/emergencies/${lejos}`, 'dispatcher');
-    expect(resLejos.body.data.dispatchPriority).toBe('high');
+    const altaA800 = await dispatchPriorityDe(alNorte(MATADEROS, A_800_M));
+    expect(altaA800.dispatchPriority).toBe('high');
+    expect(altaA800.priorityContext).toBeNull();
   });
 
   it('la finalización da de baja los contextos y cancela la emergencia sin despachar', async () => {
@@ -231,15 +309,62 @@ describe('alerta climática (integration)', () => {
 
     const [emergencia] = await emergenciasDe(evento.data.alertaId);
     expect(emergencia.status).toBe('CANCELLED');
+    const { rows } = await pool.query(
+      "SELECT payload FROM outbox_events WHERE topic = $1 AND payload->'data'->>'emergenciaId' = $2",
+      [UPDATED_TOPIC, emergencia.id]
+    );
+    expect(rows.map((r) => r.payload.data.estadoNuevo)).toEqual(['CANCELADA']);
   });
 
-  it('si la finalización llega antes, la confirmación tardía no crea contextos', async () => {
+  it('la finalización no toca una emergencia ya despachada', async () => {
+    const evento = confirmacion({ nivelCriticidad: 'CRITICA' });
+    await confirmada.onMessage(buildMessage(evento));
+    const [creada] = await emergenciasDe(evento.data.alertaId);
+    await pool.query("UPDATE emergencies SET status = 'DISPATCHED' WHERE id = $1", [creada.id]);
+
+    await finalizada.onMessage(buildMessage(finalizacion(evento.data.alertaId)));
+    const [emergencia] = await emergenciasDe(evento.data.alertaId);
+    expect(emergencia.status).toBe('DISPATCHED');
+    (await contextosDe(evento.data.alertaId)).forEach((c) => expect(c.dadoDeBajaEn).not.toBeNull());
+  });
+
+  it('si la finalización llega antes, la confirmación tardía no crea contextos ni emergencia', async () => {
     const alertaId = randomUUID();
     await finalizada.onMessage(buildMessage(finalizacion(alertaId)));
-    await confirmada.onMessage(buildMessage(confirmacion({ alertaId, nivelCriticidad: 'MEDIA' })));
+    await confirmada.onMessage(buildMessage(confirmacion({ alertaId, nivelCriticidad: 'CRITICA' })));
 
     const contextos = await contextosDe(alertaId);
     expect(contextos.map((c) => c.referenciaExterna)).toEqual([alertaId]);
     expect(contextos[0].dadoDeBajaEn).not.toBeNull();
+    expect(await emergenciasDe(alertaId)).toHaveLength(0);
+  });
+
+  it('confirmación y finalización a la vez: no queda una PREVENTIVA viva ni contextos en curso', async () => {
+    const evento = confirmacion({ nivelCriticidad: 'CRITICA' });
+    const { alertaId } = evento.data;
+
+    // Una transacción ajena toma el lock de la alerta: las dos entregas
+    // arrancan y quedan esperando. Al soltarlo, una espera a la otra.
+    const holder = await pool.connect();
+    let pendientes;
+    try {
+      await holder.query('BEGIN');
+      await contextoZonaRepository.bloquearGrupo(holder, grupoDeLaAlerta(alertaId));
+      pendientes = Promise.all([
+        confirmada.onMessage(buildMessage(evento)),
+        finalizada.onMessage(buildMessage(finalizacion(alertaId))),
+      ]);
+      await esperarLocksEnEspera(2);
+      await holder.query('COMMIT');
+    } finally {
+      holder.release();
+    }
+    await pendientes;
+
+    const vivas = (await emergenciasDe(alertaId)).filter((e) => ['PENDING', 'VALIDATED'].includes(e.status));
+    expect(vivas).toEqual([]);
+    const contextos = await contextosDe(alertaId);
+    expect(contextos.length).toBeGreaterThan(0);
+    contextos.forEach((c) => expect(c.dadoDeBajaEn).not.toBeNull());
   });
 });

@@ -1,7 +1,7 @@
 const { ValidationError } = require('../../../errors/app-errors');
 const { secureLog } = require('../../../security/secure-log');
 const { CONTEXTO_TIPO } = require('../../../domain/contexto-zona');
-const { referenciaDeUbicacion } = require('../../../domain/alerta-climatica');
+const { grupoDeLaAlerta, referenciaDeUbicacion } = require('../../../domain/alerta-climatica');
 
 const REGISTRAR_CONTEXTOS_CLIMATICOS = 'RegistrarContextosClimaticos';
 const DAR_DE_BAJA_CONTEXTOS_CLIMATICOS = 'DarDeBajaContextosClimaticos';
@@ -34,7 +34,7 @@ function createRegistrarContextosClimaticosHandler({ contextoZonaRepository }) {
       throw new ValidationError('RegistrarContextosClimaticos requiere radioMetros, vigenteDesde y vigenteHasta');
     }
 
-    const grupo = { tipo: TIPO, origen, referenciaBase: alertaId };
+    const grupo = grupoDeLaAlerta(alertaId, origen);
     await contextoZonaRepository.bloquearGrupo(client, grupo);
     if (await contextoZonaRepository.grupoDadoDeBaja(client, grupo)) {
       secureLog('info', 'Alerta climática ya finalizada: no se registran contextos', { alertaId });
@@ -83,7 +83,7 @@ function createDarDeBajaContextosClimaticosHandler({ contextoZonaRepository }) {
     assertReferencia(payload, DAR_DE_BAJA_CONTEXTOS_CLIMATICOS);
     const { origen, alertaId, causationId = null, sourceUpdatedAt } = payload;
 
-    const grupo = { tipo: TIPO, origen, referenciaBase: alertaId };
+    const grupo = grupoDeLaAlerta(alertaId, origen);
     await contextoZonaRepository.bloquearGrupo(client, grupo);
     const dadosDeBaja = await contextoZonaRepository.darDeBajaGrupo(client, {
       ...grupo,

@@ -1,17 +1,21 @@
 const path = require('path');
 const { EventListener } = require('../../event-listener');
-const { DEFAULT_TOPIC_FINALIZADA } = require('../../../domain/alerta-climatica');
 
 // CriticidadClimaticaFinalizada (Espacios Públicos): la alerta venció o se
 // cerró a mano. Trae el mismo alertaId que la confirmación.
+//
+// Opt-in, igual que la confirmación: sin
+// EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA no se consume. Conviene cargar
+// las dos variables juntas: sin la finalización, los contextos vencen solos
+// con vigenciaHasta, pero la PREVENTIVA no se cancela.
 class CriticidadClimaticaFinalizadaListener extends EventListener {
   constructor(kafka, options = {}) {
     super(kafka, {
-      topic: process.env.EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA || DEFAULT_TOPIC_FINALIZADA,
+      topic: process.env.EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA,
       rulesDir: path.join(__dirname, 'rules'),
       ...options,
     });
   }
 }
 
-module.exports = { CriticidadClimaticaFinalizadaListener, DEFAULT_TOPIC: DEFAULT_TOPIC_FINALIZADA };
+module.exports = { CriticidadClimaticaFinalizadaListener };
