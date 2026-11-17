@@ -45,16 +45,19 @@ const USAGE = `Uso: npm run outbox:requeue-failed -- [--id <uuid>]... [--skip] [
  */
 function parseRequeueFailedArgs(argv) {
   const options = { ids: [], discard: false, apply: false, help: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  const args = [...argv];
+  while (args.length > 0) {
+    const arg = args.shift();
     if (arg === '--apply') options.apply = true;
     else if (arg === '--skip') options.discard = true;
     else if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--id') {
-      const id = argv[index + 1];
-      if (!isUuid(id)) throw new Error(`--id necesita un UUID (vino ${id === undefined ? 'nada' : `"${id}"`})`);
+      const id = args.shift();
+      if (!isUuid(id)) {
+        const received = id === undefined ? 'nada' : `"${id}"`;
+        throw new Error(`--id necesita un UUID (vino ${received})`);
+      }
       options.ids.push(id);
-      index += 1;
     } else {
       throw new Error(`Argumento desconocido: ${arg}`);
     }
