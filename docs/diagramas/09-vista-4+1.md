@@ -235,7 +235,7 @@ flowchart LR
             svc["src/services"]
             lst["src/listeners<br/>(un directorio por módulo de origen,<br/>una regla por archivo)"]
             sec["src/security"]
-            migr["db/migrations<br/>(Flyway V1..V32)"]
+            migr["db/migrations<br/>(Flyway V1..V33)"]
             contr["asyncapi.yaml + OpenAPI<br/>(contratos)"]
             tests["src/tests<br/>(unitarios e integración)"]
         end

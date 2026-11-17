@@ -1,4 +1,4 @@
-# Guía de la prioridad elevada por eventos públicos (CityPass+)
+# Guía de la prioridad elevada por contextos de zona (CityPass+)
 
 Documento **autocontenido** para equipos que consumen eventos de Emergencias del bus (Analítica, Reclamos, Movilidad, etc.). No hace falta clonar el repo de Emergencias para usarlo.
 
@@ -6,15 +6,21 @@ Documento **autocontenido** para equipos que consumen eventos de Emergencias del
 
 ## 1. Qué hace Emergencias y qué publica
 
-Mientras dura un evento comunitario de Espacios Públicos, Emergencias atiende con **un nivel más de prioridad** las emergencias que se crean cerca del evento (a no más de 500 m). Es una regla interna de despacho:
+Emergencias atiende con **un nivel más de prioridad** las emergencias que se crean cerca de una situación de la ciudad mientras dura. Hoy hay dos, las dos de Espacios Públicos:
 
-- **`data.prioridad` no cambia.** En `EmergenciaCreada` y `EmergenciaActualizada` es siempre la prioridad original de la emergencia, haya o no un evento en curso.
+- **Un evento comunitario:** sube las emergencias que se crean a no más de 500 m del evento.
+- **Una alerta climática `ALTA` o `CRITICA`:** sube las emergencias que se crean cerca de alguno de los puntos de la alerta (500 m con `ALTA`, 1000 m con `CRITICA`). Con `MEDIA` o `BAJA` no sube nada. Ver sección 3.1.
+
+Las dos funcionan igual: un punto, un radio y una ventana. Es una regla interna de despacho:
+
+- **`data.prioridad` no cambia.** En `EmergenciaCreada` y `EmergenciaActualizada` es siempre la prioridad original de la emergencia, haya o no un evento o una alerta en curso.
 - **El vínculo sí se publica**, como evento propio: `EmergenciaVinculadaAContextoZona` (ver sección 1.1). Es la forma recomendada de saber qué emergencias se elevaron y por qué evento.
-- **No hay un evento por cada suba ni por cada baja.** La suba se calcula al leer y desaparece sola cuando el evento termina o se cancela.
+- **No hay un evento por cada suba ni por cada baja.** La suba se calcula al leer y desaparece sola cuando el evento termina o se cancela, o cuando la alerta vence o se finaliza.
+- **La alerta climática no tiene evento propio de Emergencias.** La alerta ya la publica Espacios para todos. Lo único que suma Emergencias es una emergencia `PREVENTIVA` por alerta (`causaTipo = EVENTO_CLIMATICO`, `causaId = alertaId`), que sale en `EmergenciaCreada`.
 
 ### 1.1 Recomendado: `EmergenciaVinculadaAContextoZona`
 
-Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios). Es el mismo dato que usa el tablero del dispatcher, encolado en la misma sentencia que lo guarda: no hace falta recalcular nada ni medir distancias.
+Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios o un punto de una alerta climática). Es el mismo dato que usa el tablero del dispatcher, encolado en la misma sentencia que lo guarda: no hace falta recalcular nada ni medir distancias.
 
 | Campo | Para qué |
 |---|---|
@@ -22,7 +28,7 @@ Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios). Es
 | `contextoId` | El contexto en Emergencias |
 | `contextoTipo` | `EVENTO_ESPACIO_PUBLICO` o `ALERTA_CLIMATICA` |
 | `contextoOrigen` | Módulo de origen (`espacios`) |
-| `referenciaExterna` | El `eventoId` de Espacios. **Agrupar por este campo** para contar por evento |
+| `referenciaExterna` | El `eventoId` de Espacios, o `<alertaId>#<índice del punto>` en una alerta climática. **Agrupar por este campo** para contar por evento; para contar por alerta, agrupar por lo que está antes del último `#` |
 | `radioMetros` | Radio con el que se decidió |
 | `vinculadaEn` | Cuándo se vinculó (al crearse la emergencia) |
 | `reglaVersion` | Versión de la regla. Si sube, cambió la forma de decidir el vínculo |
@@ -50,6 +56,8 @@ El resto de esta guía explica cómo **recalcular** el vínculo y la suba con lo
 |------|--------|--------|
 | Lugar y ventana del evento público | `com.citypass.espacios.EventoComunitarioPublicado` | `data.eventoId`, `data.latitud`, `data.longitud`, `data.inicio`, `data.fin`, `data.estado` (también llegan así la suspensión y la reanudación) |
 | Cancelación del evento | `com.citypass.espacios.EventoCancelado` | `data.eventoId`, `data.canceladoEn` |
+| Alerta climática | `com.citypass.espacios.CriticidadClimaticaConfirmada` | `data.alertaId`, `data.nivelCriticidad`, `data.ubicaciones` (`[{ latitud, longitud }]`), `data.vigenciaDesde`, `data.vigenciaHasta` (epoch ms) |
+| Fin de la alerta | `com.citypass.espacios.CriticidadClimaticaFinalizada` | `data.alertaId` |
 | Emergencia | `EmergenciaCreada` | `data.emergenciaId`, `data.latitud`, `data.longitud`, `data.categoria`, `data.prioridad`, `data.createdAt` |
 | Cambios de estado | `EmergenciaActualizada` | `data.emergenciaId`, `data.estadoNuevo`, `data.updatedAt` |
 
@@ -85,12 +93,23 @@ Varios eventos a la vez que alcanzan a la misma emergencia suben **un solo nivel
 
 En la práctica, una emergencia creada cerca de un evento en curso estuvo elevada desde su `createdAt` hasta que cerró o hasta que terminó el evento, lo que haya pasado primero.
 
+### 3.1 La alerta climática
+
+Cada punto de `ubicaciones` de una alerta `ALTA` o `CRITICA` funciona como un evento: misma regla de vínculo al crear, misma suba de un nivel y sin acumular con otros eventos o alertas. Cambia esto:
+
+- **Radio por nivel:** 500 m con `ALTA` y 1000 m con `CRITICA`. `MEDIA` y `BAJA` no suben nada.
+- **Ventana:** `vigenciaDesde`–`vigenciaHasta` de la confirmación. No hay suspensión.
+- **Fin:** `CriticidadClimaticaFinalizada` con el mismo `alertaId` termina la suba de todos los puntos, como una cancelación. Es definitiva.
+- **Zona:** solo los puntos. `barrios` no define zona: una emergencia del mismo barrio pero lejos de los puntos no sube.
+- **La `PREVENTIVA` de la alerta no sube** (es la cobertura de la propia alerta).
+
 ---
 
 ## 4. Distancia al evento
 
 - **Punto del evento:** `data.latitud` y `data.longitud` de `EventoComunitarioPublicado`, tal como llegan. Un evento sin coordenadas numéricas **no eleva nada**: el texto `barrio` o `zona` no se usa.
-- **Radio:** 500 m para todos los eventos. Es un valor fijo de Emergencias (Espacios no informa un radio); si cambia, se avisa.
+- **Radio:** 500 m para todos los eventos. Para las alertas climáticas, 500 m con `ALTA` y 1000 m con `CRITICA`. Son valores de Emergencias (Espacios no informa un radio); si cambian, se avisa. `radioMetros` de `EmergenciaVinculadaAContextoZona` dice con qué radio se decidió.
+- **Punto de una alerta:** cada elemento de `data.ubicaciones`, tal como llega. Un punto sin coordenadas numéricas se descarta.
 - **Punto de la emergencia:** `data.latitud` y `data.longitud` de `EmergenciaCreada`, que van redondeadas a 3 decimales (~100 m). Una emergencia sin ubicación (`null`) nunca se eleva.
 - **Fórmula:** distancia de círculo máximo (haversine) con radio terrestre de 6.371.000 m.
 
@@ -113,11 +132,14 @@ El barrio ya no interviene: una emergencia del mismo barrio que el evento pero a
 | El evento no trae `inicio` | La ventana arranca cuando Emergencias recibe el evento |
 | `fin` no es posterior a `inicio` | Se ignora `fin` y la ventana dura 6 horas |
 | La cancelación llega antes que la publicación | El evento nunca eleva nada |
+| La finalización de una alerta llega antes que la confirmación | La alerta nunca eleva nada |
+| La alerta llega con nivel `MEDIA` o `BAJA` | No eleva nada |
+| La confirmación llega cuando la alerta ya venció | No eleva nada (la ventana ya pasó) |
 
 ---
 
 ## 6. Límites de este recálculo
 
-- Cubre solo la suba por eventos públicos. La prioridad con la que trabaja el dispatcher también puede subir cuando varias emergencias cercanas se agrupan en un incidente; ese cálculo es interno y no se puede reconstruir desde el bus.
+- Cubre solo la suba por eventos públicos y alertas climáticas. La prioridad con la que trabaja el dispatcher también puede subir cuando varias emergencias cercanas se agrupan en un incidente; ese cálculo es interno y no se puede reconstruir desde el bus.
 - Los casos que dependen de cuándo recibió Emergencias el evento (primera publicación sin `inicio`, o una emergencia creada justo antes de que llegue la publicación) no se pueden reproducir con exactitud desde afuera.
 - Cerca del borde del radio el resultado puede diferir, porque afuera solo se conoce la coordenada redondeada.
