@@ -5,6 +5,7 @@ const {
   createPanicButtonRateLimiter,
   createPanicButtonIpRateLimiter,
   createDevLoginRateLimiter,
+  createDevLoginIpRateLimiter,
   createAuthLoginRateLimiter,
   createAuthRegisterRateLimiter,
 } = require('../security/rate-limit');
@@ -58,7 +59,7 @@ describe('rate limiters', () => {
     });
   });
 
-  it('dev-login limiter (10/min): returns 429 past the limit', async () => {
+  it('dev-login limiter (10/min): without a sub in the body it falls back to the IP', async () => {
     const limiter = createDevLoginRateLimiter({ RATE_LIMIT_ENABLED: 'true' });
     const app = buildApp(limiter);
 
@@ -130,6 +131,67 @@ describe('per-user and per-IP budgets', () => {
     expect(response.headers['ratelimit-limit']).toBe('300');
   });
 
+  function buildDevLoginApp(...limiters) {
+    const app = express();
+    app.use(express.json());
+    app.post('/dev/login', ...limiters, (req, res) => res.json({ ok: true }));
+    return app;
+  }
+
+  it('dev-login limiter keys by the requested sub: one user hitting the limit does not block another behind the same IP (BFF)', async () => {
+    const app = buildDevLoginApp(createDevLoginRateLimiter({ RATE_LIMIT_ENABLED: 'true' }));
+
+    for (let i = 0; i < 10; i += 1) {
+      await request(app).post('/dev/login').send({ sub: 'CIT-JuanPanico' }).expect(200);
+    }
+    const blocked = await request(app).post('/dev/login').send({ sub: 'CIT-JuanPanico' }).expect(429);
+    expect(blocked.body.error).toBe('TooManyRequests');
+    await request(app).post('/dev/login').send({ sub: 'CIT-LuciaTranquila' }).expect(200);
+  });
+
+  it('dev-login limiter normalizes the sub: case and surrounding spaces do not open a new budget', async () => {
+    const app = buildDevLoginApp(createDevLoginRateLimiter({ RATE_LIMIT_ENABLED: 'true' }));
+    const variants = ['CIT-JuanPanico', ' cit-juanpanico ', 'CIT-JUANPANICO', '\tCit-JuanPanico'];
+
+    for (let i = 0; i < 10; i += 1) {
+      await request(app).post('/dev/login').send({ sub: variants[i % variants.length] }).expect(200);
+    }
+    await request(app).post('/dev/login').send({ sub: 'cit-JuanPanico  ' }).expect(429);
+  });
+
+  it('dev-login limiter caps the key length: subs that only differ after 128 chars share a budget', async () => {
+    const app = buildDevLoginApp(createDevLoginRateLimiter({ RATE_LIMIT_ENABLED: 'true' }));
+    const prefix = 'u'.repeat(128);
+
+    for (let i = 0; i < 10; i += 1) {
+      await request(app).post('/dev/login').send({ sub: `${prefix}${i}` }).expect(200);
+    }
+    await request(app).post('/dev/login').send({ sub: `${prefix}otro` }).expect(429);
+  });
+
+  it('dev-login limiter without a usable sub counts the IP, apart from the subs', async () => {
+    const app = buildDevLoginApp(createDevLoginRateLimiter({ RATE_LIMIT_ENABLED: 'true' }));
+
+    for (let i = 0; i < 10; i += 1) {
+      await request(app).post('/dev/login').send({ sub: i % 2 ? '   ' : 42 }).expect(200);
+    }
+    await request(app).post('/dev/login').send({}).expect(429);
+    await request(app).post('/dev/login').send({ sub: 'CIT-JuanPanico' }).expect(200);
+  });
+
+  it('dev-login IP limiter is the backstop (100/min): rotating subs does not give unlimited logins', async () => {
+    const app = buildDevLoginApp(
+      createDevLoginIpRateLimiter({ RATE_LIMIT_ENABLED: 'true' }),
+      createDevLoginRateLimiter({ RATE_LIMIT_ENABLED: 'true' })
+    );
+
+    // Cada sub va por su primer login: el límite por sub no corta nunca.
+    for (let i = 0; i < 100; i += 1) {
+      await request(app).post('/dev/login').send({ sub: `CIT-${i}` }).expect(200);
+    }
+    await request(app).post('/dev/login').send({ sub: 'CIT-nuevo' }).expect(429);
+  });
+
   it('auth login limiter only counts failed attempts', async () => {
     const app = express();
     app.use(express.json());
@@ -193,6 +255,23 @@ describe('route wiring with RATE_LIMIT_ENABLED=true', () => {
     }
     await request(app).post('/api/panic-button').set('x-test-user', 'CIT-a').send(sos).expect(429);
     await request(app).post('/api/panic-button').set('x-test-user', 'CIT-b').send(sos).expect(201);
+  });
+
+  it('POST /auth/dev/login: the limit is per requested sub, not a global quota for the BFF IP', async () => {
+    const tokenIssuer = {
+      issueAccessToken: async () => ({ access_token: 't', token_type: 'Bearer', expires_in: 900 }),
+    };
+    const app = createApp(mockKafka, mockRepo, {
+      authenticate: (req, res, next) => next(),
+      devAuthRouter: createDevAuthRoutes(tokenIssuer),
+    });
+
+    for (let i = 0; i < 10; i += 1) {
+      await request(app).post('/auth/dev/login').send({ sub: 'CIT-JuanPanico' }).expect(200);
+    }
+    await request(app).post('/auth/dev/login').send({ sub: 'CIT-JuanPanico' }).expect(429);
+    await request(app).post('/auth/dev/login').send({ sub: 'CIT-LuciaTranquila' }).expect(200);
+    await request(app).post('/auth/dev/login').send({ sub: 'U000042' }).expect(200);
   });
 
   it('POST /auth/login: successful logins do not lock the IP out', async () => {
