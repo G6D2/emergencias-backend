@@ -82,6 +82,46 @@ function parseOfficerScope(scope, { isOfficerOnly, statuses }) {
   return scope;
 }
 
+// Rol de quien hizo cada cambio del historial, para el ciudadano. `actor`
+// guarda el sub del token (DISP-…, el sub LDAP, of-001) o el actor fijo de
+// otro módulo o de un job (eda:reclamos, eda:espacios, sistema:expiracion).
+// Fuera de esos, la transición dice el rol: cada una la habilita uno solo en
+// las rutas. Un actor que no encaja en nada queda en null.
+const SYSTEM_ACTOR = /^(eda|sistema):/;
+const STAFF_ROLE_BY_STATUS = Object.freeze({
+  VALIDATED: 'dispatcher',
+  DISPATCHED: 'dispatcher',
+  DISCARDED: 'dispatcher',
+  CLOSED: 'dispatcher',
+  EN_ROUTE: 'oficial',
+  ON_SCENE: 'oficial',
+  RESOLVED: 'oficial',
+});
+// assignOfficer deja "Assigned officer of-001": lleva el id del oficial.
+const ASSIGNED_OFFICER_REASON = /^Assigned officer\s/;
+
+function forCitizenHistoryEntry(entry, citizenSub) {
+  if (!entry.actor || entry.actor === citizenSub) return entry;
+  const isAssignment = typeof entry.reason === 'string' && ASSIGNED_OFFICER_REASON.test(entry.reason);
+  return {
+    ...entry,
+    actor: SYSTEM_ACTOR.test(entry.actor) ? 'sistema' : (STAFF_ROLE_BY_STATUS[entry.newStatus] || null),
+    reason: isAssignment ? 'Se asignó un oficial' : entry.reason,
+  };
+}
+
+// Lo que recibe el ciudadano: sin campos operativos y sin ids del personal.
+// El oficial asignado le llega por nombre (assignedOfficer) y no por id; en
+// el historial, cada cambio ajeno le llega con el rol y no con el sub.
+function forCitizen(emergency, citizenSub) {
+  const view = withoutOperationalFields(emergency);
+  if (view.assignedOfficerId) view.assignedOfficerId = null;
+  if (Array.isArray(view.statusHistory)) {
+    view.statusHistory = view.statusHistory.map((entry) => forCitizenHistoryEntry(entry, citizenSub));
+  }
+  return view;
+}
+
 class EmergencyController {
   constructor(emergencyRepository) {
     this.emergencyRepository = emergencyRepository;
@@ -148,7 +188,7 @@ class EmergencyController {
     if (isOfficerOnly) {
       data = emergencies.map((emergency) => forOfficer(emergency, user.sub));
     } else if (!isDispatcher) {
-      data = emergencies.map(withoutOperationalFields);
+      data = emergencies.map((emergency) => forCitizen(emergency, user?.sub));
     }
 
     return {
@@ -200,7 +240,7 @@ class EmergencyController {
       await this.recordReadAccess(id, user);
     }
 
-    const visibleDetail = userHasGroup(user, GROUPS.DISPATCHER) ? detail : withoutOperationalFields(detail);
+    const visibleDetail = userHasGroup(user, GROUPS.DISPATCHER) ? detail : forCitizen(detail, user.sub);
 
     return {
       success: true,
@@ -537,4 +577,4 @@ class EmergencyController {
   }
 }
 
-module.exports = { EmergencyController };
+module.exports = { EmergencyController, forCitizen };

@@ -589,7 +589,7 @@ Lista paginada (`page`, `limit` hasta 100) con filtros por `status` (lista separ
 
 ### GET `/api/emergencies/:id`
 
-Detalle con `statusHistory` (transiciones con `actor` y `reason`), `incident` y `effectivePriority`. A diferencia del listado, el detalle no le recorta `incident`/`effectivePriority` al citizen dueño. `observations` y `reinforcementRequests` vuelven siempre vacíos (no hay registro de esas cosas).
+Detalle con `statusHistory` (transiciones con `actor` y `reason`), `incident` y `effectivePriority`. Al citizen dueño le llega recortado, igual que el listado: sin `incident`/`effectivePriority`/`dispatchPriority`/`priorityContext` y sin ids del personal. `assignedOfficerId` viene en `null`, acá y en su listado, aunque `assignedOfficer` (el nombre) sí llega. En el historial, el `actor` de cada cambio ajeno viene como rol (`dispatcher`, `oficial` o `sistema`) en vez del `sub`, y el motivo de la asignación llega como «Se asignó un oficial». Sus propias cancelaciones conservan su `sub`. `observations` y `reinforcementRequests` vuelven siempre vacíos (no hay registro de esas cosas).
 
 ### Cambios de estado (dispatcher)
 

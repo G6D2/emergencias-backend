@@ -5,7 +5,7 @@ const { scrubFreeText } = require('../security/pii-scrub');
 const { buildEmergencyCreatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { severityForType } = require('../domain/severity');
-const { EmergencyController } = require('./emergency.controller');
+const { EmergencyController, forCitizen } = require('./emergency.controller');
 
 const MIN_LATITUDE = -90;
 const MAX_LATITUDE = 90;
@@ -145,7 +145,9 @@ class PanicButtonController {
     return {
       statusCode: result.statusCode,
       replayed: result.replayed,
-      body: createdResponse(result.emergency),
+      // Si ya la despacharon, la repetida trae al oficial: pasa por la misma
+      // vista del ciudadano que el detalle (sin su id).
+      body: createdResponse(result.replayed ? forCitizen(result.emergency, user.sub) : result.emergency),
     };
   }
 
