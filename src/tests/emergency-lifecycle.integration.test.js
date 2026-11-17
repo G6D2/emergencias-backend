@@ -89,7 +89,7 @@ describe('camino feliz: pánico → validate → assign → en-route → on-scen
     expect(await h.officerStatus(OFFICER_ID)).toBe('disponible');
   });
 
-  it('el detalle por HTTP muestra el mismo historial al dispatcher y al dueño; otro ciudadano recibe 404', async () => {
+  it('el detalle por HTTP muestra el historial al dispatcher con los sub y al dueño con los roles; otro ciudadano recibe 404', async () => {
     const asDispatcher = expectStatus(
       await h.call('get', `/api/emergencies/${run.id}`, 'dispatcher'), 200, 'detalle dispatcher'
     );
@@ -101,8 +101,25 @@ describe('camino feliz: pánico → validate → assign → en-route → on-scen
       ['RESOLVED', OFFICER_ID],
       ['CLOSED', h.identities.dispatcher.sub],
     ]);
+    expect(asDispatcher.body.data.assignedOfficerId).toBe(OFFICER_ID);
 
-    await h.call('get', `/api/emergencies/${run.id}`, 'citizen').expect(200);
+    // El dueño ve el mismo historial, pero sin los ids del personal.
+    const asCitizen = expectStatus(
+      await h.call('get', `/api/emergencies/${run.id}`, 'citizen'), 200, 'detalle ciudadano'
+    );
+    expect(asCitizen.body.data.statusHistory.map((entry) => [entry.newStatus, entry.actor, entry.reason])).toEqual([
+      ['VALIDATED', 'dispatcher', null],
+      ['DISPATCHED', 'dispatcher', 'Se asignó un oficial'],
+      ['EN_ROUTE', 'oficial', null],
+      ['ON_SCENE', 'oficial', null],
+      ['RESOLVED', 'oficial', null],
+      ['CLOSED', 'dispatcher', null],
+    ]);
+    expect(asCitizen.body.data).toMatchObject({ assignedOfficerId: null, assignedOfficer: 'Oficial Carlos Gómez' });
+    const citizenBody = JSON.stringify(asCitizen.body);
+    expect(citizenBody).not.toContain(h.identities.dispatcher.sub);
+    expect(citizenBody).not.toContain(OFFICER_ID);
+
     await h.call('get', `/api/emergencies/${run.id}`, 'otherCitizen').expect(404);
   });
 

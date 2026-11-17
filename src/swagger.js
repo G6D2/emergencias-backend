@@ -123,7 +123,8 @@ const options = {
               nullable: true,
               example: null,
               description: 'Id del oficial asignado (catálogo de /api/officers). null hasta el despacho. '
-                + 'Al devolver (return), cancelar o cerrar, el oficial vuelve a disponible pero el id queda en la fila.',
+                + 'Al devolver (return), cancelar o cerrar, el oficial vuelve a disponible pero el id queda en la fila. '
+                + 'Al citizen le llega siempre null: ve el nombre (assignedOfficer), no el id.',
             },
             assignedOfficer: {
               type: 'string',
@@ -320,9 +321,17 @@ const options = {
               type: 'string',
               nullable: true,
               example: 'D000007',
-              description: 'Claim sub del JWT de quien hizo la transición',
+              description: 'Claim sub del JWT de quien hizo la transición, o el actor fijo del módulo o job '
+                + '(eda:reclamos, eda:espacios, sistema:expiracion). Al citizen le llega el rol (dispatcher, '
+                + 'oficial o sistema) en vez del sub, salvo en los cambios que hizo él (cancelar).',
             },
-            reason: { type: 'string', nullable: true, example: 'Confirmado por operador' },
+            reason: {
+              type: 'string',
+              nullable: true,
+              example: 'Confirmado por operador',
+              description: 'Al citizen, el de la asignación ("Assigned officer of-001") le llega como '
+                + '"Se asignó un oficial", sin el id.',
+            },
             createdAt: { type: 'string', format: 'date-time' },
           },
         },

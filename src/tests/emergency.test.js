@@ -1,6 +1,7 @@
 const request = require('supertest');
 const { createApp } = require('../app');
 const { NotFoundError } = require('../errors/app-errors');
+const { forCitizen } = require('../controllers/emergency.controller');
 
 const mockKafkaService = {
   publishEvent: async () => {},
@@ -600,6 +601,133 @@ describe('GET /api/emergencies/:id — recorte para citizen y auditoría', () =>
     await request(app).get('/api/emergencies').expect(200);
 
     expect(repo.recordAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('El citizen no recibe los ids del personal', () => {
+  const OFFICER_NAME = 'Oficial Carlos Gómez';
+  const at = (minute) => `2026-11-17T10:${String(minute).padStart(2, '0')}:00.000Z`;
+  const entry = (id, previousStatus, newStatus, actor, reason = null) => ({
+    id, emergencyId: DETAIL_UUID, previousStatus, newStatus, actor, reason, createdAt: at(id),
+  });
+  // Pasó por el dispatcher, el oficial y el job de expiración, con el actor
+  // y el motivo tal como quedan en emergency_status_history.
+  const STAFF_HISTORY = [
+    entry(1, 'PENDING', 'VALIDATED', DISPATCHER.sub),
+    entry(2, 'VALIDATED', 'DISPATCHED', DISPATCHER.sub, `Assigned officer ${OFFICER_1.sub}`),
+    entry(3, 'DISPATCHED', 'EN_ROUTE', OFFICER_1.sub),
+    entry(4, 'EN_ROUTE', 'ON_SCENE', OFFICER_1.sub),
+    entry(5, 'ON_SCENE', 'RESOLVED', OFFICER_1.sub),
+    entry(6, 'RESOLVED', 'CLOSED', 'sistema:expiracion', 'Expirada: sin cambios de estado en 72 h'),
+  ];
+
+  function repoWithHistory(statusHistory) {
+    const detail = {
+      id: DETAIL_UUID,
+      userId: CITIZEN_A.sub,
+      status: statusHistory[statusHistory.length - 1].newStatus,
+      severity: 'high',
+      assignedOfficerId: OFFICER_1.sub,
+      assignedOfficer: OFFICER_NAME,
+    };
+    return createRepositoryWithDetail({
+      findDetailById: async (id) => (id === DETAIL_UUID ? { ...detail, statusHistory } : null),
+      findPage: async () => ({ emergencies: [detail], total: 1 }),
+    });
+  }
+
+  const actorsAndReasons = (body) => body.data.statusHistory.map((e) => [e.newStatus, e.actor, e.reason]);
+
+  it('en el detalle recibe el rol en vez del sub del dispatcher y del oficial, y el oficial sin id', async () => {
+    const app = createTestApp(CITIZEN_A, repoWithHistory(STAFF_HISTORY));
+
+    const res = await request(app).get(`/api/emergencies/${DETAIL_UUID}`).expect(200);
+
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain(DISPATCHER.sub);
+    expect(body).not.toContain(OFFICER_1.sub);
+    expect(actorsAndReasons(res.body)).toEqual([
+      ['VALIDATED', 'dispatcher', null],
+      ['DISPATCHED', 'dispatcher', 'Se asignó un oficial'],
+      ['EN_ROUTE', 'oficial', null],
+      ['ON_SCENE', 'oficial', null],
+      ['RESOLVED', 'oficial', null],
+      ['CLOSED', 'sistema', 'Expirada: sin cambios de estado en 72 h'],
+    ]);
+    expect(res.body.data.assignedOfficerId).toBeNull();
+    expect(res.body.data.assignedOfficer).toBe(OFFICER_NAME);
+    expect(res.body.data.statusHistory[0]).toMatchObject({ id: 1, previousStatus: 'PENDING', createdAt: at(1) });
+  });
+
+  it('el dispatcher sí recibe el sub de cada actor, el motivo original y el id del oficial', async () => {
+    const app = createTestApp(DISPATCHER, repoWithHistory(STAFF_HISTORY));
+
+    const res = await request(app).get(`/api/emergencies/${DETAIL_UUID}`).expect(200);
+
+    expect(actorsAndReasons(res.body)).toEqual(
+      STAFF_HISTORY.map((e) => [e.newStatus, e.actor, e.reason])
+    );
+    expect(res.body.data.assignedOfficerId).toBe(OFFICER_1.sub);
+  });
+
+  it('su propia cancelación conserva su sub; la de otro módulo llega como sistema', async () => {
+    const own = repoWithHistory([
+      entry(1, 'PENDING', 'VALIDATED', DISPATCHER.sub),
+      entry(2, 'VALIDATED', 'CANCELLED', CITIZEN_A.sub, 'Falsa alarma'),
+    ]);
+    const byModule = repoWithHistory([entry(1, 'PENDING', 'CANCELLED', 'eda:espacios', 'Evento cancelado')]);
+
+    const ownRes = await request(createTestApp(CITIZEN_A, own)).get(`/api/emergencies/${DETAIL_UUID}`).expect(200);
+    const moduleRes = await request(createTestApp(CITIZEN_A, byModule)).get(`/api/emergencies/${DETAIL_UUID}`).expect(200);
+
+    expect(actorsAndReasons(ownRes.body)).toEqual([
+      ['VALIDATED', 'dispatcher', null],
+      ['CANCELLED', CITIZEN_A.sub, 'Falsa alarma'],
+    ]);
+    expect(actorsAndReasons(moduleRes.body)).toEqual([['CANCELLED', 'sistema', 'Evento cancelado']]);
+  });
+
+  it('GET /api/panic-button/:id le da el mismo recorte (delega en el detalle)', async () => {
+    const app = createTestApp(CITIZEN_A, repoWithHistory(STAFF_HISTORY));
+
+    const res = await request(app).get(`/api/panic-button/${DETAIL_UUID}`).expect(200);
+
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain(DISPATCHER.sub);
+    expect(body).not.toContain(OFFICER_1.sub);
+    expect(res.body.data.statusHistory.map((e) => e.actor))
+      .toEqual(['dispatcher', 'dispatcher', 'oficial', 'oficial', 'oficial', 'sistema']);
+  });
+
+  it('en el listado recibe el nombre del oficial pero no su id; el dispatcher recibe los dos', async () => {
+    const repo = repoWithHistory(STAFF_HISTORY);
+
+    const asCitizen = await request(createTestApp(CITIZEN_A, repo)).get('/api/emergencies').expect(200);
+    const asDispatcher = await request(createTestApp(DISPATCHER, repo)).get('/api/emergencies').expect(200);
+
+    expect(JSON.stringify(asCitizen.body)).not.toContain(OFFICER_1.sub);
+    expect(asCitizen.body.data[0]).toMatchObject({ assignedOfficerId: null, assignedOfficer: OFFICER_NAME });
+    expect(asDispatcher.body.data[0]).toMatchObject({ assignedOfficerId: OFFICER_1.sub, assignedOfficer: OFFICER_NAME });
+  });
+
+  describe('forCitizen', () => {
+    it('deja sin tocar una emergencia sin oficial ni historial', () => {
+      const emergency = { id: DETAIL_UUID, userId: CITIZEN_A.sub, assignedOfficerId: null, assignedOfficer: null };
+
+      expect(forCitizen(emergency, CITIZEN_A.sub)).toEqual(emergency);
+    });
+
+    it('un actor vacío queda como está y uno que no encaja en ningún rol queda en null', () => {
+      const view = forCitizen({
+        id: DETAIL_UUID,
+        statusHistory: [
+          entry(1, 'PENDING', 'VALIDATED', null),
+          entry(2, 'VALIDATED', 'CANCELLED', 'DISP-999'),
+        ],
+      }, CITIZEN_A.sub);
+
+      expect(view.statusHistory.map((e) => e.actor)).toEqual([null, null]);
+    });
   });
 });
 

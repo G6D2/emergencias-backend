@@ -124,6 +124,26 @@ describe('POST /api/panic-button con Idempotency-Key (repository en memoria)', (
     });
   });
 
+  it('si ya la despacharon, el reintento muestra el estado actual sin el id del oficial', async () => {
+    const repository = createRepository();
+    const app = appFor(repository);
+
+    const first = await request(app).post('/api/panic-button').set('Idempotency-Key', KEY)
+      .send({ location: LOCATION }).expect(201);
+    const saved = repository.emergencies.get(first.body.emergencyId);
+    repository.emergencies.set(saved.id, {
+      ...saved, status: 'DISPATCHED', assignedOfficerId: 'of-001', assignedOfficer: 'Oficial Carlos Gómez',
+    });
+    const retry = await request(app).post('/api/panic-button').set('Idempotency-Key', KEY)
+      .send({ location: LOCATION }).expect(201);
+
+    expect(retry.headers['idempotent-replayed']).toBe('true');
+    expect(retry.body.data).toMatchObject({
+      id: saved.id, status: 'DISPATCHED', assignedOfficerId: null, assignedOfficer: 'Oficial Carlos Gómez',
+    });
+    expect(JSON.stringify(retry.body)).not.toContain('of-001');
+  });
+
   it('la misma clave de otro usuario es otra alta', async () => {
     const repository = createRepository();
 
