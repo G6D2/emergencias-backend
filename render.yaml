@@ -175,12 +175,13 @@ services:
       # `npm run backfill:vinculos-contexto` (Shell de Render).
       - key: EVENTO_VINCULO_CONTEXTO_ENABLED
         value: "false"
-      # Confirmación por el EDA de cada alerta climática recibida
-      # (com.citypass.emergencias.CriticidadClimaticaConfirmada). El tipo está
-      # registrado en el catálogo del gateway; si las filas quedan FAILED,
-      # pasarla a "false".
+      # Confirmación de la alerta climática por el EDA: Emergencias publica
+      # com.citypass.emergencias.CriticidadClimaticaConfirmada al recibir la de
+      # Espacios. Apagada en producción (decisión de Producto del 18/11): se
+      # prende cuando Analítica confirme que la ingiere y el tipo esté en el
+      # catálogo del gateway (si no está, cada fila del outbox queda FAILED).
       - key: CONFIRMACION_CLIMA_ENABLED
-        value: "true"
+        value: "false"
 
       # Clave AES-256-GCM de ubicaciones (openssl rand -base64 32). Sin esto el
       # servicio no arranca. Para rotar: ver README (Seguridad de datos).
