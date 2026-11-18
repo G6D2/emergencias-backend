@@ -1,8 +1,9 @@
 // Alerta climática de punta a punta (issues #80 y #88; ADR "Responder a las
 // alertas climáticas de Espacios"): una CriticidadClimaticaConfirmada ALTA o
-// CRITICA de Espacios deja un contexto de zona por cada punto de la alerta,
-// con el radio del nivel (ALTA 500 m, CRITICA 1000 m), y una emergencia
-// PREVENTIVA con causa EVENTO_CLIMATICO. BAJA y MEDIA no generan nada. La
+// CRITICA de Espacios deja un contexto de zona por cada barrio de la alerta,
+// con el círculo que cubre el barrio (sin barrios, uno por punto con el radio
+// del nivel: ALTA 500 m, CRITICA 1000 m), que vincula también las emergencias
+// ya abiertas, y una emergencia PREVENTIVA con causa EVENTO_CLIMATICO. BAJA y MEDIA no generan nada. La
 // CriticidadClimaticaFinalizada da de baja los contextos y cancela la
 // emergencia que nadie despachó, aunque llegue antes o a la vez que la
 // confirmación.
@@ -37,6 +38,7 @@ const {
   createPublicarConfirmacionClimaHandler,
 } = require('../../listeners/alerta-climatica/handlers/confirmacion-clima.handler');
 const { grupoDeLaAlerta } = require('../../domain/alerta-climatica');
+const { zonaDelBarrio } = require('../../domain/barrio');
 const { createLocationCrypto } = require('../../security/location-crypto');
 const { createLifecycleHarness } = require('../helpers/emergency-lifecycle');
 
@@ -54,6 +56,22 @@ const CENTENARIO = { latitude: -34.6066, longitude: -58.4355 };
 const MATADEROS = { latitude: -34.6596, longitude: -58.5026 };
 const A_300_M = 0.0027;
 const A_800_M = 0.0072;
+// Prueba de la zona por barrio (PALERMO, círculo de ~3,8 km): un punto de la
+// alerta en Palermo norte; Palermo Hollywood queda en el barrio a ~3 km de
+// ese punto; Recoleta y Colegiales caen dentro del círculo pero son otros
+// barrios; Villa Crespo queda fuera del círculo.
+const PALERMO_NORTE = { latitude: -34.5560, longitude: -58.4150 };
+const PALERMO_HOLLYWOOD = { latitude: -34.5850, longitude: -58.4330 };
+const RECOLETA = { latitude: -34.5869, longitude: -58.3930 };
+const COLEGIALES = { latitude: -34.5745, longitude: -58.4500 };
+const VILLA_CRESPO = { latitude: -34.5960, longitude: -58.4400 };
+// Pruebas de las emergencias que ya estaban abiertas, en zonas que ninguna
+// otra alerta del archivo alcanza: SAAVEDRA (círculo de ~2,6 km), con Coghlan
+// como barrio vecino dentro del círculo, y un punto en Villa Lugano.
+const PARQUE_SAAVEDRA = { latitude: -34.5546, longitude: -58.4870 };
+const SAAVEDRA_ESTE = { latitude: -34.5560, longitude: -58.4790 };
+const COGHLAN = { latitude: -34.5600, longitude: -58.4750 };
+const VILLA_LUGANO = { latitude: -34.6760, longitude: -58.4730 };
 
 const HORA = 60 * 60 * 1000;
 
@@ -132,10 +150,21 @@ async function emergenciasDe(alertaId) {
   return rows;
 }
 
-async function dispatchPriorityDe(location) {
-  const id = await h.createPending({ emergencyType: 'MEDICA', location });
+async function detalleDe(id) {
   const res = await h.call('get', `/api/emergencies/${id}`, 'dispatcher');
   return res.body.data;
+}
+
+async function dispatchPriorityDe(location) {
+  return detalleDe(await h.createPending({ emergencyType: 'MEDICA', location }));
+}
+
+async function vinculosDe(emergencyId) {
+  const { rows } = await pool.query(
+    'SELECT contexto_id FROM emergencia_contexto_zona WHERE emergency_id = $1',
+    [emergencyId]
+  );
+  return rows;
 }
 
 async function esperarLocksEnEspera(cantidad) {
@@ -165,7 +194,10 @@ beforeAll(async () => {
     CANCELAR_EMERGENCIA_CLIMATICA,
     createCancelarEmergenciaClimaticaHandler({ emergencyRepository, contextoZonaRepository, topic: UPDATED_TOPIC })
   );
-  factory.register(REGISTRAR_CONTEXTOS_CLIMATICOS, createRegistrarContextosClimaticosHandler({ contextoZonaRepository }));
+  factory.register(
+    REGISTRAR_CONTEXTOS_CLIMATICOS,
+    createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository })
+  );
   factory.register(DAR_DE_BAJA_CONTEXTOS_CLIMATICOS, createDarDeBajaContextosClimaticosHandler({ contextoZonaRepository }));
   // Confirmación por el EDA, encendida para este archivo y a un topic propio.
   process.env.CONFIRMACION_CLIMA_ENABLED = 'true';
@@ -196,22 +228,24 @@ afterAll(async () => {
 });
 
 describe('alerta climática (integration)', () => {
-  it('la confirmación ALTA deja un contexto de 500 m por punto y una emergencia climática', async () => {
+  it('la confirmación ALTA deja un contexto por barrio, con el círculo del barrio, y una emergencia climática', async () => {
     const evento = confirmacion();
     await confirmada.onMessage(buildMessage(evento));
     const { alertaId } = evento.data;
 
     const contextos = await contextosDe(alertaId);
     expect(contextos.map((c) => c.referenciaExterna)).toEqual([`${alertaId}#0`, `${alertaId}#1`]);
+    const sanNicolas = zonaDelBarrio('SAN NICOLAS');
     expect(contextos[0]).toMatchObject({
-      latitud: OBELISCO.latitude,
-      longitud: OBELISCO.longitude,
-      radioMetros: 500,
+      latitud: sanNicolas.latitud,
+      longitud: sanNicolas.longitud,
+      radioMetros: sanNicolas.radioMetros,
+      barrios: ['SAN NICOLAS'],
       descripcion: 'Alerta climática ALTA: tormenta fuerte',
       causationId: evento.metadata.eventId,
       dadoDeBajaEn: null,
     });
-    expect(contextos[1]).toMatchObject({ latitud: BELGRANO.latitude, radioMetros: 500 });
+    expect(contextos[1]).toMatchObject({ barrios: ['BELGRANO'], radioMetros: zonaDelBarrio('BELGRANO').radioMetros });
     expect(contextos[0].vigenteHasta.getTime()).toBe(evento.data.vigenciaHasta);
 
     const [emergencia] = await emergenciasDe(alertaId);
@@ -244,8 +278,8 @@ describe('alerta climática (integration)', () => {
     expect(vinculos.rowCount).toBe(0);
   });
 
-  it('la confirmación CRITICA crea la emergencia critical y contextos de 1000 m', async () => {
-    const evento = confirmacion({ nivelCriticidad: 'CRITICA' });
+  it('la confirmación CRITICA sin barrios crea la emergencia critical y contextos de 1000 m por punto', async () => {
+    const evento = confirmacion({ nivelCriticidad: 'CRITICA', barrios: [] });
     await confirmada.onMessage(buildMessage(evento));
 
     const contextos = await contextosDe(evento.data.alertaId);
@@ -311,14 +345,16 @@ describe('alerta climática (integration)', () => {
     expect(await emergenciasDe(evento.data.alertaId)).toHaveLength(0);
   });
 
-  it('el radio depende del nivel: CRITICA alcanza a 800 m, ALTA solo a 300 m', async () => {
+  it('sin barrios, el radio depende del nivel: CRITICA alcanza a 800 m, ALTA solo a 300 m', async () => {
     const critica = confirmacion({
       nivelCriticidad: 'CRITICA',
       ubicaciones: [{ latitud: CENTENARIO.latitude, longitud: CENTENARIO.longitude }],
+      barrios: [],
     });
     const alta = confirmacion({
       nivelCriticidad: 'ALTA',
       ubicaciones: [{ latitud: MATADEROS.latitude, longitud: MATADEROS.longitude }],
+      barrios: [],
     });
     await confirmada.onMessage(buildMessage(critica));
     await confirmada.onMessage(buildMessage(alta));
@@ -339,6 +375,100 @@ describe('alerta climática (integration)', () => {
     const altaA800 = await dispatchPriorityDe(alNorte(MATADEROS, A_800_M));
     expect(altaA800.dispatchPriority).toBe('high');
     expect(altaA800.priorityContext).toBeNull();
+  });
+
+  it('zona por barrio: sube en todo el barrio, aunque esté lejos del punto, y no en los barrios vecinos del círculo', async () => {
+    const evento = confirmacion({
+      ubicaciones: [{ latitud: PALERMO_NORTE.latitude, longitud: PALERMO_NORTE.longitude }],
+      barrios: ['Palermo'],
+    });
+    await confirmada.onMessage(buildMessage(evento));
+    const palermo = zonaDelBarrio('PALERMO');
+
+    // En Palermo, a ~3 km del punto de la alerta: con el radio por punto no subía.
+    const enElBarrio = await dispatchPriorityDe(PALERMO_HOLLYWOOD);
+    expect(enElBarrio.barrio).toBe('PALERMO');
+    expect(enElBarrio.dispatchPriority).toBe('critical');
+    expect(enElBarrio.priorityContext).toMatchObject({
+      tipo: 'ALERTA_CLIMATICA',
+      referenciaExterna: `${evento.data.alertaId}#0`,
+      radioMetros: palermo.radioMetros,
+    });
+
+    // Dentro del círculo de Palermo pero de otro barrio: no sube.
+    for (const vecino of [RECOLETA, COLEGIALES]) {
+      const emergencia = await dispatchPriorityDe(vecino);
+      expect(emergencia.barrio).not.toBe('PALERMO');
+      expect(emergencia.dispatchPriority).toBe('high');
+      expect(emergencia.priorityContext).toBeNull();
+    }
+
+    // Fuera del círculo: no sube.
+    const afuera = await dispatchPriorityDe(VILLA_CRESPO);
+    expect(afuera.dispatchPriority).toBe('high');
+    expect(afuera.priorityContext).toBeNull();
+  });
+
+  it('la emergencia que ya estaba abierta en el barrio sube al llegar la alerta y vuelve con la finalización', async () => {
+    const abierta = await h.createPending({ emergencyType: 'MEDICA', location: PARQUE_SAAVEDRA });
+    const vecina = await h.createPending({ emergencyType: 'MEDICA', location: COGHLAN });
+    const cerrada = await h.createPending({ emergencyType: 'MEDICA', location: SAAVEDRA_ESTE });
+    await pool.query("UPDATE emergencies SET status = 'CANCELLED' WHERE id = $1", [cerrada]);
+    expect((await detalleDe(abierta)).dispatchPriority).toBe('high');
+
+    const evento = confirmacion({
+      ubicaciones: [{ latitud: PARQUE_SAAVEDRA.latitude, longitud: PARQUE_SAAVEDRA.longitude }],
+      barrios: ['SAAVEDRA'],
+    });
+    await confirmada.onMessage(buildMessage(evento));
+    const { alertaId } = evento.data;
+
+    const elevada = await detalleDe(abierta);
+    expect(elevada.barrio).toBe('SAAVEDRA');
+    expect(elevada.dispatchPriority).toBe('critical');
+    expect(elevada.priorityContext).toMatchObject({
+      tipo: 'ALERTA_CLIMATICA',
+      referenciaExterna: `${alertaId}#0`,
+      radioMetros: zonaDelBarrio('SAAVEDRA').radioMetros,
+    });
+
+    // De otro barrio, dentro del círculo de Saavedra: no se vincula.
+    const delVecino = await detalleDe(vecina);
+    expect(delVecino.barrio).toBe('COGHLAN');
+    expect(delVecino.dispatchPriority).toBe('high');
+    expect(await vinculosDe(vecina)).toHaveLength(0);
+    // Terminal: no se vincula.
+    expect(await vinculosDe(cerrada)).toHaveLength(0);
+    // La PREVENTIVA de la alerta tampoco.
+    const [preventiva] = await emergenciasDe(alertaId);
+    expect(await vinculosDe(preventiva.id)).toHaveLength(0);
+
+    // Una reentrega no duplica el vínculo.
+    await confirmada.onMessage(buildMessage(confirmacion({ ...evento.data })));
+    expect(await vinculosDe(abierta)).toHaveLength(1);
+
+    await finalizada.onMessage(buildMessage(finalizacion(alertaId)));
+    const despues = await detalleDe(abierta);
+    expect(despues.dispatchPriority).toBe('high');
+    expect(despues.priorityContext).toBeNull();
+  });
+
+  it('sin barrios, la emergencia que ya estaba abierta dentro del radio del punto sube; a 800 m no', async () => {
+    const dentro = await h.createPending({ emergencyType: 'MEDICA', location: alNorte(VILLA_LUGANO, A_300_M) });
+    const fuera = await h.createPending({ emergencyType: 'MEDICA', location: alNorte(VILLA_LUGANO, A_800_M) });
+
+    const evento = confirmacion({
+      ubicaciones: [{ latitud: VILLA_LUGANO.latitude, longitud: VILLA_LUGANO.longitude }],
+      barrios: [],
+    });
+    await confirmada.onMessage(buildMessage(evento));
+
+    const elevada = await detalleDe(dentro);
+    expect(elevada.dispatchPriority).toBe('critical');
+    expect(elevada.priorityContext).toMatchObject({ referenciaExterna: `${evento.data.alertaId}#0`, radioMetros: 500 });
+    const lejos = await detalleDe(fuera);
+    expect(lejos.dispatchPriority).toBe('high');
+    expect(lejos.priorityContext).toBeNull();
   });
 
   it('la finalización da de baja los contextos y cancela la emergencia sin despachar', async () => {

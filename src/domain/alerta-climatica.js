@@ -11,13 +11,18 @@
 //
 // Política por nivel (punto 2 del ADR). Solo ALTA y CRITICA son accionables,
 // igual que en Espacios:
-// - un contexto de zona ALERTA_CLIMATICA por cada punto de `ubicaciones`,
-//   con el radio del nivel (CRITICA 1000 m, ALTA 500 m, configurables);
+// - un contexto de zona ALERTA_CLIMATICA por cada barrio de la alerta, con
+//   el círculo que cubre el barrio (ver zonaDelBarrio en domain/barrio.js).
+//   Al vincular, la emergencia además tiene que ser de ese barrio, así el
+//   círculo no alcanza a los vecinos. Si la alerta no trae ningún barrio del
+//   catálogo, un contexto por cada punto de `ubicaciones`, con el radio del
+//   nivel (CRITICA 1000 m, ALTA 500 m, configurables);
 // - una emergencia PREVENTIVA por `alertaId` (causaTipo EVENTO_CLIMATICO),
 //   con la severidad del nivel.
 // BAJA y MEDIA no generan nada.
 
 const { CONTEXTO_TIPO, ORIGEN_ESPACIOS, puntoDelEvento } = require('./contexto-zona');
+const { zonaDelBarrio } = require('./barrio');
 
 const CAUSA_TIPO_CLIMA = 'EVENTO_CLIMATICO';
 
@@ -114,6 +119,34 @@ function barriosDeLaAlerta(data = {}) {
     : [];
 }
 
+// Zonas de la alerta, una por contexto: { indice, latitud, longitud,
+// radioMetros, barrio }.
+// - Por barrio: cada barrio de `barrios` que está en el catálogo, con su
+//   círculo y su nombre canónico. El índice es la posición en `barrios` (un
+//   barrio inválido se descarta sin correr el índice de los demás) y cada
+//   barrio va una sola vez.
+// - Por punto (si no queda ningún barrio válido): cada punto válido de
+//   `ubicaciones`, con el radio del nivel y barrio null.
+// El índice forma la referencia `<alertaId>#<índice>` y tiene que ser estable
+// entre reentregas del mismo evento.
+function zonasDeLaAlerta(data = {}, nivel = null, env = process.env) {
+  const barrios = Array.isArray(data.barrios) ? data.barrios : [];
+  const vistos = new Set();
+  const porBarrio = [];
+  barrios.forEach((nombre, indice) => {
+    const zona = typeof nombre === 'string' ? zonaDelBarrio(nombre) : null;
+    if (!zona || vistos.has(zona.barrio)) return;
+    vistos.add(zona.barrio);
+    porBarrio.push({
+      indice, latitud: zona.latitud, longitud: zona.longitud, radioMetros: zona.radioMetros, barrio: zona.barrio,
+    });
+  });
+  if (porBarrio.length > 0) return porBarrio;
+
+  const radioMetros = radioClimaMetros(nivel, env);
+  return ubicacionesDeLaAlerta(data).map(({ indice, punto }) => ({ indice, ...punto, radioMetros, barrio: null }));
+}
+
 // ---------------------------------------------------------------------------
 // Datos para mostrar la alerta (banner del tablero, GET
 // /api/contextos-zona/activos). No intervienen en la zona ni en la suba.
@@ -158,7 +191,8 @@ function etiquetaFenomeno(fenomeno) {
 }
 
 // Barrios de la alerta tal como los manda Espacios, sin repetidos y con tope.
-// Solo se muestran: la zona sigue siendo punto + radio.
+// La zona de los contextos no sale de acá sino de zonasDeLaAlerta, que solo
+// toma los barrios del catálogo.
 function barriosParaMostrar(data = {}) {
   const barrios = barriosDeLaAlerta(data).map((b) => b.slice(0, MAX_BARRIO_LENGTH));
   return [...new Set(barrios)].slice(0, MAX_BARRIOS);
@@ -189,26 +223,37 @@ function compararAlertas(a, b) {
   return a.alertaId.localeCompare(b.alertaId);
 }
 
+function barriosDelContexto(contexto) {
+  return Array.isArray(contexto.barrios) ? contexto.barrios.filter((b) => typeof b === 'string' && b) : [];
+}
+
 function alertaDesdeContexto(alertaId, contexto) {
+  const barrios = barriosDelContexto(contexto);
   return {
     alertaId,
     nivel: contexto.nivelCriticidad ?? null,
     fenomeno: contexto.fenomeno ?? null,
     fenomenoEtiqueta: etiquetaFenomeno(contexto.fenomeno),
-    barrios: Array.isArray(contexto.barrios) ? contexto.barrios : [],
+    barrios,
+    // BARRIOS: la suba es en los barrios de la alerta (cada uno con su
+    // círculo). PUNTOS: alrededor de los puntos, con el radio del nivel.
+    zona: barrios.length > 0 ? 'BARRIOS' : 'PUNTOS',
     vigenteDesde: contexto.vigenteDesde ?? null,
     vigenteHasta: contexto.vigenteHasta ?? null,
     enCurso: contexto.enCurso === true,
     puntos: 1,
-    radioMetros: contexto.radioMetros ?? null,
+    // Con zona por barrio cada contexto tiene el radio de su barrio: un solo
+    // número no describe la alerta.
+    radioMetros: barrios.length > 0 ? null : contexto.radioMetros ?? null,
     descripcion: contexto.descripcion ?? null,
   };
 }
 
-// Una entrada por alerta a partir de sus contextos activos (uno por punto).
-// Los puntos de una alerta se registran juntos, en la misma transacción y con
-// los mismos datos (nivel, fenómeno, barrios, ventana, radio): se toman del
-// primero y se cuentan los puntos. Primero las CRITICA, después por inicio.
+// Una entrada por alerta a partir de sus contextos activos (uno por barrio o
+// uno por punto). Los contextos de una alerta se registran juntos, en la
+// misma transacción y con los mismos datos (nivel, fenómeno, ventana): se
+// toman del primero, se cuentan los contextos (`puntos`) y se juntan los
+// barrios sin repetir. Primero las CRITICA, después por inicio.
 function resumirAlertasActivas(contextos = []) {
   const porAlerta = new Map();
   for (const contexto of contextos) {
@@ -220,6 +265,13 @@ function resumirAlertasActivas(contextos = []) {
     if (actual) {
       actual.puntos += 1;
       actual.enCurso = actual.enCurso || contexto.enCurso === true;
+      for (const barrio of barriosDelContexto(contexto)) {
+        if (!actual.barrios.includes(barrio)) actual.barrios.push(barrio);
+      }
+      if (actual.barrios.length > 0) {
+        actual.zona = 'BARRIOS';
+        actual.radioMetros = null;
+      }
     } else {
       porAlerta.set(alertaId, alertaDesdeContexto(alertaId, contexto));
     }
@@ -238,6 +290,7 @@ module.exports = {
   alertaIdValido,
   fenomenoLegible,
   ubicacionesDeLaAlerta,
+  zonasDeLaAlerta,
   referenciaDeUbicacion,
   grupoDeLaAlerta,
   barriosDeLaAlerta,

@@ -4,8 +4,11 @@ const {
   matchBarrioFromText,
   resolveBarrioFromPoint,
   resolveBarrio,
+  zonaDelBarrio,
+  NEAREST_BARRIO_MAX_METERS,
   _resetCatalogCache,
 } = require('../domain/barrio');
+const { haversineDistanceMeters } = require('../domain/rule-based-grouper');
 
 describe('domain/barrio — catálogo oficial CABA', () => {
   it('expone los 48 barrios oficiales', () => {
@@ -62,6 +65,67 @@ describe('domain/barrio — catálogo oficial CABA', () => {
     })).toBeNull();
 
     expect(resolveBarrio({})).toBeNull();
+  });
+});
+
+describe('domain/barrio — zona circular de cada barrio', () => {
+  const geojson = JSON.parse(fs.readFileSync(require.resolve('../domain/data/barrios-caba.geojson'), 'utf8'));
+  const verticesDe = (nombre) => {
+    const { geometry } = geojson.features.find((f) => f.properties.barrio === nombre);
+    const anillos = geometry.type === 'Polygon' ? [geometry.coordinates[0]] : geometry.coordinates.map((p) => p[0]);
+    return anillos.flat();
+  };
+
+  it('los 48 barrios tienen centro y radio', () => {
+    for (const nombre of listBarrios()) {
+      const zona = zonaDelBarrio(nombre);
+      expect(zona).toMatchObject({ barrio: nombre });
+      expect(Number.isFinite(zona.latitud) && Number.isFinite(zona.longitud)).toBe(true);
+      expect(Number.isInteger(zona.radioMetros)).toBe(true);
+    }
+  });
+
+  it('el círculo cubre todos los vértices del barrio, con el margen de cercanía', () => {
+    for (const nombre of listBarrios()) {
+      const { latitud, longitud, radioMetros } = zonaDelBarrio(nombre);
+      const masLejano = Math.max(...verticesDe(nombre).map(([lng, lat]) => haversineDistanceMeters(
+        { latitude: latitud, longitude: longitud }, { latitude: lat, longitude: lng }
+      )));
+      expect(radioMetros - NEAREST_BARRIO_MAX_METERS).toBeGreaterThanOrEqual(masLejano);
+      expect(radioMetros - NEAREST_BARRIO_MAX_METERS).toBeLessThan(masLejano + 1);
+    }
+  });
+
+  it('el centro es el promedio de los vértices, sin contar dos veces el de cierre', () => {
+    const vertices = verticesDe('COGHLAN').slice(0, -1);
+    const zona = zonaDelBarrio('COGHLAN');
+    expect(zona.longitud).toBeCloseTo(vertices.reduce((s, [lng]) => s + lng, 0) / vertices.length, 10);
+    expect(zona.latitud).toBeCloseTo(vertices.reduce((s, [, lat]) => s + lat, 0) / vertices.length, 10);
+  });
+
+  it('el más chico es COGHLAN y los más grandes rondan los 4 km', () => {
+    const radios = listBarrios().map((nombre) => zonaDelBarrio(nombre)).sort((a, b) => a.radioMetros - b.radioMetros);
+    expect(radios[0].barrio).toBe('COGHLAN');
+    expect(radios[0].radioMetros).toBeGreaterThan(800);
+    expect(radios[0].radioMetros).toBeLessThan(1000);
+    expect(radios.slice(-3).map((z) => z.barrio).sort()).toEqual(['BELGRANO', 'PALERMO', 'RECOLETA']);
+    for (const zona of radios.slice(-3)) {
+      expect(zona.radioMetros).toBeGreaterThan(3700);
+      expect(zona.radioMetros).toBeLessThan(4200);
+    }
+  });
+
+  it('acepta el nombre sin tildes ni mayúsculas; fuera del catálogo es null', () => {
+    expect(zonaDelBarrio('nunez')).toEqual(zonaDelBarrio('NUÑEZ'));
+    expect(zonaDelBarrio('palermo').barrio).toBe('PALERMO');
+    expect(zonaDelBarrio('Narnia')).toBeNull();
+    expect(zonaDelBarrio('')).toBeNull();
+    expect(zonaDelBarrio(null)).toBeNull();
+  });
+
+  it('se calcula una vez: devuelve el mismo objeto congelado', () => {
+    expect(zonaDelBarrio('PALERMO')).toBe(zonaDelBarrio('Palermo'));
+    expect(Object.isFrozen(zonaDelBarrio('PALERMO'))).toBe(true);
   });
 });
 

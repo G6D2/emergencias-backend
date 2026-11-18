@@ -131,8 +131,9 @@ async function start() {
   outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
   // Alerta climática de Espacios (#80 y #88, ADR "Responder a las alertas
-  // climáticas de Espacios"): con nivel ALTA o CRITICA, contextos por punto
-  // con el radio del nivel y una emergencia PREVENTIVA por alerta. Los
+  // climáticas de Espacios"): con nivel ALTA o CRITICA, un contexto por barrio
+  // (o por punto, si la alerta no trae barrios) que vincula también las
+  // emergencias ya abiertas, y una emergencia PREVENTIVA por alerta. Los
   // listeners son opt-in (EDA_TOPIC_CRITICIDAD_CLIMATICA_*).
   outcomeFactory.register(
     CREAR_EMERGENCIA_CLIMATICA,
@@ -144,7 +145,7 @@ async function start() {
   );
   outcomeFactory.register(
     REGISTRAR_CONTEXTOS_CLIMATICOS,
-    createRegistrarContextosClimaticosHandler({ contextoZonaRepository })
+    createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository })
   );
   outcomeFactory.register(
     DAR_DE_BAJA_CONTEXTOS_CLIMATICOS,

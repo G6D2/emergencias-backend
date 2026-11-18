@@ -521,7 +521,7 @@ describe('EmergencyRepository.linkZoneContexts', () => {
     expect(executor.query.mock.calls[0][1]).toBeUndefined();
     const [insertSql, insertValues] = executor.query.mock.calls[1];
     expect(insertSql).toMatch(/INSERT INTO emergencia_contexto_zona \(emergency_id, contexto_id\)/);
-    expect(insertValues).toEqual(['e-1', ['ctx-cerca']]);
+    expect(insertValues).toEqual([['e-1'], ['ctx-cerca']]);
   });
 
   it('sin contextos que la alcancen no escribe nada', async () => {
@@ -538,6 +538,160 @@ describe('EmergencyRepository.linkZoneContexts', () => {
 
     await expect(repo.linkZoneContexts(executor, { id: 'e-3', latitude: null, longitude: null })).resolves.toEqual([]);
     await expect(repo.linkZoneContexts(executor, { id: 'e-4', ...CERCA, emergencyType: 'PREVENTIVA' })).resolves.toEqual([]);
+    expect(executor.query).not.toHaveBeenCalled();
+  });
+
+  describe('contexto con barrios (zona por barrio de una alerta climática)', () => {
+    // Un círculo grande que alcanza a CERCA, con un barrio cada uno.
+    const PALERMO_CIRCULO = { id: 'ctx-palermo', ...ROSEDAL, radio_metros: 4000, barrios: ['PALERMO'] };
+    const BELGRANO_CIRCULO = { id: 'ctx-belgrano', ...ROSEDAL, radio_metros: 4000, barrios: ['BELGRANO'] };
+
+    it('vincula solo si la emergencia es de uno de los barrios del contexto, además de estar en el círculo', async () => {
+      const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+      const executor = executorCon([PALERMO_CIRCULO, BELGRANO_CIRCULO, { id: 'ctx-evento', ...ROSEDAL, radio_metros: 500 }]);
+
+      const ids = await repo.linkZoneContexts(executor, { id: 'e-5', ...CERCA, emergencyType: 'MEDICA', barrio: 'PALERMO' });
+
+      expect(ids).toEqual(['ctx-palermo', 'ctx-evento']);
+      expect(executor.query.mock.calls[0][0]).toMatch(/c\.barrios/);
+    });
+
+    it('una emergencia de un barrio vecino dentro del círculo no se vincula', async () => {
+      const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+      const executor = executorCon([PALERMO_CIRCULO]);
+
+      await expect(repo.linkZoneContexts(executor, { id: 'e-6', ...CERCA, emergencyType: 'MEDICA', barrio: 'COLEGIALES' }))
+        .resolves.toEqual([]);
+      expect(executor.query).toHaveBeenCalledTimes(1);
+    });
+
+    it('una emergencia sin barrio (fuera de CABA) no entra en contextos por barrio, sí en los de solo radio', async () => {
+      const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+      const executor = executorCon([PALERMO_CIRCULO, { id: 'ctx-evento', ...ROSEDAL, radio_metros: 500, barrios: null }]);
+
+      await expect(repo.linkZoneContexts(executor, { id: 'e-7', ...CERCA, emergencyType: 'MEDICA' }))
+        .resolves.toEqual(['ctx-evento']);
+    });
+
+    it('un contexto con barrios vacíos vincula solo por distancia', async () => {
+      const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+      const executor = executorCon([{ id: 'ctx-vacio', ...ROSEDAL, radio_metros: 500, barrios: [] }]);
+
+      await expect(repo.linkZoneContexts(executor, { id: 'e-8', ...CERCA, emergencyType: 'MEDICA', barrio: 'PALERMO' }))
+        .resolves.toEqual(['ctx-vacio']);
+    });
+
+    it('el círculo sigue mandando: de su barrio pero fuera del radio, no se vincula', async () => {
+      const repo = new EmergencyRepository(createPool(), { locationCrypto: fakeCrypto });
+      const executor = executorCon([{ ...PALERMO_CIRCULO, radio_metros: 100 }]);
+
+      await expect(repo.linkZoneContexts(executor, { id: 'e-9', ...CERCA, emergencyType: 'MEDICA', barrio: 'PALERMO' }))
+        .resolves.toEqual([]);
+    });
+  });
+});
+
+describe('EmergencyRepository.linkOpenEmergenciesToZoneContext', () => {
+  // Rosedal y un punto a ~330 m; el Obelisco queda a más de 4 km.
+  const ROSEDAL = { latitud: -34.5711, longitud: -58.4167 };
+  const UBICACIONES = {
+    'blob-cerca': { latitude: -34.5740, longitude: -58.4160 },
+    'blob-lejos': { latitude: -34.6037, longitude: -58.3816 },
+  };
+  const cryptoPorBlob = () => ({
+    encryptLocation: jest.fn(),
+    decryptLocation: jest.fn((blob) => UBICACIONES[blob]),
+  });
+  const CONTEXTO_BARRIO = {
+    id: 'ctx-palermo', tipo: 'ALERTA_CLIMATICA', origen: 'espacios', referenciaExterna: 'alerta-1#0',
+    ...ROSEDAL, radioMetros: 3837, barrios: ['PALERMO'], dadoDeBajaEn: null, suspendidoEn: null,
+  };
+  const CONTEXTO_PUNTO = { ...CONTEXTO_BARRIO, id: 'ctx-punto', referenciaExterna: 'alerta-2#0', radioMetros: 500, barrios: null };
+
+  function executorCon(emergencias) {
+    return { query: jest.fn().mockResolvedValueOnce({ rows: emergencias }).mockResolvedValue({ rows: [] }) };
+  }
+
+  it('zona por barrio: busca por emergencies.barrio en SQL, sin descifrar ubicaciones, y vincula todas', async () => {
+    const locationCrypto = cryptoPorBlob();
+    const repo = new EmergencyRepository(createPool(), { locationCrypto });
+    const executor = executorCon([
+      { id: 'e-1', correlation_id: 'corr-1', emergency_type: 'MEDICA' },
+      { id: 'e-2', correlation_id: 'corr-2', emergency_type: 'PANICO' },
+    ]);
+
+    const ids = await repo.linkOpenEmergenciesToZoneContext(executor, CONTEXTO_BARRIO);
+
+    expect(ids).toEqual(['e-1', 'e-2']);
+    const [selectSql, selectParams] = executor.query.mock.calls[0];
+    expect(selectSql).toMatch(/e\.barrio = ANY\(\$1::text\[\]\)/);
+    expect(selectSql).toMatch(/e\.emergency_type IS DISTINCT FROM 'PREVENTIVA'/);
+    expect(selectSql).toMatch(/e\.location_anonymized_at IS NULL/);
+    expect(selectSql).toMatch(/e\.location_encrypted IS NOT NULL/);
+    for (const status of TERMINAL_STATUSES) expect(selectSql).toContain(`'${status}'`);
+    expect(selectParams).toEqual([['PALERMO']]);
+    expect(locationCrypto.decryptLocation).not.toHaveBeenCalled();
+
+    const [insertSql, insertValues] = executor.query.mock.calls[1];
+    expect(insertSql).toMatch(/INSERT INTO emergencia_contexto_zona \(emergency_id, contexto_id\)/);
+    expect(insertSql).toMatch(/ON CONFLICT DO NOTHING/);
+    expect(insertValues).toEqual([['e-1', 'e-2'], ['ctx-palermo', 'ctx-palermo']]);
+  });
+
+  it('zona por punto: descifra las abiertas y vincula solo las que están dentro del radio', async () => {
+    const locationCrypto = cryptoPorBlob();
+    const repo = new EmergencyRepository(createPool(), { locationCrypto });
+    const executor = executorCon([
+      { id: 'e-cerca', location_encrypted: 'blob-cerca', emergency_type: 'MEDICA', correlation_id: 'c-1' },
+      { id: 'e-lejos', location_encrypted: 'blob-lejos', emergency_type: 'MEDICA', correlation_id: 'c-2' },
+    ]);
+
+    const ids = await repo.linkOpenEmergenciesToZoneContext(executor, CONTEXTO_PUNTO);
+
+    expect(ids).toEqual(['e-cerca']);
+    const [selectSql, selectParams] = executor.query.mock.calls[0];
+    expect(selectSql).not.toMatch(/e\.barrio/);
+    expect(selectSql).toMatch(/e\.emergency_type IS DISTINCT FROM 'PREVENTIVA'/);
+    expect(selectSql).toMatch(/e\.location_anonymized_at IS NULL/);
+    // El punto del contexto no viaja a la base: la distancia se mide en memoria.
+    expect(selectParams).toBeUndefined();
+    expect(locationCrypto.decryptLocation).toHaveBeenCalledTimes(2);
+    expect(executor.query.mock.calls[1][1]).toEqual([['e-cerca'], ['ctx-punto']]);
+  });
+
+  it('un contexto con barrios vacíos se trata como zona por punto', async () => {
+    const repo = new EmergencyRepository(createPool(), { locationCrypto: cryptoPorBlob() });
+    const executor = executorCon([{ id: 'e-cerca', location_encrypted: 'blob-cerca', emergency_type: 'MEDICA' }]);
+
+    await expect(repo.linkOpenEmergenciesToZoneContext(executor, { ...CONTEXTO_PUNTO, barrios: [] }))
+      .resolves.toEqual(['e-cerca']);
+    expect(executor.query.mock.calls[0][0]).not.toMatch(/e\.barrio/);
+  });
+
+  it('sin emergencias alcanzadas no escribe nada', async () => {
+    const repo = new EmergencyRepository(createPool(), { locationCrypto: cryptoPorBlob() });
+    const porBarrio = executorCon([]);
+    const porPunto = executorCon([{ id: 'e-lejos', location_encrypted: 'blob-lejos', emergency_type: 'MEDICA' }]);
+
+    await expect(repo.linkOpenEmergenciesToZoneContext(porBarrio, CONTEXTO_BARRIO)).resolves.toEqual([]);
+    await expect(repo.linkOpenEmergenciesToZoneContext(porPunto, CONTEXTO_PUNTO)).resolves.toEqual([]);
+    expect(porBarrio.query).toHaveBeenCalledTimes(1);
+    expect(porPunto.query).toHaveBeenCalledTimes(1);
+  });
+
+  it('no consulta nada sin contexto, con un contexto dado de baja o suspendido, o con una zona por punto sin coordenadas', async () => {
+    const repo = new EmergencyRepository(createPool(), { locationCrypto: cryptoPorBlob() });
+    const executor = executorCon([{ id: 'e-1', correlation_id: 'c', emergency_type: 'MEDICA' }]);
+
+    await expect(repo.linkOpenEmergenciesToZoneContext(executor, null)).resolves.toEqual([]);
+    await expect(repo.linkOpenEmergenciesToZoneContext(executor, { ...CONTEXTO_BARRIO, dadoDeBajaEn: new Date() }))
+      .resolves.toEqual([]);
+    await expect(repo.linkOpenEmergenciesToZoneContext(executor, { ...CONTEXTO_BARRIO, suspendidoEn: new Date() }))
+      .resolves.toEqual([]);
+    await expect(repo.linkOpenEmergenciesToZoneContext(executor, { ...CONTEXTO_PUNTO, latitud: null }))
+      .resolves.toEqual([]);
+    await expect(repo.linkOpenEmergenciesToZoneContext(executor, { ...CONTEXTO_PUNTO, radioMetros: null }))
+      .resolves.toEqual([]);
     expect(executor.query).not.toHaveBeenCalled();
   });
 });
