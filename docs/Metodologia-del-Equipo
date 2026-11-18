@@ -1,0 +1,106 @@
+# Proceso de trabajo — Emergencias y Seguridad
+
+> **Borrador.** Las cifras salen del historial de Git y de los PRs de `emergencias-backend`,
+> `Frontend`, `ADRs`, `BusinessCase_TestBench` y `presentaciones` al 16/11/2026.
+
+## 1. Cómo trabajamos
+
+Utilizamos como metodologia principal Extreme Programming más prácticas de Scrum para el día a día del equipo, como sprints de una semana, de jueves a miércoles, y sesiones de planeamiento donde encapsulamos Review, Planning y Retros.
+## 2. Roles
+
+| Rol | Persona | De qué es dueño |
+|---|---|---|
+| Arquitectura / Scrum  | Sebastián Alterman | Metodologia, Proceso, Gestion de Decisiones, cadencia y llegada a las entregas |
+| Producto / Backend | Juan Ignacio Molina | Backlog, prioridad, aprobación de producto, revision de casos de uso,  |
+| ML & Back End  | Matías Amistadi, Lucca Perazzo | Exploracion de ML, API, dominio, eventos |
+| Frontend | Santino TG | Pantallas y BFF |
+| DevOps | Kevin Alajarin | CI/CD, hosting, base |
+| Seguridad | Valen Fiumana | Identidad, cifrado, retención |
+
+Los roles salen de los decisores que firman cada ADR. [completar: corregir lo que no coincida.]
+
+## 3. Sprints
+
+Commits sin contar merges; PRs mergeados en backend y Frontend.
+
+| Sprint | Semana | Commits | PRs mergeados | Personas activas | Qué se entregó |
+|---|---|---|---|---|---|
+| 0 | 13/08 – 19/08 | 9 | 0 | 1 | Registro de ADRs, sitio en GitHub Pages, ADR de hosting. Establecimos la mecanica de Spec Driven Development basada en ADRs. |
+| 1 | 20/08 – 26/08 | 5 | 0 | 1 | Esqueleto del backend, casos de uso principales, sub equipos y responsabilidades |
+| 2 | 27/08 – 02/09 | 27 | 6 | 6 | Persistencia en Postgres, JWT y roles, listado y cancelación, primer Frontend. |
+| 3 | 03/09 – 09/09 | 53 | 27 | 6 | Personas, Roles y asignación de emergencias, detalle con historial, severidad, cierre |
+| 4 | 10/09 – 16/09 | 47 | 34 | 5 | Dirección cifrada, keep-warm en horario de clase  |
+| 5 | 17/09 – 23/09 | 52 | 37 | 5 | Motor de incidentes y prioridad efectiva en la central, login email y contraseña, perfil cifrado. **Hito 1 (24/09)** |
+| 6 – 10 | 24/09 – 28/10 | 10 | 1 | 4 | Inicio de etapa 2 - Cinco ADRs de diseño del Hito 2 (08/10 y 16/10). Sin entregas de código. Ver sección 5 |
+| 11 | 29/10 – 04/11 | 13 | 4 | 2 | Contrato AsyncAPI, cliente OAuth del bus, publicación por el gateway, consumer con dedup |
+| 12 | 05/11 – 11/11 | 76 | 26 | 7 | Reclamo de ciclovía, prioridad por evento público, coordenadas aproximadas en los eventos |
+| 13 | 12/11 – 18/11 | 77 | 35 | 5 | Login Federado para el personal, vista del oficial, listeners de Movilidad y de reservas, testeo de integracion. |
+
+
+## 4. Prácticas de XP
+
+| Práctica | La aplicamos | Evidencia |
+|---|---|---|
+| Integración continua | Sí | CI en cada PR y en cada push a `main`: lint, unitarios con cobertura mínima de 80 %, integración contra Postgres |
+| Entregas pequeñas | Sí | 170 PRs mergeados entre backend y Frontend; cada merge a `main` despliega por CD |
+| Pruebas automatizadas | Sí | Backend: 1.781 pruebas unitarias, 97 % de líneas. Frontend: 385 pruebas sobre la lógica y el BFF |
+| Estándar de código | Sí | ESLint bloqueante, plantilla de PR, `CODEOWNERS` |
+| Refactorización | Sí | Barrido de deuda técnica del 16/11 (PRs #115 y #116 del backend) |
+| Diseño simple y decisiones escritas | Sí | 28 ADRs con alternativas consideradas |
+| Propiedad colectiva del código | Parcial | 7 autores de PR en backend, sin embargo hubo alta concentracion de commits / PRs. |
+| Programación de a pares | Sí | Desarrollamos durante la clase para aprovechar el tiempo en equipos de a 2. |
+| Desarrollo guiado por pruebas | Parcial | Las herramientas de AI utilizadas fueron ancladas con un enfoque de desarrollo guiado por pruebas. Nuestros PRs contenian sus testeos correspondientes como parte de la entrega. |
+| Ritmo sostenible | No | Ver sección 5 |
+
+## 5. Desvíos y qué cambiamos
+
+| Desvío | Dato | Causa | Acción correctiva |
+|---|---|---|---|
+| Cinco semanas sin entregas de código | Del 24/09 al 28/10: 10 commits y 1 PR entre todos los repositorios |  En este periodo nos encontramos con los parciales, post parciales y recuperacion de ritmo laboral.  | Con el comienzo de la nueva etapa de desarrollo, focalizamos el esfuerzo en comprender y desafiarnos a incorporar nuevas funcionalidades con foco en la arquitectura, reutilizacion de componentes, y definicion de objetos expansibles open closed. |
+| Trabajo en ráfagas | 57 commits de backend en un solo día (05/11) | Fue cuando comenzamos a integrarnos con otros equipos y a implementar la arquitectura de casos de uso. |  | 
+| PRs mergeados sin aprobación | En backend, 79 de 98; 29 se mergearon en menos de 10 minutos. El ADR "Requerir aprobación de Producto en los PRs" pedía lo contrario | La regla dependía de un único aprobador y frenaba al equipo; el control real fue el CI | Para el cierre del trabajo, volvimos a activar la protección de rama con una aprobación obligatoria. 
+
+## 6. Uso de asistentes de IA & Spec Driven Development. 
+
+### La regla del equipo
+ 
+Primero se escribe la especificación, después el código. Ningún asistente de IA decide
+arquitectura: implementa lo que ya está decidido por escrito. Usamos tres tipos de
+especificación, cada una con un control automático que impide que el código se aparte de ella.
+ 
+| Especificación | Qué fija | Qué la hace cumplir |
+|---|---|---|
+| ADR (repositorio `ADRs`) | El porqué: la decisión, las alternativas descartadas y las consecuencias | Revisión por PR, `tools/adr lint` en CI, registro publicado en GitHub Pages |
+| `asyncapi.yaml` | El contrato de los eventos que publicamos y consumimos | `src/tests/asyncapi.test.js` falla en `npm test` si un evento no cumple el contrato |
+| OpenAPI (generado desde las rutas) | El contrato REST | Servido en `/api-docs`; el BFF del Frontend solo deja pasar las rutas declaradas |
+ 
+### Por qué les dimos tanto peso a los ADRs
+ 
+El equipo es junior, trabaja en paralelo y depende de decisiones de otros dos grupos (bus y
+login). El ADR es el único lugar donde una decisión queda con su contexto y sus alternativas, y
+es lo que permite que alguien que no estuvo en la discusión —una persona o un asistente—
+implemente sin reabrirla.
+ 
+- 28 ADRs entre el 13/08 y el 16/11. El registro existe desde el Sprint 0, antes que el primer
+  repositorio de código.
+- Cada ADR lleva decisores con nombre y rol, y una tabla de alternativas consideradas.
+- Un ADR aceptado no se edita: si la decisión cambia, se escribe otro que lo reemplaza y los
+  dos quedan enlazados. Lo usamos dos veces (frontend en React → Next.js con BFF; prioridad por
+  barrio → prioridad por radio).
+- El repositorio tiene su propia herramienta (`tools/adr`), plantilla, validación en CI e índice
+  generado automáticamente.
+### Cómo anclamos a los asistentes en los ADRs
+ 
+1. **La decisión va antes que el prompt.** El asistente recibe el ADR como entrada y su tarea
+   es implementarlo, no elegir. [completar: describir cómo se le pasaba el ADR en la práctica —
+   pegado en el prompt, repositorio adjunto, proyecto con el registro cargado.]
+2. **El código cita la decisión que implementa.** Hay 24 referencias a ADRs en 17 archivos de
+   `src/` del backend (por ejemplo `dbscan-grouper.js`, `incident-detection-strategy.js` y
+   `error-classifier.js`), y 36 de los 190 PRs de backend y Frontend nombran el ADR que
+   implementan.
+3. **Un humano responde por cada PR.** Los 65 commits firmados por asistentes entraron por PRs
+   con un integrante como autor, y pasaron el mismo CI que el resto: lint, cobertura mínima de
+   80 % y pruebas de integración.
+4. **Revisión semanal contra el registro.** Un asistente con el rol de arquitecto revisó cada
+   semana el estado de los repositorios contra los ADRs y la consigna: 13 agendas técnicas
+   entre el 20/08 y el 05/11.
