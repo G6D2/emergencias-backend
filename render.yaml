@@ -144,7 +144,8 @@ services:
       # Espacios"): opt-in, sin default; las dos van juntas. Activada en prod
       # el 17/11/2026. Radios por nivel: CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS
       # (default 1000) y CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS (default 500),
-      # con el default.
+      # con el default. Solo para alertas sin barrios del catálogo; con
+      # barrios, el círculo de cada barrio.
       - key: EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA
         value: com.citypass.espacios.CriticidadClimaticaConfirmada
       - key: EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA
