@@ -52,6 +52,9 @@ const ENDPOINTS = [
   ['DELETE', '/api/citizen/saved-locations/:id', ['citizen']],
   // Banner de alertas climáticas del tablero.
   ['GET', '/api/contextos-zona/activos', ['dispatcher']],
+  // Proxy del HTML de Analítica. El upstream está stubbeado: la matriz
+  // solo mira el grupo, no el tablero.
+  ['GET', '/admin/analitica', ['dispatcher']],
 ];
 
 // Rutas montadas que no exigen token (no entran en la matriz).
@@ -277,6 +280,13 @@ describe.each(MODES)('matriz de autorización con $title (JWT real, repositorios
       incidentRepository: repos.incidentRepository,
       citizenProfileRepository: repos.citizenProfileRepository,
       contextoZonaRepository: repos.contextoZonaRepository,
+      analiticaClient: {
+        fetchDashboard: async () => ({
+          status: 200,
+          body: '<html></html>',
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        }),
+      },
     });
     for (const [name, identity] of Object.entries(mode.identities)) {
       bearers[name] = identity ? await auth.bearerFor(identity) : null;
