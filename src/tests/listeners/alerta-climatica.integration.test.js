@@ -32,12 +32,17 @@ const {
   createRegistrarContextosClimaticosHandler,
   createDarDeBajaContextosClimaticosHandler,
 } = require('../../listeners/alerta-climatica/handlers/contextos-climaticos.handler');
+const {
+  PUBLICAR_CONFIRMACION_CLIMA,
+  createPublicarConfirmacionClimaHandler,
+} = require('../../listeners/alerta-climatica/handlers/confirmacion-clima.handler');
 const { grupoDeLaAlerta } = require('../../domain/alerta-climatica');
 const { createLocationCrypto } = require('../../security/location-crypto');
 const { createLifecycleHarness } = require('../helpers/emergency-lifecycle');
 
 const CREATED_TOPIC = 'test.clima.emergencias.creada';
 const UPDATED_TOPIC = 'test.clima.emergencias.actualizada';
+const CONFIRMACION_TOPIC = 'test.clima.emergencias.confirmacion';
 
 // Puntos de las alertas que comparten el archivo: Obelisco y Belgrano.
 const OBELISCO = { latitude: -34.6037, longitude: -58.3816 };
@@ -162,6 +167,10 @@ beforeAll(async () => {
   );
   factory.register(REGISTRAR_CONTEXTOS_CLIMATICOS, createRegistrarContextosClimaticosHandler({ contextoZonaRepository }));
   factory.register(DAR_DE_BAJA_CONTEXTOS_CLIMATICOS, createDarDeBajaContextosClimaticosHandler({ contextoZonaRepository }));
+  // Confirmación por el EDA, encendida para este archivo y a un topic propio.
+  process.env.CONFIRMACION_CLIMA_ENABLED = 'true';
+  process.env.TOPIC_CONFIRMACION_CLIMA = CONFIRMACION_TOPIC;
+  factory.register(PUBLICAR_CONFIRMACION_CLIMA, createPublicarConfirmacionClimaHandler({ emergencyRepository }));
 
   // Los tópicos son opt-in: acá se pasan explícitos.
   confirmada = new CriticidadClimaticaConfirmadaListener(fakeKafka(), { factory, topic: 'test.clima.confirmada' });
@@ -179,7 +188,9 @@ afterAll(async () => {
     "DELETE FROM emergencies WHERE causa_tipo = 'EVENTO_CLIMATICO' AND causa_id = ANY($1::text[])",
     [alertaIds]
   );
-  await pool.query('DELETE FROM outbox_events WHERE topic IN ($1, $2)', [CREATED_TOPIC, UPDATED_TOPIC]);
+  await pool.query('DELETE FROM outbox_events WHERE topic IN ($1, $2, $3)', [CREATED_TOPIC, UPDATED_TOPIC, CONFIRMACION_TOPIC]);
+  delete process.env.CONFIRMACION_CLIMA_ENABLED;
+  delete process.env.TOPIC_CONFIRMACION_CLIMA;
   await h.cleanup();
   await pool.end();
 });
@@ -251,6 +262,38 @@ describe('alerta climática (integration)', () => {
 
     expect(await contextosDe(evento.data.alertaId)).toHaveLength(2);
     expect(await emergenciasDe(evento.data.alertaId)).toHaveLength(1);
+  });
+
+  it('encola una sola confirmación por el EDA con alertaId, NivelCriticidad y fenomeno, aunque se reentregue', async () => {
+    const evento = confirmacion();
+
+    await confirmada.onMessage(buildMessage(evento));
+    await confirmada.onMessage(buildMessage(evento)); // reentrega: el dedup por eventId la frena
+
+    const { rows } = await pool.query(
+      "SELECT payload FROM outbox_events WHERE topic = $1 AND payload->'data'->>'alertaId' = $2",
+      [CONFIRMACION_TOPIC, evento.data.alertaId]
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].payload).toMatchObject({
+      type: 'CriticidadClimaticaConfirmada',
+      correlationId: evento.data.alertaId,
+      causationId: evento.metadata.eventId,
+      data: { alertaId: evento.data.alertaId, NivelCriticidad: 'ALTA', fenomeno: 'TORMENTA_FUERTE' },
+    });
+    expect(Object.keys(rows[0].payload.data).sort()).toEqual(['NivelCriticidad', 'alertaId', 'fenomeno']);
+  });
+
+  it('confirma también una alerta MEDIA, que no deja contextos ni emergencia', async () => {
+    const evento = confirmacion({ nivelCriticidad: 'MEDIA' });
+    await confirmada.onMessage(buildMessage(evento));
+
+    expect(await contextosDe(evento.data.alertaId)).toHaveLength(0);
+    const { rows } = await pool.query(
+      "SELECT payload FROM outbox_events WHERE topic = $1 AND payload->'data'->>'alertaId' = $2",
+      [CONFIRMACION_TOPIC, evento.data.alertaId]
+    );
+    expect(rows.map((r) => r.payload.data.NivelCriticidad)).toEqual(['MEDIA']);
   });
 
   it('MEDIA y BAJA no dejan contextos ni emergencia', async () => {
