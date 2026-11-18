@@ -143,13 +143,19 @@ describe('incident-detection-job', () => {
     const job = createJob(emergencyRepository, incidentRepository, { INCIDENT_WINDOW_MIN: '15' });
     const before = Date.now();
     await job.runOnce();
+    const after = Date.now();
 
     expect(emergencyRepository.findRecentByType).toHaveBeenCalledTimes(1);
     const [{ emergencyTypes, since }] = emergencyRepository.findRecentByType.mock.calls[0];
     expect(emergencyTypes).toEqual(GROUPABLE_EMERGENCY_TYPES);
     expect(emergencyTypes).toContain('PANICO');
     expect(emergencyTypes).not.toContain('PREVENTIVA');
-    expect(before - since.getTime()).toBeGreaterThanOrEqual(15 * 60000);
+    // since = (momento de la pasada) - 15 min, y la pasada cae entre before y
+    // after: comparar contra un solo Date.now() fallaba si cambiaba el
+    // milisegundo en el medio.
+    const ventana = 15 * 60000;
+    expect(since.getTime()).toBeGreaterThanOrEqual(before - ventana);
+    expect(since.getTime()).toBeLessThanOrEqual(after - ventana);
   });
 
   it('agrupa en memoria por emergencyType: dos reportes iguales de tipos distintos no se mezclan', async () => {
