@@ -137,15 +137,14 @@ describe('EmergencyRepository.linkZoneContexts con el evento encendido', () => {
     const [sql, params] = executor.query.mock.calls[1];
     // El evento solo sale para los vínculos que se insertaron (RETURNING + JOIN).
     expect(sql).toMatch(/WITH nuevos AS \(\s*INSERT INTO emergencia_contexto_zona/);
-    expect(sql).toMatch(/ON CONFLICT DO NOTHING\s+RETURNING contexto_id/);
+    expect(sql).toMatch(/ON CONFLICT DO NOTHING\s+RETURNING emergency_id, contexto_id/);
     expect(sql).toMatch(/INSERT INTO outbox_events \(id, topic, payload\)/);
-    expect(sql).toMatch(/JOIN nuevos ON nuevos\.contexto_id = ev\.contexto_id/);
+    expect(sql).toMatch(/JOIN nuevos ON nuevos\.emergency_id = ev\.emergency_id AND nuevos\.contexto_id = ev\.contexto_id/);
 
-    const [emergencyId, contextoIds, vinculadaEn, topic, evContextoIds, evIds, payloads] = params;
-    expect(emergencyId).toBe(EMERGENCY_ID);
+    const [emergencyIds, contextoIds, vinculadaEn, topic, evIds, payloads] = params;
+    expect(emergencyIds).toEqual([EMERGENCY_ID]);
     expect(contextoIds).toEqual([CONTEXTO.id]);
     expect(topic).toBe('emergencias.vinculada-contexto-zona');
-    expect(evContextoIds).toEqual([CONTEXTO.id]);
     const event = JSON.parse(payloads[0]);
     expect(event.eventId).toBe(evIds[0]);
     expect(event.correlationId).toBe('corr-1');
@@ -175,7 +174,7 @@ describe('EmergencyRepository.linkZoneContexts con el evento encendido', () => {
       expect(ids).toEqual([CONTEXTO.id]);
       const [sql, params] = executor.query.mock.calls[1];
       expect(sql).not.toMatch(/outbox_events/);
-      expect(params).toEqual([EMERGENCY_ID, [CONTEXTO.id]]);
+      expect(params).toEqual([[EMERGENCY_ID], [CONTEXTO.id]]);
     } finally {
       CATEGORIES_WITHOUT_PUBLISHED_LINK.delete('EXCLUIDA');
     }
@@ -185,6 +184,68 @@ describe('EmergencyRepository.linkZoneContexts con el evento encendido', () => {
     const executor = executorCon([FILA_CONTEXTO]);
     await repoCon(OFF).linkZoneContexts(executor, { id: EMERGENCY_ID, ...CERCA, emergencyType: 'MEDICA' });
     expect(executor.query.mock.calls[1][0]).not.toMatch(/outbox_events/);
+  });
+});
+
+describe('EmergencyRepository.linkOpenEmergenciesToZoneContext con el evento encendido', () => {
+  const CONTEXTO_BARRIO = {
+    id: CONTEXTO.id, tipo: 'ALERTA_CLIMATICA', origen: 'espacios', referenciaExterna: 'alerta-1#0',
+    ...ROSEDAL, radioMetros: 3837, barrios: ['PALERMO'],
+  };
+  const OTRA_ID = '44444444-4444-4444-8444-444444444444';
+
+  it('un evento por emergencia vinculada, en la misma sentencia que los vínculos', async () => {
+    const executor = executorCon([
+      { id: EMERGENCY_ID, correlation_id: 'corr-1', emergency_type: 'MEDICA' },
+      { id: OTRA_ID, correlation_id: 'corr-2', emergency_type: 'PANICO' },
+    ]);
+
+    const ids = await repoCon(ON).linkOpenEmergenciesToZoneContext(executor, CONTEXTO_BARRIO);
+
+    expect(ids).toEqual([EMERGENCY_ID, OTRA_ID]);
+    expect(executor.query).toHaveBeenCalledTimes(2);
+    const [sql, params] = executor.query.mock.calls[1];
+    expect(sql).toMatch(/WITH nuevos AS \(\s*INSERT INTO emergencia_contexto_zona/);
+    expect(sql).toMatch(/RETURNING emergency_id, contexto_id/);
+    const [emergencyIds, contextoIds, vinculadaEn, , evIds, payloads] = params;
+    expect(emergencyIds).toEqual([EMERGENCY_ID, OTRA_ID]);
+    expect(contextoIds).toEqual([CONTEXTO.id, CONTEXTO.id]);
+    const events = payloads.map((payload) => JSON.parse(payload));
+    expect(events.map((e) => e.eventId)).toEqual(evIds);
+    expect(events.map((e) => e.correlationId)).toEqual(['corr-1', 'corr-2']);
+    for (const event of events) {
+      expect(event.data).toMatchObject({
+        contextoId: CONTEXTO.id,
+        contextoTipo: 'ALERTA_CLIMATICA',
+        referenciaExterna: 'alerta-1#0',
+        radioMetros: 3837,
+        vinculadaEn: vinculadaEn.toISOString(),
+        backfill: false,
+      });
+      expect(validate(event)).toBe(true);
+    }
+  });
+
+  it('una categoría excluida se vincula sin evento y el resto con evento', async () => {
+    CATEGORIES_WITHOUT_PUBLISHED_LINK.add('EXCLUIDA');
+    try {
+      const executor = executorCon([
+        { id: EMERGENCY_ID, correlation_id: 'corr-1', emergency_type: 'MEDICA' },
+        { id: OTRA_ID, correlation_id: 'corr-2', emergency_type: 'EXCLUIDA' },
+      ]);
+
+      await repoCon(ON).linkOpenEmergenciesToZoneContext(executor, CONTEXTO_BARRIO);
+
+      expect(executor.query).toHaveBeenCalledTimes(3);
+      const [sinEventoSql, sinEventoParams] = executor.query.mock.calls[1];
+      expect(sinEventoSql).not.toMatch(/outbox_events/);
+      expect(sinEventoParams).toEqual([[OTRA_ID], [CONTEXTO.id]]);
+      const [conEventoSql, conEventoParams] = executor.query.mock.calls[2];
+      expect(conEventoSql).toMatch(/INSERT INTO outbox_events/);
+      expect(conEventoParams[0]).toEqual([EMERGENCY_ID]);
+    } finally {
+      CATEGORIES_WITHOUT_PUBLISHED_LINK.delete('EXCLUIDA');
+    }
   });
 });
 

@@ -165,9 +165,10 @@ const INCIDENT_SELECT_FIELDS = `
 // Contexto de zona que eleva la prioridad de la emergencia (ADR "Elevar
 // temporalmente la prioridad con contextos de zona", tablas de V28 y V31).
 //
-// El vínculo emergencia–contexto se escribe una sola vez, al crear la
-// emergencia (ver linkZoneContexts): acá solo se mira si el contexto
-// vinculado sigue en curso. Mientras lo está, la prioridad de despacho sube
+// El vínculo emergencia–contexto se escribe al crear la emergencia (ver
+// linkZoneContexts) y, para las alertas climáticas, también al dar de alta el
+// contexto (linkOpenEmergenciesToZoneContext): acá solo se mira si el
+// contexto vinculado sigue en curso. Mientras lo está, la prioridad de despacho sube
 // un nivel; al vencer, suspenderse o darse de baja, la próxima lectura ya no
 // lo trae y la prioridad vuelve sola.
 //
@@ -359,8 +360,10 @@ class EmergencyRepository {
   // hace falta guardarla en claro ni descifrar nada después. Solo se guardan
   // los ids.
   //
-  // Consecuencia: una emergencia creada antes de que empiece el evento (o
-  // antes de que llegue su publicación) no sube de prioridad.
+  // Consecuencia: una emergencia creada antes de que empiece un evento
+  // público (o antes de que llegue su publicación) no sube de prioridad. Con
+  // una alerta climática sí: al dar de alta su contexto se vinculan también
+  // las emergencias abiertas (linkOpenEmergenciesToZoneContext).
   //
   // Un contexto con barrios (zona por barrio de una alerta climática) además
   // exige que la emergencia sea de uno de esos barrios: el círculo cubre el
@@ -387,28 +390,12 @@ class EmergencyRepository {
       { latitude, longitude },
       { latitude: Number(c.latitud), longitude: Number(c.longitud) }
     ) <= Number(c.radio_metros));
-    const contextoIds = alcanzan.map((c) => c.id);
-    if (contextoIds.length === 0) return [];
+    if (alcanzan.length === 0) return [];
 
-    if (!shouldPublishZoneContextLink(emergencyType, this.env)) {
-      await executor.query(
-        `INSERT INTO emergencia_contexto_zona (emergency_id, contexto_id)
-         SELECT $1, unnest($2::uuid[])
-         ON CONFLICT DO NOTHING`,
-        [id, contextoIds]
-      );
-      return contextoIds;
-    }
-
-    // Con el evento de vínculo encendido, la fila y su evento del outbox se
-    // escriben en UNA sentencia: si el vínculo existe, el evento existe, aunque
-    // el executor sea el pool y no una transacción. Solo se encola evento para
-    // los vínculos que se insertaron de verdad (ON CONFLICT DO NOTHING no
-    // devuelve fila), así que un reintento no duplica.
-    const vinculadaEn = new Date();
-    const events = alcanzan.map((c) => buildEmergencyLinkedToZoneContextEvent({
+    await this.writeZoneContextLinks(executor, alcanzan.map((c) => ({
       emergencyId: id,
       correlationId: emergency.correlationId,
+      emergencyType,
       contexto: {
         id: c.id,
         tipo: c.tipo,
@@ -416,31 +403,142 @@ class EmergencyRepository {
         referenciaExterna: c.referencia_externa,
         radioMetros: c.radio_metros,
       },
+    })));
+    return alcanzan.map((c) => c.id);
+  }
+
+  // Vincula las emergencias que ya estaban abiertas con un contexto de zona
+  // recién dado de alta (hoy, el de una alerta climática). Sin esto, una
+  // emergencia creada antes de que llegue la alerta no sube aunque siga
+  // abierta en la zona. Corre en la transacción del alta (`executor`).
+  //
+  // Alcanza a las emergencias no terminales, que no son PREVENTIVA, que
+  // tienen ubicación sin anonimizar (como linkZoneContexts, que sin
+  // coordenadas no vincula; y una anonimizada ya perdió sus vínculos):
+  //
+  // - Contexto con barrios (zona por barrio): solo SQL, sin descifrar nada.
+  //   El círculo cubre el barrio entero (todo punto del polígono está a no más
+  //   del vértice más lejano del centro, y el barrio por cercanía, a 100 m más)
+  //   y el filtro ya exige el barrio, así que basta con emergencies.barrio.
+  // - Contexto sin barrios (zona por punto): descifra las abiertas con
+  //   ubicación y mide la distancia en memoria, igual que linkZoneContexts.
+  //
+  // No mira si el contexto ya empezó: la suba se decide al leer, contra la
+  // vigencia. Devuelve los ids de las emergencias alcanzadas (incluidas las
+  // que ya tenían el vínculo, que ON CONFLICT DO NOTHING deja como estaban).
+  async linkOpenEmergenciesToZoneContext(executor, contexto) {
+    if (!contexto || contexto.dadoDeBajaEn || contexto.suspendidoEn) return [];
+    const barrios = Array.isArray(contexto.barrios) ? contexto.barrios.filter(Boolean) : [];
+    const abiertasSql = `e.status NOT IN (${TERMINAL_STATUSES.map((status) => `'${status}'`).join(', ')})
+         AND e.emergency_type IS DISTINCT FROM 'PREVENTIVA'
+         AND e.location_anonymized_at IS NULL`;
+
+    let alcanzadas;
+    if (barrios.length > 0) {
+      const result = await executor.query(
+        `SELECT e.id, e.correlation_id, e.emergency_type
+         FROM emergencies e
+         WHERE ${abiertasSql}
+           AND (e.location_encrypted IS NOT NULL OR (e.latitude IS NOT NULL AND e.longitude IS NOT NULL))
+           AND e.barrio = ANY($1::text[])`,
+        [barrios]
+      );
+      alcanzadas = result.rows.map((row) => ({
+        id: row.id, correlationId: row.correlation_id, emergencyType: row.emergency_type,
+      }));
+    } else {
+      const latitud = Number(contexto.latitud);
+      const longitud = Number(contexto.longitud);
+      const radio = Number(contexto.radioMetros);
+      if (contexto.latitud == null || contexto.longitud == null || contexto.radioMetros == null
+        || !Number.isFinite(latitud) || !Number.isFinite(longitud) || !Number.isFinite(radio)) return [];
+      const result = await executor.query(
+        `SELECT e.*
+         FROM emergencies e
+         WHERE ${abiertasSql}
+           AND (e.location_encrypted IS NOT NULL OR (e.latitude IS NOT NULL AND e.longitude IS NOT NULL))`
+      );
+      alcanzadas = result.rows
+        .map((row) => mapEmergency(row, this.locationCrypto))
+        .filter((e) => Number.isFinite(e.latitude) && Number.isFinite(e.longitude)
+          && haversineDistanceMeters(
+            { latitude: e.latitude, longitude: e.longitude },
+            { latitude: latitud, longitude: longitud }
+          ) <= radio);
+    }
+    if (alcanzadas.length === 0) return [];
+
+    await this.writeZoneContextLinks(executor, alcanzadas.map((e) => ({
+      emergencyId: e.id,
+      correlationId: e.correlationId,
+      emergencyType: e.emergencyType,
+      contexto: {
+        id: contexto.id,
+        tipo: contexto.tipo,
+        origen: contexto.origen,
+        referenciaExterna: contexto.referenciaExterna,
+        radioMetros: contexto.radioMetros,
+      },
+    })));
+    return alcanzadas.map((e) => e.id);
+  }
+
+  // Escribe vínculos emergencia–contexto. Lo usan los dos momentos en que se
+  // vincula: al crear la emergencia (linkZoneContexts) y al dar de alta el
+  // contexto (linkOpenEmergenciesToZoneContext). Cada vínculo es
+  // { emergencyId, correlationId, emergencyType, contexto: { id, tipo,
+  // origen, referenciaExterna, radioMetros } }.
+  //
+  // ON CONFLICT DO NOTHING: un vínculo que ya existe queda como estaba. Con el
+  // evento de vínculo encendido, la fila y su evento del outbox se escriben en
+  // UNA sentencia: si el vínculo existe, el evento existe, aunque el executor
+  // sea el pool y no una transacción. Solo se encola evento para los vínculos
+  // que se insertaron de verdad (ON CONFLICT DO NOTHING no devuelve fila), así
+  // que un reintento no duplica.
+  async writeZoneContextLinks(executor, vinculos) {
+    if (!Array.isArray(vinculos) || vinculos.length === 0) return;
+    const sinEvento = vinculos.filter((v) => !shouldPublishZoneContextLink(v.emergencyType, this.env));
+    const conEvento = vinculos.filter((v) => shouldPublishZoneContextLink(v.emergencyType, this.env));
+
+    if (sinEvento.length > 0) {
+      await executor.query(
+        `INSERT INTO emergencia_contexto_zona (emergency_id, contexto_id)
+         SELECT * FROM unnest($1::uuid[], $2::uuid[])
+         ON CONFLICT DO NOTHING`,
+        [sinEvento.map((v) => v.emergencyId), sinEvento.map((v) => v.contexto.id)]
+      );
+    }
+    if (conEvento.length === 0) return;
+
+    const vinculadaEn = new Date();
+    const events = conEvento.map((v) => buildEmergencyLinkedToZoneContextEvent({
+      emergencyId: v.emergencyId,
+      correlationId: v.correlationId,
+      contexto: v.contexto,
       vinculadaEn,
       eventId: randomUUID(),
     }));
     await executor.query(
       `WITH nuevos AS (
          INSERT INTO emergencia_contexto_zona (emergency_id, contexto_id, created_at)
-         SELECT $1, unnest($2::uuid[]), $3
+         SELECT v.emergency_id, v.contexto_id, $3
+         FROM unnest($1::uuid[], $2::uuid[]) AS v(emergency_id, contexto_id)
          ON CONFLICT DO NOTHING
-         RETURNING contexto_id
+         RETURNING emergency_id, contexto_id
        )
        INSERT INTO outbox_events (id, topic, payload)
        SELECT ev.id, $4, ev.payload
-       FROM unnest($5::uuid[], $6::uuid[], $7::jsonb[]) AS ev(contexto_id, id, payload)
-       JOIN nuevos ON nuevos.contexto_id = ev.contexto_id`,
+       FROM unnest($1::uuid[], $2::uuid[], $5::uuid[], $6::jsonb[]) AS ev(emergency_id, contexto_id, id, payload)
+       JOIN nuevos ON nuevos.emergency_id = ev.emergency_id AND nuevos.contexto_id = ev.contexto_id`,
       [
-        id,
-        contextoIds,
+        conEvento.map((v) => v.emergencyId),
+        conEvento.map((v) => v.contexto.id),
         vinculadaEn,
         zoneContextLinkTopic(this.env),
-        events.map((event) => event.data.contextoId),
         events.map((event) => event.eventId),
         events.map((event) => JSON.stringify(event)),
       ]
     );
-    return contextoIds;
   }
 
   // Backfill del evento de vínculo (ADR "Publicar el vínculo de una emergencia

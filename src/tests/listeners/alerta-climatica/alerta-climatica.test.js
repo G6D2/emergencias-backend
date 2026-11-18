@@ -72,6 +72,12 @@ function contextoRepo({ dadoDeBaja = false } = {}) {
   };
 }
 
+// linkOpenEmergenciesToZoneContext devuelve los ids de las emergencias
+// abiertas que alcanzó el contexto.
+function emergencyRepoParaContextos(alcanzadas = []) {
+  return { linkOpenEmergenciesToZoneContext: jest.fn().mockResolvedValue(alcanzadas) };
+}
+
 describe('listeners/alerta-climatica', () => {
   const env = { ...process.env };
 
@@ -654,15 +660,19 @@ describe('listeners/alerta-climatica', () => {
 
     it('exigen el repositorio', () => {
       expect(() => createRegistrarContextosClimaticosHandler({})).toThrow('contextoZonaRepository');
+      expect(() => createRegistrarContextosClimaticosHandler({ contextoZonaRepository: contextoRepo() }))
+        .toThrow('emergencyRepository');
       expect(() => createDarDeBajaContextosClimaticosHandler({})).toThrow('contextoZonaRepository');
     });
 
     it('registra un contexto por punto con referencia <alertaId>#<índice>', async () => {
       const contextoZonaRepository = contextoRepo();
       const c = client();
-      const result = await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })(c, base);
+      const result = await createRegistrarContextosClimaticosHandler({
+        contextoZonaRepository, emergencyRepository: emergencyRepoParaContextos(),
+      })(c, base);
 
-      expect(result).toEqual({ applied: 2, finalizada: false });
+      expect(result).toEqual({ applied: 2, abiertasVinculadas: 0, finalizada: false });
       expect(contextoZonaRepository.bloquearGrupo).toHaveBeenCalledWith(c, GRUPO);
       expect(contextoZonaRepository.upsert.mock.calls.map(([, p]) => p.referenciaExterna)).toEqual([
         `${ALERTA.alertaId}#0`,
@@ -681,7 +691,9 @@ describe('listeners/alerta-climatica', () => {
       const sinOpcionales = { ...base };
       delete sinOpcionales.descripcion;
       delete sinOpcionales.causationId;
-      await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })(client(), sinOpcionales);
+      await createRegistrarContextosClimaticosHandler({
+        contextoZonaRepository, emergencyRepository: emergencyRepoParaContextos(),
+      })(client(), sinOpcionales);
       expect(contextoZonaRepository.upsert).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
         descripcion: null,
         causationId: null,
@@ -695,18 +707,42 @@ describe('listeners/alerta-climatica', () => {
       }));
     });
 
-    it('no cuenta un alta que no aplicó (más vieja o dada de baja)', async () => {
+    it('vincula las emergencias abiertas de cada contexto dado de alta, en la misma transacción', async () => {
       const contextoZonaRepository = contextoRepo();
-      contextoZonaRepository.upsert.mockResolvedValueOnce(null);
-      const result = await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })(client(), base);
-      expect(result).toEqual({ applied: 1, finalizada: false });
+      contextoZonaRepository.upsert
+        .mockResolvedValueOnce({ id: 'ctx-0', barrios: ['SAN NICOLAS'] })
+        .mockResolvedValueOnce({ id: 'ctx-1', barrios: ['BELGRANO'] });
+      const emergencyRepository = emergencyRepoParaContextos();
+      emergencyRepository.linkOpenEmergenciesToZoneContext
+        .mockResolvedValueOnce(['e-1', 'e-2'])
+        .mockResolvedValueOnce(['e-3']);
+      const c = client();
+
+      const result = await createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository })(c, base);
+
+      expect(result).toEqual({ applied: 2, abiertasVinculadas: 3, finalizada: false });
+      expect(emergencyRepository.linkOpenEmergenciesToZoneContext.mock.calls).toEqual([
+        [c, { id: 'ctx-0', barrios: ['SAN NICOLAS'] }],
+        [c, { id: 'ctx-1', barrios: ['BELGRANO'] }],
+      ]);
     });
 
-    it('no registra nada si la alerta ya se finalizó', async () => {
+    it('no cuenta ni vincula un alta que no aplicó (más vieja o dada de baja)', async () => {
+      const contextoZonaRepository = contextoRepo();
+      contextoZonaRepository.upsert.mockResolvedValueOnce(null);
+      const emergencyRepository = emergencyRepoParaContextos(['e-1']);
+      const result = await createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository })(client(), base);
+      expect(result).toEqual({ applied: 1, abiertasVinculadas: 1, finalizada: false });
+      expect(emergencyRepository.linkOpenEmergenciesToZoneContext).toHaveBeenCalledTimes(1);
+    });
+
+    it('no registra ni vincula nada si la alerta ya se finalizó', async () => {
       const contextoZonaRepository = contextoRepo({ dadoDeBaja: true });
-      const result = await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })(client(), base);
+      const emergencyRepository = emergencyRepoParaContextos(['e-1']);
+      const result = await createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository })(client(), base);
       expect(result).toEqual({ applied: 0, finalizada: true });
       expect(contextoZonaRepository.upsert).not.toHaveBeenCalled();
+      expect(emergencyRepository.linkOpenEmergenciesToZoneContext).not.toHaveBeenCalled();
     });
 
     it('da de baja el grupo de la alerta', async () => {
@@ -727,7 +763,9 @@ describe('listeners/alerta-climatica', () => {
     });
 
     it('rechaza un alta sin ubicaciones, sin radio o con un punto inválido', async () => {
-      const handler = createRegistrarContextosClimaticosHandler({ contextoZonaRepository: contextoRepo() });
+      const handler = createRegistrarContextosClimaticosHandler({
+        contextoZonaRepository: contextoRepo(), emergencyRepository: emergencyRepoParaContextos(),
+      });
       await expect(handler(client(), { ...base, ubicaciones: [] })).rejects.toThrow('ubicación');
       await expect(handler(client(), { ...base, radioMetros: null })).rejects.toThrow('radioMetros');
       await expect(handler(client(), { ...base, ubicaciones: [{ indice: -1, latitud: 1, longitud: 1 }] }))

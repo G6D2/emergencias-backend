@@ -113,7 +113,7 @@ beforeAll(async () => {
     CANCELAR_EMERGENCIA_CLIMATICA,
     createCancelarEmergenciaClimaticaHandler({ emergencyRepository, contextoZonaRepository, topic: UPDATED_TOPIC })
   );
-  factory.register(REGISTRAR_CONTEXTOS_CLIMATICOS, createRegistrarContextosClimaticosHandler({ contextoZonaRepository }));
+  factory.register(REGISTRAR_CONTEXTOS_CLIMATICOS, createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository }));
   factory.register(DAR_DE_BAJA_CONTEXTOS_CLIMATICOS, createDarDeBajaContextosClimaticosHandler({ contextoZonaRepository }));
   confirmada = new CriticidadClimaticaConfirmadaListener(fakeKafka(), { factory, topic: 'test.banner.confirmada' });
   finalizada = new CriticidadClimaticaFinalizadaListener(fakeKafka(), { factory, topic: 'test.banner.finalizada' });

@@ -210,6 +210,10 @@ describe('alta de contextos: guarda los datos para mostrar', () => {
     };
   }
 
+  function emergencyRepo() {
+    return { linkOpenEmergenciesToZoneContext: jest.fn().mockResolvedValue([]) };
+  }
+
   const base = {
     origen: 'espacios',
     alertaId: ALERTA_ID,
@@ -222,7 +226,7 @@ describe('alta de contextos: guarda los datos para mostrar', () => {
 
   it('el handler guarda nivel y fenómeno en cada contexto, y en la zona por barrio su barrio y su radio', async () => {
     const contextoZonaRepository = repo();
-    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })(
+    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository: emergencyRepo() })(
       { query: jest.fn() },
       {
         ...base,
@@ -244,8 +248,8 @@ describe('alta de contextos: guarda los datos para mostrar', () => {
 
   it('el handler guarda barrios null en la zona por punto, con el radio del payload', async () => {
     const contextoZonaRepository = repo();
-    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })({ query: jest.fn() }, base);
-    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository })(
+    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository: emergencyRepo() })({ query: jest.fn() }, base);
+    await createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository: emergencyRepo() })(
       { query: jest.fn() },
       { ...base, ubicaciones: base.ubicaciones.map((u) => ({ ...u, barrio: null, radioMetros: null })) }
     );
@@ -255,7 +259,7 @@ describe('alta de contextos: guarda los datos para mostrar', () => {
   });
 
   it('el handler rechaza una zona sin radio propio si el payload tampoco trae uno', async () => {
-    const handler = createRegistrarContextosClimaticosHandler({ contextoZonaRepository: repo() });
+    const handler = createRegistrarContextosClimaticosHandler({ contextoZonaRepository: repo(), emergencyRepository: emergencyRepo() });
     await expect(handler({ query: jest.fn() }, { ...base, radioMetros: null })).rejects.toThrow('radioMetros');
   });
 });

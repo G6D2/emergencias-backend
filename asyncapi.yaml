@@ -1033,13 +1033,17 @@ components:
         vinculadaEn:
           type: string
           format: date-time
+          description: |
+            Cuándo se escribió el vínculo: al crearse la emergencia o, con
+            `ALERTA_CLIMATICA`, al darse de alta el contexto si la emergencia ya
+            estaba abierta.
         reglaVersion:
           type: integer
           minimum: 1
           description: Sube si cambia la forma de decidir el vínculo.
         backfill:
           type: boolean
-          description: true si salió de la carga inicial y no del alta de la emergencia.
+          description: true si salió de la carga inicial y no del alta de la emergencia o del contexto.
 
     EventoComunitarioPublicadoData:
       type: object

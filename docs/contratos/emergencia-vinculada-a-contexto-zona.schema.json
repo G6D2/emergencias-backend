@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/G6D2/emergencias-backend/blob/main/docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json",
   "title": "com.citypass.emergencias.EmergenciaVinculadaAContextoZona",
-  "description": "Evento que se encola en outbox_events.payload por cada fila de emergencia_contexto_zona: la emergencia quedó vinculada a un contexto de zona (p. ej. un evento comunitario de Espacios) al crearse y, mientras los dos estuvieron vigentes, su prioridad de despacho estuvo un nivel arriba. Lo arma buildEmergencyLinkedToZoneContextEvent en src/services/emergency-events.js. Clave de deduplicación: (data.emergenciaId, data.contextoId). No lleva coordenadas. Ver ADR 'Publicar el vínculo de una emergencia con un contexto de zona'.",
+  "description": "Evento que se encola en outbox_events.payload por cada fila de emergencia_contexto_zona: la emergencia quedó vinculada a un contexto de zona (p. ej. un evento comunitario de Espacios) al crearse, o al llegar una alerta climática si ya estaba abierta, y, mientras los dos estuvieron vigentes, su prioridad de despacho estuvo un nivel arriba. Lo arma buildEmergencyLinkedToZoneContextEvent en src/services/emergency-events.js. Clave de deduplicación: (data.emergenciaId, data.contextoId). No lleva coordenadas. Ver ADR 'Publicar el vínculo de una emergencia con un contexto de zona'.",
   "type": "object",
   "additionalProperties": false,
   "required": ["type", "eventId", "correlationId", "data"],
@@ -49,7 +49,7 @@
           "minLength": 1
         },
         "referenciaExterna": {
-          "description": "Id del objeto en el módulo de origen: el eventoId de Espacios (EVENTO_ESPACIO_PUBLICO) o <alertaId>#<índice del punto> (ALERTA_CLIMATICA). Es la clave para agrupar por evento o alerta.",
+          "description": "Id del objeto en el módulo de origen: el eventoId de Espacios (EVENTO_ESPACIO_PUBLICO) o <alertaId>#<índice> (ALERTA_CLIMATICA; posición del barrio en barrios, o del punto en ubicaciones si la alerta no trae barrios del catálogo). Es la clave para agrupar por evento o alerta.",
           "type": "string",
           "minLength": 1
         },
@@ -59,7 +59,7 @@
           "minimum": 1
         },
         "vinculadaEn": {
-          "description": "Cuándo se creó el vínculo (created_at de emergencia_contexto_zona). ISO-8601 en UTC.",
+          "description": "Cuándo se creó el vínculo (created_at de emergencia_contexto_zona): al crearse la emergencia o, con una alerta climática, al darse de alta el contexto si la emergencia ya estaba abierta. ISO-8601 en UTC.",
           "type": "string",
           "format": "date-time",
           "pattern": "Z$"
@@ -70,7 +70,7 @@
           "minimum": 1
         },
         "backfill": {
-          "description": "true si el evento salió de la carga inicial (npm run backfill:vinculos-contexto) y no del alta de la emergencia.",
+          "description": "true si el evento salió de la carga inicial (npm run backfill:vinculos-contexto) y no del alta de la emergencia o del contexto.",
           "type": "boolean"
         }
       }

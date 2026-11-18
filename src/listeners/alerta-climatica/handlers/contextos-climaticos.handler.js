@@ -23,9 +23,18 @@ function assertReferencia({ origen, alertaId } = {}, type) {
 // `barrios = [su barrio]`: con eso linkZoneContexts exige que la emergencia
 // sea de ese barrio. Una zona por punto guarda `barrios = null` y vincula solo
 // por distancia.
-function createRegistrarContextosClimaticosHandler({ contextoZonaRepository }) {
+//
+// Después de cada alta que aplica, vincula también las emergencias que ya
+// estaban abiertas en esa zona (linkOpenEmergenciesToZoneContext), en la misma
+// transacción: así suben las que se crearon antes de que llegara la alerta.
+// Una reentrega no duplica: el dedup por eventId la frena y el vínculo tiene
+// ON CONFLICT DO NOTHING.
+function createRegistrarContextosClimaticosHandler({ contextoZonaRepository, emergencyRepository }) {
   if (!contextoZonaRepository) {
     throw new Error('createRegistrarContextosClimaticosHandler requiere contextoZonaRepository');
+  }
+  if (!emergencyRepository) {
+    throw new Error('createRegistrarContextosClimaticosHandler requiere emergencyRepository');
   }
 
   return async function registrarContextosClimaticos(client, payload) {
@@ -52,6 +61,7 @@ function createRegistrarContextosClimaticosHandler({ contextoZonaRepository }) {
     }
 
     let applied = 0;
+    let abiertasVinculadas = 0;
     for (const ubicacion of ubicaciones) {
       const { indice, latitud, longitud, barrio = null } = ubicacion;
       if (!Number.isInteger(indice) || indice < 0 || !Number.isFinite(latitud) || !Number.isFinite(longitud)) {
@@ -76,7 +86,11 @@ function createRegistrarContextosClimaticosHandler({ contextoZonaRepository }) {
         // barrio (y el banner lo muestra). Zona por punto: null.
         barrios: typeof barrio === 'string' && barrio ? [barrio] : null,
       });
-      if (contexto) applied += 1;
+      if (contexto) {
+        applied += 1;
+        const alcanzadas = await emergencyRepository.linkOpenEmergenciesToZoneContext(client, contexto);
+        abiertasVinculadas += alcanzadas.length;
+      }
     }
 
     secureLog('info', 'Contextos de alerta climática registrados', {
@@ -84,8 +98,9 @@ function createRegistrarContextosClimaticosHandler({ contextoZonaRepository }) {
       ubicaciones: ubicaciones.length,
       porBarrio: ubicaciones.filter((u) => u.barrio).length,
       applied,
+      abiertasVinculadas,
     });
-    return { applied, finalizada: false };
+    return { applied, abiertasVinculadas, finalizada: false };
   };
 }
 
