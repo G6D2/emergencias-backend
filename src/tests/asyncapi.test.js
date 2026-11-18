@@ -22,6 +22,7 @@ const { ProgramarCoberturaReservaRule } = require('../listeners/cobertura-preven
 const { CrearEmergenciaClimaticaRule } = require('../listeners/alerta-climatica/criticidad-climatica-confirmada/rules/01-crear-emergencia-climatica.rule');
 const { RegistrarContextosClimaticosRule } = require('../listeners/alerta-climatica/criticidad-climatica-confirmada/rules/02-registrar-contextos-climaticos.rule');
 const { CancelarEmergenciaClimaticaRule } = require('../listeners/alerta-climatica/criticidad-climatica-finalizada/rules/01-cancelar-emergencia-climatica.rule');
+const { createPublicarConfirmacionClimaHandler } = require('../listeners/alerta-climatica/handlers/confirmacion-clima.handler');
 
 const SPEC_PATH = path.join(__dirname, '..', '..', 'asyncapi.yaml');
 
@@ -56,7 +57,9 @@ describe('asyncapi.yaml', () => {
   it('declara los eventos publicados y consumidos', () => {
     const send = document.operations().filterBySend().map((op) => op.id());
     const receive = document.operations().filterByReceive().map((op) => op.id());
-    expect(send).toEqual(expect.arrayContaining(['publicarEmergenciaCreada', 'publicarEmergenciaActualizada']));
+    expect(send).toEqual(expect.arrayContaining([
+      'publicarEmergenciaCreada', 'publicarEmergenciaActualizada', 'publicarConfirmacionCriticidadClimatica',
+    ]));
     expect(receive).toEqual(expect.arrayContaining([
       'recibirEventoComunitarioPublicado', 'recibirEventoCancelado',
       'recibirReclamoCreado', 'recibirReclamoActualizado', 'recibirEmergenciaSolicitada',
@@ -226,6 +229,18 @@ describe('asyncapi.yaml', () => {
 
       expect(() => validate('CriticidadClimaticaConfirmadaData', { ...data, nivelCriticidad: 'ROJA' })).toThrow();
       expect(() => validate('CriticidadClimaticaConfirmadaData', { nivelCriticidad: 'ALTA' })).toThrow();
+    });
+
+    it('la confirmación que encola Emergencias cumple el spec (mismo record que Residuos)', async () => {
+      const insertOutboxEvent = jest.fn().mockResolvedValue();
+      await createPublicarConfirmacionClimaHandler({ emergencyRepository: { insertOutboxEvent } })({}, {
+        alertaId: 'a7f0e2c4-1b3d-4e5f-8a9b-0c1d2e3f4a5b', NivelCriticidad: 'MEDIA', fenomeno: 'GRANIZO',
+      });
+      const [, { payload }] = insertOutboxEvent.mock.calls[0];
+      expect(validate('CriticidadClimaticaRecibidaData', payload.data)).toBe(true);
+      expect(() => validate('CriticidadClimaticaRecibidaData', { ...payload.data, extra: 1 })).toThrow();
+      expect(() => validate('CriticidadClimaticaRecibidaData', { alertaId: 'x', nivelCriticidad: 'ALTA', fenomeno: 'GRANIZO' }))
+        .toThrow();
     });
 
     it('una CriticidadClimaticaFinalizada de Espacios cumple el spec y dispara la cancelación', () => {

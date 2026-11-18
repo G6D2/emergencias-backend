@@ -109,6 +109,22 @@ channels:
       emergenciaVinculadaAContextoZona:
         $ref: '#/components/messages/EmergenciaVinculadaAContextoZona'
 
+  criticidadClimaticaRecibida:
+    address: com.citypass.emergencias.CriticidadClimaticaConfirmada
+    title: CriticidadClimaticaConfirmada (confirmación de Emergencias)
+    description: |
+      Emergencias confirma que recibió una alerta climática confirmada de
+      Espacios (`com.citypass.espacios.CriticidadClimaticaConfirmada`). Mismo
+      contrato que publica Residuos: `alertaId`, `NivelCriticidad` y
+      `fenomeno`, reenviados tal cual llegaron. Uno por alerta recibida, de
+      cualquier nivel. Sale por el outbox en la misma transacción que la
+      emergencia y los contextos de la alerta. Solo se encola con
+      `CONFIRMACION_CLIMA_ENABLED=true`. Topic configurable con
+      `TOPIC_CONFIRMACION_CLIMA`.
+    messages:
+      criticidadClimaticaRecibida:
+        $ref: '#/components/messages/CriticidadClimaticaRecibida'
+
   emergenciaPriorizada:
     address: emergencias.priorizada
     title: EmergenciaPriorizada (interno)
@@ -250,6 +266,14 @@ operations:
     summary: Publica el vínculo de una emergencia con un contexto de zona.
     messages:
       - $ref: '#/channels/emergenciaVinculadaAContextoZona/messages/emergenciaVinculadaAContextoZona'
+
+  publicarConfirmacionCriticidadClimatica:
+    action: send
+    channel:
+      $ref: '#/channels/criticidadClimaticaRecibida'
+    summary: Confirma por el EDA que Emergencias recibió una alerta climática de Espacios.
+    messages:
+      - $ref: '#/channels/criticidadClimaticaRecibida/messages/criticidadClimaticaRecibida'
 
   publicarEmergenciaPriorizada:
     action: send
@@ -558,6 +582,30 @@ components:
               vinculadaEn: '2026-11-13T18:04:00.000Z'
               reglaVersion: 2
               backfill: false
+
+    CriticidadClimaticaRecibida:
+      name: CriticidadClimaticaConfirmada
+      title: Confirmación de alerta climática recibida
+      contentType: application/json
+      payload:
+        type: object
+        required: [metadata, data]
+        properties:
+          metadata:
+            $ref: '#/components/schemas/Metadata'
+          data:
+            $ref: '#/components/schemas/CriticidadClimaticaRecibidaData'
+      examples:
+        - name: ola-de-calor
+          payload:
+            metadata:
+              eventId: 3d9b2f6a-1c4e-4f8a-9b7d-2e5c8a1f4b60
+              eventType: CriticidadClimaticaConfirmada
+              source: com.citypass.emergencias
+            data:
+              alertaId: f6029e4f-e0ef-46b8-9f1a-66e814f1c90e
+              NivelCriticidad: ALTA
+              fenomeno: OLA_DE_CALOR
 
     EmergenciaPriorizada:
       name: EmergenciaPriorizada
@@ -1007,6 +1055,24 @@ components:
             type: string
         algorithmVersion:
           type: [string, 'null']
+
+    CriticidadClimaticaRecibidaData:
+      type: object
+      additionalProperties: false
+      description: |
+        Mismo record que `com.citypass.residuos.CriticidadClimaticaConfirmada`.
+        `NivelCriticidad` va con mayúscula, como en ese schema.
+      required: [alertaId, NivelCriticidad, fenomeno]
+      properties:
+        alertaId:
+          type: string
+          description: El `alertaId` de la alerta de Espacios.
+        NivelCriticidad:
+          type: string
+          description: El `nivelCriticidad` que mandó Espacios (BAJA, MEDIA, ALTA o CRITICA).
+        fenomeno:
+          type: string
+          description: El `fenomeno` que mandó Espacios.
 
     EmergenciaVinculadaAContextoZonaData:
       type: object
