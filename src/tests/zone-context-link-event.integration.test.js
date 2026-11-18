@@ -113,7 +113,7 @@ describe('EmergenciaVinculadaAContextoZona (Postgres real)', () => {
       contextoOrigen: 'espacios',
       referenciaExterna,
       radioMetros: 500,
-      reglaVersion: 1,
+      reglaVersion: 2,
       backfill: false,
     });
     expect(new Date(payload.data.vinculadaEn).getTime()).toBe(vinculos[0].created_at.getTime());

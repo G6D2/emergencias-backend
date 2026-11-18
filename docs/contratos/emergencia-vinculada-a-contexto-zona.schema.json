@@ -65,7 +65,7 @@
           "pattern": "Z$"
         },
         "reglaVersion": {
-          "description": "Versión de la regla de vinculación. Sube si cambia la forma de decidir el vínculo.",
+          "description": "Versión de la regla de vinculación. Sube si cambia la forma de decidir el vínculo. 1 = radio alrededor del contexto, solo emergencias nuevas; 2 (18/11/2026) = en alertas climáticas, zona por barrio y también las emergencias ya abiertas.",
           "type": "integer",
           "minimum": 1
         },

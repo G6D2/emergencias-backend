@@ -33,7 +33,7 @@ Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios, o u
 | `referenciaExterna` | El `eventoId` de Espacios, o `<alertaId>#<índice>` en una alerta climática (posición del barrio en `barrios`, o del punto en `ubicaciones` si la alerta no trae barrios del catálogo). **Agrupar por este campo** para contar por evento; para contar por alerta, agrupar por lo que está antes del último `#` |
 | `radioMetros` | Radio con el que se decidió |
 | `vinculadaEn` | Cuándo se vinculó: al crearse la emergencia o, con una alerta climática, al llegar la alerta si la emergencia ya estaba abierta |
-| `reglaVersion` | Versión de la regla. Si sube, cambió la forma de decidir el vínculo |
+| `reglaVersion` | Versión de la regla. Si sube, cambió la forma de decidir el vínculo. Hoy `2`: en alertas climáticas, zona por barrio y también las emergencias ya abiertas (desde el 18/11) |
 | `backfill` | `true` si salió de la carga inicial y no del alta |
 
 Reglas para no contar mal:

@@ -556,7 +556,7 @@ components:
               referenciaExterna: evento-1234
               radioMetros: 500
               vinculadaEn: '2026-11-13T18:04:00.000Z'
-              reglaVersion: 1
+              reglaVersion: 2
               backfill: false
 
     EmergenciaPriorizada:
@@ -1046,7 +1046,7 @@ components:
         reglaVersion:
           type: integer
           minimum: 1
-          description: Sube si cambia la forma de decidir el vínculo.
+          description: Sube si cambia la forma de decidir el vínculo. 1 = radio alrededor del contexto, solo emergencias nuevas; 2 (18/11/2026) = en alertas climáticas, zona por barrio y también las emergencias ya abiertas.
         backfill:
           type: boolean
           description: true si salió de la carga inicial y no del alta de la emergencia o del contexto.
