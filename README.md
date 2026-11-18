@@ -331,6 +331,7 @@ Lista completa, sacada de `src/routes/` y `src/app.js`. El detalle de cada uno (
 | `DELETE /api/citizen/saved-locations/:id` | `citizen` | borra una propia |
 | `GET /api/outbox-events` | `dispatcher` | estado de los eventos sin payload; filtros `status`, `topic`, `page`, `limit` (máx. 100) |
 | `GET /api/contextos-zona/activos` | `dispatcher` | alertas climáticas activas o por empezar, una por alerta (banner del tablero) |
+| `GET /admin/analitica` | `dispatcher` | proxy del HTML de Analítica (`/embed/emergencias`); reenvía el Bearer human y no cachea. El iframe va en el mismo origen del front (el token no viaja en la URL) |
 
 Una ruta o método que no existe responde **404** en JSON (`{ "error": "NotFoundError", "message": "No existe la ruta GET /..." }`).
 

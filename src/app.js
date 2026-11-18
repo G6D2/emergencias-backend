@@ -10,6 +10,7 @@ const { createOfficerRoutes } = require('./routes/officer.routes');
 const { createIncidentsRoutes } = require('./routes/incidents.routes');
 const { createCitizenProfileRoutes } = require('./routes/citizen-profile.routes');
 const { createContextosZonaRoutes } = require('./routes/contextos-zona.routes');
+const { createAnaliticaRoutes } = require('./routes/analitica.routes');
 const { createAsyncApiRoutes } = require('./routes/asyncapi.routes');
 const { createAuthenticateMiddleware } = require('./auth/authenticate');
 const { createSecurityMiddleware } = require('./security/security-headers');
@@ -40,6 +41,7 @@ const BODY_PARSER_MESSAGES = new Map([
  *   incidentRepository?: object|null,
  *   citizenProfileRepository?: object|null,
  *   contextoZonaRepository?: object|null,
+ *   analiticaClient?: import('./services/analitica-embed').AnaliticaEmbedClient|null,
  * }} [options]
  */
 function createApp(kafkaService, emergencyRepository, options = {}) {
@@ -113,6 +115,7 @@ function createApp(kafkaService, emergencyRepository, options = {}) {
   if (contextoZonaRepository) {
     app.use('/api/contextos-zona', createContextosZonaRoutes(contextoZonaRepository, authenticate));
   }
+  app.use('/admin/analitica', createAnaliticaRoutes(authenticate, options.analiticaClient));
 
   // Ruta o método no soportado: 404 en JSON con el mismo shape { error, message }
   // que el resto de la API, en vez del 404 HTML por defecto de Express.

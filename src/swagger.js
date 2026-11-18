@@ -36,6 +36,7 @@ const options = {
       { name: 'CitizenProfile', description: 'Perfil personal y ubicaciones frecuentes del ciudadano' },
       { name: 'Outbox', description: 'Estado operativo de los eventos pendientes de publicar (dispatcher)' },
       { name: 'ContextosZona', description: 'Alertas climáticas activas para el banner del tablero (dispatcher)' },
+      { name: 'Analitica', description: 'Tablero embebido de Analítica (dispatcher)' },
     ],
     components: {
       securitySchemes: {
