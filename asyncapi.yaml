@@ -24,8 +24,11 @@ info:
     `EDA_SCHEMA_REGISTRY_URL`). En modo `EDA_PUBLISHER_MODE=gateway` este backend
     POSTea solo `data`; el gateway agrega `metadata`.
 
-    Entrega **at-least-once** y **sin orden garantizado** (ver
-    `docs/diagramas/06-eventos.md`): los consumidores deduplican por
+    Entrega **at-least-once**, **en orden por emergencia** dentro de cada canal:
+    el outbox no publica un evento mientras haya uno anterior de la misma
+    emergencia sin publicar, y el gateway particiona por `data.correlationId`.
+    Entre emergencias distintas, y entre canales distintos, no hay orden (ver
+    `docs/diagramas/06-eventos.md`). Los consumidores deduplican por
     `metadata.eventId`.
 
     Este archivo se valida en `npm test` (`src/tests/asyncapi.test.js`): el spec
@@ -89,13 +92,16 @@ channels:
     title: EmergenciaVinculadaAContextoZona
     description: |
       Una emergencia quedó vinculada a un contexto de zona (evento comunitario
-      de Espacios) al crearse; mientras los dos estuvieron vigentes, su
-      prioridad de despacho estuvo un nivel arriba. Un evento por fila de
+      o punto de una alerta climática de Espacios) al crearse; mientras los dos
+      estuvieron vigentes, su prioridad de despacho estuvo un nivel arriba. Un
+      evento por fila de
       `emergencia_contexto_zona`, encolado en la misma sentencia que la fila.
       Clave de deduplicación: (`emergenciaId`, `contextoId`). Para contar por
       evento de Espacios, agrupar por `referenciaExterna`. No lleva
       coordenadas. Se publican los vínculos de todas las categorías, `PANICO`
-      incluida. Solo se encola con `EVENTO_VINCULO_CONTEXTO_ENABLED=true`.
+      incluida. Solo se encola con `EVENTO_VINCULO_CONTEXTO_ENABLED=true`, hoy
+      apagado en producción hasta que el tipo esté registrado en el catálogo
+      del gateway.
       Con `EDA_PUBLISHER_MODE=kafka` sale por `TOPIC_EMERGENCIA_VINCULADA_CONTEXTO`
       (default `emergencias.vinculada-contexto-zona`). Schema:
       `docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json`.
@@ -854,7 +860,7 @@ components:
               description: Igual que `latitud`. La versión aproximada en claro va en la raíz de `data`.
         afectaCirculacion:
           type: [boolean, 'null']
-          description: Derivado de `categoria`. true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y PREVENTIVA; false para MEDICA, PANICO y OTRO; null sin categoría.
+          description: Derivado de `categoria`. true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y TRANSITO; false para MEDICA, PANICO, OTRO y PREVENTIVA (una cobertura programada no corta la calle, desde el 17/11/2026); null sin categoría.
         causaId:
           type: [string, 'null']
         causaTipo:

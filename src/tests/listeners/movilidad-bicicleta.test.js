@@ -173,6 +173,20 @@ describe('createCrearEmergenciaBicicletaHandler', () => {
     expect(emergencyRepository.create.mock.calls[0][0].severity).toBe(severity);
   });
 
+  it('un emergenciaId que no sirve como correlación (control, más de 128) queda solo como causa', async () => {
+    for (const emergenciaId of ['EMG-1\u0007', `EMG-${'9'.repeat(130)}`]) {
+      const emergencyRepository = repository();
+      const handler = createCrearEmergenciaBicicletaHandler({ emergencyRepository });
+
+      const result = await handler(client, { ...EMERGENCIA, emergenciaId });
+
+      expect(emergencyRepository.create.mock.calls[0][0]).toMatchObject({
+        correlationId: result.emergencyId,
+        causaId: emergenciaId,
+      });
+    }
+  });
+
   it('no crea otra emergencia si ya existe la causa externa', async () => {
     const emergencyRepository = repository([{ id: 'existing-id', status: 'PENDING' }]);
     const handler = createCrearEmergenciaBicicletaHandler({ emergencyRepository });

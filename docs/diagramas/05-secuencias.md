@@ -2,7 +2,7 @@
 
 Para qué sirve: mostrar paso a paso los flujos que se muestran en la demo, con los nombres
 reales de funciones/archivos de front y back, para que sirvan de guion de demo y de referencia
-de debugging.
+de debugging. Las secuencias f) y g) son los casos transversales con otros módulos.
 
 ## a) Ciudadano dispara el botón SOS
 
@@ -123,15 +123,20 @@ sequenceDiagram
     Pub->>DB: al arrancar, skipPendingBefore(): PENDING anteriores a OUTBOX_PUBLISH_SINCE pasan a SKIPPED
     loop runOnce() cada intervalMs (default 5000ms)
         alt kafkaService.isEnabled() === true
-            Pub->>DB: claimBatch() — UPDATE ... SET PROCESSING FOR UPDATE SKIP LOCKED LIMIT 50
-            DB-->>Pub: lote de eventos reclamados
+            Note over Pub: si está en pausa (el bus no respondió), no reclama nada
+            Pub->>DB: claimBatch() — UPDATE ... SET PROCESSING FOR UPDATE SKIP LOCKED LIMIT 50, a lo sumo un evento por emergencia (ninguno si hay uno anterior PENDING/PROCESSING/FAILED)
+            DB-->>Pub: lote de eventos reclamados (se vuelve a reclamar hasta 50 por corrida)
             loop por evento del lote
                 Pub->>Kafka: producer.send(topic, payload)
                 alt envío OK
                     Kafka-->>Pub: ack
                     Pub->>DB: markPublished(id, attempts) — status=PUBLISHED (solo si sigue PROCESSING con ese attempts)
-                else falla o Kafka no conectado
-                    Pub->>DB: markFailed(id, attempts) — backoff hasta OUTBOX_MAX_ATTEMPTS, luego FAILED (mismo filtro)
+                else error propio del evento (400/403/404/413)
+                    Pub->>DB: markFailed(id, attempts) — FAILED, frena a los posteriores de su emergencia (mismo filtro)
+                else error transitorio (red, timeout, 5xx, 429) o Kafka no conectado
+                    Pub->>DB: markFailed(id, attempts) — PENDING con backoff (sin límite de intentos)
+                    Pub->>DB: releaseClaims(resto del lote) — vuelven a PENDING sin gastar intento
+                    Note over Pub: corta el lote y pausa (Retry-After o 5 s, 10 s, 20 s… hasta 5 min)
                 end
             end
         else kafkaService.isEnabled() === false (KAFKA_ENABLED=false)
@@ -178,7 +183,11 @@ sequenceDiagram
                     Strategy-->>Job: { groups, strategy: 'fallback' }
                     Note over Job: algorithmVersion = rule-based-v1
                 end
-                Job->>Rules: calculateIncidentScore + scoreToPriority
+                opt algún candidato ya pertenece a un incidente
+                    Job->>DB: findActiveByIncidentIds (miembros no terminales, aunque hayan salido de la ventana)
+                    DB-->>Job: miembros activos de esos incidentes
+                end
+                Job->>Rules: calculateIncidentScore + scoreToPriority (incidente existente: con todos sus miembros activos)
                 Rules-->>Job: score, reasonCodes, priority del incidente
                 Job->>Rules: applyPriorityInvariant(severity individual, priority incidente)
                 Rules-->>Job: finalPriority por miembro, nunca por debajo de su severity
@@ -241,6 +250,140 @@ sequenceDiagram
 de ese `eventoId` está en `PENDING` o `VALIDATED`, la pasa a `CANCELLED` (actor `eda:espacios`)
 con historial y `EmergenciaActualizada`.
 
+## f) Caso transversal: reclamo por ciclovía obstruida → intervención `TRANSITO`
+
+Caso 3 del Hito 2. Un vecino reclama por un auto estacionado en la ciclovía; Movilidad evalúa la
+obstrucción y le pide la emergencia a Emergencias, que crea la intervención y la sigue con el
+flujo normal de dispatcher y oficial. Qué evento crea la intervención lo decide
+`RECLAMO_INTERVENCION_DISPARADOR` (`src/listeners/reclamo-intervencion/disparador.js`):
+`movilidad` (default, el que corre en producción), `reclamo` (plan B: solo el `ReclamoCreado`) o
+`ambos` (el primero que llegue; el otro la encuentra creada).
+
+```mermaid
+sequenceDiagram
+    actor Ciudadano
+    participant Rec as Reclamos
+    participant Mov as Movilidad
+    participant Bus as Bus del Grupo 1 (Kafka + gateway)
+    participant L as Listeners reclamo-intervencion
+    participant F as OutcomeFactory + handlers
+    participant DB as Neon Postgres
+    participant Pub as OutboxPublisher (gateway)
+    actor Dispatcher
+    actor Oficial
+
+    Ciudadano->>Rec: reclamo "auto en la ciclovía" (categoria TRANSITO, objetoAfectado CICLOVIA)
+    Rec->>Bus: ReclamoCreado (com.citypass.reclamos.ReclamoCreado.v3)
+    Bus->>L: ReclamoCreado → ReclamoCreadoListener
+    alt RECLAMO_INTERVENCION_DISPARADOR = movilidad (default)
+        L->>F: process([], context) — solo registra el eventId
+    else reclamo o ambos (plan B), TRANSITO + CICLOVIA y estado no final
+        L->>F: process([CrearIntervencionPorReclamo], context)
+        Note over F,DB: mismo alta que abajo, con la prioridad del reclamo
+    end
+    Bus->>Mov: ReclamoCreado
+    Mov->>Mov: evalúa la obstrucción (ciclovía, afecta la circulación, prioridad ALTA o CRITICA)
+    Mov->>Bus: EmergenciaSolicitada (reclamoId, correlationId, prioridad, latitud/longitud)
+    Bus->>L: EmergenciaSolicitada → EmergenciaSolicitadaListener
+    L->>L: CrearIntervencionPorSolicitudRule: disparador movilidad o ambos, y trae reclamoId
+    L->>F: process([CrearIntervencionPorReclamo], context)
+    F->>DB: BEGIN, INSERT eventos_procesados (ON CONFLICT DO NOTHING)
+    alt eventId ya procesado
+        F->>DB: ROLLBACK (sin efectos)
+    else nuevo
+        F->>DB: findByCausa(RECLAMO, reclamoId)
+        alt ya hay intervención (la creó el otro disparador)
+            Note over F,DB: no crea otra
+        else no hay
+            F->>DB: SAVEPOINT, INSERT emergencies (TRANSITO, EXTERNAL, user_id NULL, PENDING, causa RECLAMO, severity desde prioridad, correlationId de Movilidad)
+            F->>DB: linkZoneContexts (si cae en un contexto de zona en curso) + INSERT outbox_events (EmergenciaCreada, afectaCirculacion = true)
+            Note over F,DB: si otro evento del mismo reclamo ganó la carrera, choca con uq_emergencies_reclamo_causa (V29): ROLLBACK TO SAVEPOINT y queda como "ya creada"
+        end
+        F->>DB: COMMIT
+    end
+    Pub->>Bus: EmergenciaCreada (com.citypass.emergencias.EmergenciaCreada, key = correlationId)
+
+    Note over Dispatcher,Oficial: desde acá, el flujo (b): cada paso deja historial y un EmergenciaActualizada en el outbox
+    Dispatcher->>DB: PATCH .../validate y .../assign (vía BFF y backend)
+    Oficial->>DB: PATCH .../en-route, .../on-scene, .../resolve
+    Dispatcher->>DB: PATCH .../close
+    Pub->>Bus: EmergenciaActualizada por cada paso, en orden por emergencia
+
+    opt el reclamo termina antes de que salga el agente
+        Rec->>Bus: ReclamoActualizado (estadoNuevo RESUELTO, RECHAZADO o CERRADO)
+        Bus->>L: ReclamoActualizado → ReclamoActualizadoListener
+        L->>F: process([CerrarIntervencionPorReclamo], context)
+        F->>DB: findByCausa(RECLAMO, reclamoId)
+        alt intervención en PENDING o VALIDATED
+            F->>DB: UPDATE status = CANCELLED (actor eda:reclamos, reason "Reclamo RESUELTO") + historial + outbox EmergenciaActualizada CANCELADA
+        else ya despachada o terminada
+            Note over F,DB: no la toca: la termina el oficial
+        end
+        F->>DB: COMMIT
+    end
+```
+
+## g) Alerta climática: contextos de zona, `PREVENTIVA` y suba de prioridad
+
+Espacios confirma una alerta climática y después la finaliza, con el mismo `alertaId`. Solo
+`ALTA` y `CRITICA` hacen algo. Los dos listeners son opt-in: sin
+`EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA` y `EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA` el
+consumer no se suscribe (en producción están cargadas desde el 17/11/2026).
+
+```mermaid
+sequenceDiagram
+    participant Esp as Espacios Públicos
+    participant Bus as Bus del Grupo 1 (Kafka + registry)
+    participant L as Listeners alerta-climatica
+    participant F as OutcomeFactory + handlers
+    participant DB as Neon Postgres
+    actor Ciudadano
+    participant Back as Backend HTTP
+    actor Dispatcher
+
+    Esp->>Bus: CriticidadClimaticaConfirmada (alertaId, nivelCriticidad, fenomeno, ubicaciones, barrios, vigenciaDesde/Hasta)
+    Bus->>L: → CriticidadClimaticaConfirmadaListener
+    alt nivel BAJA o MEDIA
+        L->>F: process([], context) — solo registra el eventId
+    else nivel ALTA o CRITICA
+        L->>F: process([CrearEmergenciaClimatica, RegistrarContextosClimaticos], context)
+        F->>DB: BEGIN, INSERT eventos_procesados, pg_advisory_xact_lock (grupo de la alerta)
+        alt la alerta ya se finalizó (hay marca de baja alertaId)
+            Note over F,DB: no crea contextos ni emergencia
+        else vigente
+            F->>DB: INSERT emergencies (PREVENTIVA por alertaId, causa EVENTO_CLIMATICO, high o critical, en el primer punto) + outbox EmergenciaCreada (prioridadOriginal = prioridad)
+            F->>DB: upsert contexto_zona ALERTA_CLIMATICA por punto (alertaId#n, radio 500 m ALTA o 1000 m CRITICA, ventana, nivel, fenómeno, barrios)
+        end
+        F->>DB: COMMIT
+    end
+
+    Ciudadano->>Back: POST /api/panic-button dentro del radio, con la alerta en curso
+    Back->>DB: BEGIN, INSERT emergencies (coordenada cifrada)
+    Back->>DB: linkZoneContexts: contextos en curso, haversine ≤ radio_metros con la coordenada en memoria → INSERT emergencia_contexto_zona
+    Back->>DB: INSERT outbox_events (EmergenciaCreada con la prioridad sin ajuste), COMMIT
+
+    loop polling cada 30 s del tablero
+        Dispatcher->>Back: GET /api/emergencies?sortBy=priority
+        Back->>DB: SELECT ... LEFT JOIN LATERAL contexto en curso
+        Back-->>Dispatcher: dispatchPriority = efectiva + 1 nivel, priorityContext "Alerta climática CRITICA: tormenta fuerte"
+        Dispatcher->>Back: GET /api/contextos-zona/activos
+        Back-->>Dispatcher: banner: una entrada por alerta (nivel, fenómeno, barrios, vigencia, enCurso)
+    end
+
+    Esp->>Bus: CriticidadClimaticaFinalizada (alertaId, finalizadaEn)
+    Bus->>L: → CriticidadClimaticaFinalizadaListener
+    L->>F: process([CancelarEmergenciaClimatica, DarDeBajaContextosClimaticos], context)
+    F->>DB: BEGIN, INSERT eventos_procesados, mismo advisory lock
+    alt PREVENTIVA en PENDING o VALIDATED
+        F->>DB: UPDATE status = CANCELLED (actor eda:espacios) + historial + outbox EmergenciaActualizada CANCELADA
+    else ya despachada
+        Note over F,DB: queda como está
+    end
+    F->>DB: darDeBajaGrupo: marca alertaId + dado_de_baja_en en todos los puntos
+    F->>DB: COMMIT
+    Note over Dispatcher,DB: en la próxima lectura no hay contexto en curso: dispatchPriority vuelve a la efectiva y la alerta sale del banner
+```
+
 ## Leyenda
 
 | Elemento | Notas |
@@ -253,6 +396,9 @@ con historial y `EmergenciaActualizada`.
 | `address` en el SOS | La dirección legible que resuelve el front (`resolveEmergencyAddress`, geocode inverso con timeout 2.5s) viaja al backend en el mismo body que `latitude`/`longitude`, como campo `address` (≤200 caracteres); `normalizeAddress` la sanea y `locationCrypto.encryptLocation` la guarda **dentro del mismo blob cifrado** que la ubicación (ver `02-modelo-entidad-relacion.md`) |
 | Advisory lock del job (d) | `pg_try_advisory_lock` no bloquea: si otra instancia del backend (p. ej. el stack de backup activado) ya tiene el lock, esa corrida se saltea en vez de esperar — hay otra corrida 60s después |
 | `EmergenciaPriorizada` condicional | Solo se publica si `applyScoringDecision` detecta que la `priority` del incidente cambió respecto a la que tenía antes (`NULL` cuenta como distinta, así que la primera vez siempre notifica); si no cambió, la corrida no genera evento nuevo aunque haya recalculado el score |
+| `RECLAMO_INTERVENCION_DISPARADOR` (f) | Se lee al construir los listeners: un valor que no es `movilidad`, `reclamo` ni `ambos` frena el arranque en vez de descartar cada evento. El cierre por `ReclamoActualizado` no depende de esta variable. Nunca hay dos intervenciones por reclamo: `findByCausa` más el índice único de V29, también si los dos listeners procesan el mismo reclamo a la vez (el consumer procesa particiones en paralelo) |
+| Advisory lock de la alerta (g) | Confirmación y finalización llegan por tópicos distintos y se pueden procesar a la vez. Las dos transacciones toman `pg_advisory_xact_lock` sobre el grupo de la alerta: la finalización gana aunque llegue antes, porque deja la marca de baja que la confirmación tardía consulta |
+| Suba de prioridad (g) | Se mide una sola vez, al crear la emergencia, con la coordenada en memoria (no se guarda en claro). No sube las `PREVENTIVA` ni las que ya existían cuando empezó la alerta. `EmergenciaCreada` y `EmergenciaActualizada` publican la prioridad original; el vínculo saldría como `EmergenciaVinculadaAContextoZona`, hoy apagado en producción (`EVENTO_VINCULO_CONTEXTO_ENABLED=false`) |
 | `detectGroups` (secuencia d) | Cae a `RuleBasedGrouper` **solo** ante una excepción de `DbscanGrouper` (falla técnica, ej. dataset no es un Array); un resultado vacío de DBSCAN es una respuesta válida y no dispara el fallback. Si el fallback también falla, la excepción se propaga sin capturar (PR #51, verificado en producción el 23/09) |
 
 ## Fuente en el código
@@ -260,4 +406,6 @@ con historial y `EmergenciaActualizada`.
 - Front (`Frontend`): `app/(citizen)/inicio/InicioClient.js`, `app/lib/sosController.js`, `app/lib/api.js`, `app/lib/geocoding.js`, `lib/geocode-server.js`, `lib/backend-fetch.js`, `app/api/backend/[...path]/route.js`, `app/api/geocode/route.js`, `app/components/DispatcherView.js`, `app/(citizen)/mis-alertas/[id]/page.js`
 - Back (`emergencias-backend`): `src/controllers/panic-button.controller.js` (`normalizeAddress`), `src/controllers/emergency.controller.js` (`advanceOperationalStatus`), `src/repositories/emergency.repository.js`, `src/security/location-crypto.js`, `src/services/outbox-publisher.js`, `src/services/kafka.service.js`, `src/services/emergency-events.js`
 - Consumo (secuencia e): `src/listeners/event-listener.js`, `src/listeners/event-decoder.js`, `src/listeners/outcome-factory.js`, `src/listeners/cobertura-preventiva/`, `src/repositories/eventos-procesados.repository.js`
+- Caso ciclovía (secuencia f): `src/listeners/reclamo-intervencion/disparador.js`, `reclamo-creado/`, `emergencia-solicitada/`, `reclamo-actualizado/` y `handlers/` (`crear-intervencion.handler.js`, `cerrar-intervencion.handler.js`), `db/migrations/V29__transito_y_emergencia_por_reclamo.sql`
+- Alerta climática (secuencia g): `src/listeners/alerta-climatica/` (reglas y `handlers/`), `src/domain/alerta-climatica.js`, `src/repositories/contexto-zona.repository.js`, `src/repositories/emergency.repository.js` (`linkZoneContexts`, `ZONE_CONTEXT_JOIN_SQL`), `src/domain/severity.js` (`dispatchPriority`), `src/controllers/contexto-zona.controller.js`
 - Motor de incidentes (secuencia d): `src/services/incident-detection-job.js` (`withDetectionLock`, `DETECTION_LOCK_KEY`), `src/domain/incident-detector.js`, `src/domain/incident-detection-strategy.js` (`detectGroups`), `src/domain/dbscan-grouper.js`, `src/domain/rule-based-grouper.js`, `src/domain/risk-engine.js`, `src/repositories/incident.repository.js` (`applyScoringDecision`)

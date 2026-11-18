@@ -67,7 +67,7 @@ function assertEmergencyType(value) {
   const normalized = normalizeEmergencyType(value);
   if (!normalized) {
     throw new ValidationError(
-      `Invalid emergencyType ${JSON.stringify(value)}. Valid values: ${EMERGENCY_TYPES.join(', ')}`
+      `emergencyType inválido: ${JSON.stringify(value)}. Valores válidos: ${EMERGENCY_TYPES.join(', ')}`
     );
   }
   return normalized;

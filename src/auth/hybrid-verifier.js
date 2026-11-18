@@ -26,7 +26,7 @@ function createHybridVerifier({ local, federated }) {
     } catch (error) {
       // Ni siquiera es un JWT (p. ej. "Bearer undefined" desde el front).
       logTokenRejection('hybrid', error);
-      throw new UnauthorizedError('Invalid or expired token');
+      throw new UnauthorizedError('Token inválido o vencido');
     }
 
     if (issuer === federated.issuer) {
@@ -38,7 +38,7 @@ function createHybridVerifier({ local, federated }) {
       return { ...user, authSource: 'local' };
     }
 
-    throw new UnauthorizedError('Unknown token issuer');
+    throw new UnauthorizedError('Emisor del token desconocido');
   }
 
   return { verifyAccessToken };

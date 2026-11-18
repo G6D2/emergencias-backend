@@ -96,7 +96,7 @@ describe('emergency-type domain', () => {
       expect(() => assertEmergencyType('flood')).toThrow(
         'MEDICA, INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO, OTRO, PANICO, PREVENTIVA'
       );
-      expect(() => assertEmergencyType(42)).toThrow(/Invalid emergencyType/);
+      expect(() => assertEmergencyType(42)).toThrow(/emergencyType inválido/);
     });
   });
 });

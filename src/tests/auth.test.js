@@ -101,7 +101,7 @@ describe('createJwtVerifier', () => {
     const token = await signToken(validClaims({ aud: AUDIENCE }));
     await expect(verifyAccessToken(token)).rejects.toMatchObject({
       name: 'UnauthorizedError',
-      message: 'Invalid token audience claim',
+      message: 'Claim aud del token inválido',
     });
   });
 
@@ -114,7 +114,7 @@ describe('createJwtVerifier', () => {
     const token = await signToken(validClaims({ token_use: 'service' }));
     await expect(verifyAccessToken(token)).rejects.toMatchObject({
       name: 'UnauthorizedError',
-      message: 'Invalid token_use',
+      message: 'Claim token_use del token inválido',
     });
   });
 

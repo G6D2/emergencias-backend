@@ -3,6 +3,8 @@ const {
   TRANSITIONS,
   TERMINAL_STATUSES,
   ACTIVE_STATUSES,
+  OFFICER_SCOPE_STATUSES,
+  OFFICER_SCOPES,
   isValidStatus,
   isTerminal,
   canTransition,
@@ -116,7 +118,7 @@ describe('Máquina de estados de emergencias', () => {
     });
 
     it('usa un mensaje claro para el salto de flujo', () => {
-      expect(() => assertTransition('PENDING', 'RESOLVED')).toThrow('Invalid transition PENDING → RESOLVED');
+      expect(() => assertTransition('PENDING', 'RESOLVED')).toThrow('Transición inválida: PENDING → RESOLVED');
     });
 
     it('los estados terminales no admiten ninguna transición', () => {
@@ -126,7 +128,7 @@ describe('Máquina de estados de emergencias', () => {
           expect(() => assertTransition(from, to)).toThrow(
             expect.objectContaining({
               name: 'ConflictError',
-              message: `Emergency in terminal status ${from} cannot transition to ${to}`,
+              message: `La emergencia está en un estado final (${from}) y no puede pasar a ${to}`,
             })
           );
         });
@@ -138,10 +140,10 @@ describe('Máquina de estados de emergencias', () => {
       expect(canTransition('PENDING', 'ON_SITE')).toBe(false);
       expect(canTransition('PENDING', null)).toBe(false);
       expect(() => assertTransition('PENDING', null)).toThrow(
-        expect.objectContaining({ name: 'ConflictError', message: 'Unknown emergency status null' })
+        expect.objectContaining({ name: 'ConflictError', message: 'Estado de emergencia desconocido: null' })
       );
       expect(() => assertTransition('CREATED', 'VALIDATED')).toThrow(
-        expect.objectContaining({ name: 'ConflictError', message: 'Unknown emergency status CREATED' })
+        expect.objectContaining({ name: 'ConflictError', message: 'Estado de emergencia desconocido: CREATED' })
       );
     });
   });
@@ -173,5 +175,19 @@ describe('expiración (solo sistema)', () => {
   it('no abre atajos en los endpoints: cancelar lo despachado sigue sin ser una transición válida', () => {
     expect(canTransition('DISPATCHED', 'CANCELLED')).toBe(false);
     expect(canTransition('ON_SCENE', 'CANCELLED')).toBe(false);
+  });
+});
+
+describe('OFFICER_SCOPE_STATUSES (vista del oficial, issue #17)', () => {
+  it('reparte sin solaparse los estados en los que una emergencia puede tener oficial', () => {
+    expect(OFFICER_SCOPES).toEqual(['active', 'history']);
+    const { active, history } = OFFICER_SCOPE_STATUSES;
+    expect(active.filter((status) => history.includes(status))).toEqual([]);
+    // En curso: lo que el oficial todavía puede avanzar.
+    expect(active.every((status) => ACTIVE_STATUSES.includes(status) && status !== 'RESOLVED')).toBe(true);
+    // PENDING, VALIDATED y DISCARDED nunca tienen oficial asignado.
+    expect([...active, ...history].sort()).toEqual(
+      EMERGENCY_STATUSES.filter((status) => !['PENDING', 'VALIDATED', 'DISCARDED'].includes(status)).sort()
+    );
   });
 });

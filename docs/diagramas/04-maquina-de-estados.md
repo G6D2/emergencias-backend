@@ -85,7 +85,7 @@ emergencia devuelta sigue mostrando el último oficial que tuvo.
 (`sortBy=priority`), pero no agregan ni quitan transiciones de `status`.
 
 Cualquier transición no listada en `TRANSITIONS` responde **409 Conflict**
-(`ConflictError`, ej. `Invalid transition PENDING → RESOLVED`); saltear un estado operativo
+(`ConflictError`, ej. `Transición inválida: PENDING → RESOLVED`); saltear un estado operativo
 (por ejemplo `DISPATCHED → ON_SCENE`) o repetirlo también da 409. La validación corre dos
 veces: en el controller (`assertTransition`) y en `EmergencyRepository.updateStatus`/`assignOfficer`
 con la fila bloqueada (`SELECT ... FOR UPDATE`). Para el oficial, además, el repository vuelve a

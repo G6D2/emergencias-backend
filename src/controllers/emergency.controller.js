@@ -8,7 +8,9 @@ const {
 const { GROUPS } = require('../auth/groups');
 // Las transiciones válidas viven en el dominio (src/domain/emergency-status.js);
 // una transición inválida lanza ConflictError (409).
-const { assertTransition, isValidStatus, EMERGENCY_STATUSES } = require('../domain/emergency-status');
+const {
+  assertTransition, isValidStatus, EMERGENCY_STATUSES, OFFICER_SCOPES,
+} = require('../domain/emergency-status');
 const { buildEmergencyUpdatedEvent } = require('../services/emergency-events');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { isValidSeverity, SEVERITY_LEVELS } = require('../domain/severity');
@@ -23,7 +25,7 @@ const MAX_PROBLEM_DESCRIPTION_LENGTH = 280;
 function normalizeReason(reason) {
   if (reason === undefined || reason === null) return null;
   if (typeof reason !== 'string') {
-    throw new ValidationError('reason must be a string');
+    throw new ValidationError('reason tiene que ser texto');
   }
   return scrubFreeText(reason, { maxLength: MAX_REASON_LENGTH }) || null;
 }
@@ -31,7 +33,7 @@ function normalizeReason(reason) {
 function normalizeProblemDescription(description) {
   if (description === undefined || description === null) return null;
   if (typeof description !== 'string') {
-    throw new ValidationError('descripcionProblema must be a string');
+    throw new ValidationError('descripcionProblema tiene que ser texto');
   }
   return scrubFreeText(description, { maxLength: MAX_PROBLEM_DESCRIPTION_LENGTH }) || null;
 }
@@ -43,7 +45,7 @@ function parseDateFilter(name, value) {
   const match = typeof value === 'string' ? ISO_DATE_RE.exec(value) : null;
   const day = match && new Date(`${match[1]}T00:00:00Z`);
   if (!match || Number.isNaN(Date.parse(value)) || day.toISOString().slice(0, 10) !== match[1]) {
-    throw new ValidationError(`${name} must be an ISO 8601 date`);
+    throw new ValidationError(`${name} tiene que ser una fecha ISO 8601`);
   }
   return value;
 }
@@ -53,6 +55,72 @@ function parseDateFilter(name, value) {
 // eslint-disable-next-line no-unused-vars
 function withoutOperationalFields({ incident, effectivePriority, dispatchPriority, priorityContext, ...rest }) {
   return rest;
+}
+
+// Lo que recibe el oficial: la emergencia con los campos operativos (la
+// prioridad de despacho, su motivo y el resumen del incidente, que no trae
+// datos de ciudadanos; el front la muestra en /oficial, Frontend#91) y con
+// `returned`, que marca las que le devolvieron (scope=history). Esas ya no
+// son suyas: no se muestra a quién quedaron asignadas.
+function forOfficer(emergency, officerId) {
+  if (emergency.assignedOfficerId === officerId) return { ...emergency, returned: false };
+  return { ...emergency, returned: true, assignedOfficerId: null, assignedOfficer: null };
+}
+
+// scope=active|history (issue #17): solo para el oficial, y sin status,
+// porque el scope ya elige los estados (ver OFFICER_SCOPE_STATUSES).
+function parseOfficerScope(scope, { isOfficerOnly, statuses }) {
+  if (scope === undefined || scope === '') return undefined;
+  if (!OFFICER_SCOPES.includes(scope)) {
+    throw new ValidationError(`scope tiene que ser uno de: ${OFFICER_SCOPES.join(', ')}`);
+  }
+  if (!isOfficerOnly) {
+    throw new ValidationError('scope solo está disponible para oficiales');
+  }
+  if (statuses.length > 0) {
+    throw new ValidationError('Usá scope o status, no los dos');
+  }
+  return scope;
+}
+
+// Rol de quien hizo cada cambio del historial, para el ciudadano. `actor`
+// guarda el sub del token (DISP-…, el sub LDAP, of-001) o el actor fijo de
+// otro módulo o de un job (eda:reclamos, eda:espacios, sistema:expiracion).
+// Fuera de esos, la transición dice el rol: cada una la habilita uno solo en
+// las rutas. Un actor que no encaja en nada queda en null.
+const SYSTEM_ACTOR = /^(eda|sistema):/;
+const STAFF_ROLE_BY_STATUS = Object.freeze({
+  VALIDATED: 'dispatcher',
+  DISPATCHED: 'dispatcher',
+  DISCARDED: 'dispatcher',
+  CLOSED: 'dispatcher',
+  EN_ROUTE: 'oficial',
+  ON_SCENE: 'oficial',
+  RESOLVED: 'oficial',
+});
+// assignOfficer deja "Assigned officer of-001": lleva el id del oficial.
+const ASSIGNED_OFFICER_REASON = /^Assigned officer\s/;
+
+function forCitizenHistoryEntry(entry, citizenSub) {
+  if (!entry.actor || entry.actor === citizenSub) return entry;
+  const isAssignment = typeof entry.reason === 'string' && ASSIGNED_OFFICER_REASON.test(entry.reason);
+  return {
+    ...entry,
+    actor: SYSTEM_ACTOR.test(entry.actor) ? 'sistema' : (STAFF_ROLE_BY_STATUS[entry.newStatus] || null),
+    reason: isAssignment ? 'Se asignó un oficial' : entry.reason,
+  };
+}
+
+// Lo que recibe el ciudadano: sin campos operativos y sin ids del personal.
+// El oficial asignado le llega por nombre (assignedOfficer) y no por id; en
+// el historial, cada cambio ajeno le llega con el rol y no con el sub.
+function forCitizen(emergency, citizenSub) {
+  const view = withoutOperationalFields(emergency);
+  if (view.assignedOfficerId) view.assignedOfficerId = null;
+  if (Array.isArray(view.statusHistory)) {
+    view.statusHistory = view.statusHistory.map((entry) => forCitizenHistoryEntry(entry, citizenSub));
+  }
+  return view;
 }
 
 class EmergencyController {
@@ -75,13 +143,13 @@ class EmergencyController {
     const userId = restrictToOwn ? user.sub : undefined;
     const assignedOfficerId = isOfficerOnly ? user.sub : query.assignedOfficerId;
     // El repository calcula incident/effectivePriority igual para todos (un
-    // solo JOIN); para officer y citizen se recortan acá (withoutOperationalFields).
+    // solo JOIN); para el citizen se recortan acá (withoutOperationalFields).
     // `priority` es un alias de `severity` en el filtro (ver findPage más
     // abajo), así que se valida igual: antes ?priority=xyz daba 200 con la
     // lista vacía en vez de 400.
     for (const name of ['severity', 'priority']) {
       if (query[name] && !isValidSeverity(query[name])) {
-        throw new ValidationError(`${name} must be one of: ${SEVERITY_LEVELS.join(', ')}`);
+        throw new ValidationError(`${name} tiene que ser uno de: ${SEVERITY_LEVELS.join(', ')}`);
       }
     }
     const page = Math.max(Number.parseInt(query.page, 10) || 1, 1);
@@ -93,8 +161,9 @@ class EmergencyController {
     // Un status desconocido daba 200 con la lista vacía; un from/to que no es
     // fecha llegaba a Postgres y volvía 500. Los dos son 400.
     if (!statuses.every(isValidStatus)) {
-      throw new ValidationError(`status must be a comma-separated list of: ${EMERGENCY_STATUSES.join(', ')}`);
+      throw new ValidationError(`status tiene que ser una lista separada por comas de: ${EMERGENCY_STATUSES.join(', ')}`);
     }
+    const officerScope = parseOfficerScope(query.scope, { isOfficerOnly, statuses });
     const from = parseDateFilter('from', query.from);
     const to = parseDateFilter('to', query.to);
     const sortBy = query.sortBy === 'priority' ? 'priority' : 'createdAt';
@@ -106,6 +175,7 @@ class EmergencyController {
       from,
       to,
       assignedOfficerId,
+      officerScope,
       // Acepta canónico o alias del front (medical → MEDICA); inválido → 400.
       // `type` se mantiene por compatibilidad con clientes existentes.
       emergencyType: assertEmergencyType(query.emergencyType || query.type),
@@ -115,7 +185,12 @@ class EmergencyController {
       order,
     });
 
-    const data = isDispatcher ? emergencies : emergencies.map(withoutOperationalFields);
+    let data = emergencies;
+    if (isOfficerOnly) {
+      data = emergencies.map((emergency) => forOfficer(emergency, user.sub));
+    } else if (!isDispatcher) {
+      data = emergencies.map((emergency) => forCitizen(emergency, user?.sub));
+    }
 
     return {
       data,
@@ -159,14 +234,14 @@ class EmergencyController {
     const detail = await this.emergencyRepository.findDetailById(id);
 
     if (!detail || !canViewEmergency(user, detail)) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     if (audit) {
       await this.recordReadAccess(id, user);
     }
 
-    const visibleDetail = userHasGroup(user, GROUPS.DISPATCHER) ? detail : withoutOperationalFields(detail);
+    const visibleDetail = userHasGroup(user, GROUPS.DISPATCHER) ? detail : forCitizen(detail, user.sub);
 
     return {
       success: true,
@@ -210,12 +285,12 @@ class EmergencyController {
     const emergency = await this.emergencyRepository.findById(id);
 
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'VALIDATED');
     if (emergency.status !== fromStatus) {
-      throw new ConflictError(`Emergency ${id} is ${emergency.status}, expected ${fromStatus}`);
+      throw new ConflictError(`La emergencia ${id} está en ${emergency.status}, se esperaba ${fromStatus}`);
     }
 
     const { emergency: updated } = await this.emergencyRepository.updateStatus(id, {
@@ -265,13 +340,13 @@ class EmergencyController {
     const normalizedReason = normalizeReason(reason);
 
     if (!normalizedReason) {
-      throw new ValidationError('A discard reason is required');
+      throw new ValidationError('Para descartar hace falta un motivo (reason)');
     }
 
     const emergency = await this.emergencyRepository.findById(id);
 
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'DISCARDED');
@@ -309,14 +384,14 @@ class EmergencyController {
     const emergency = await this.emergencyRepository.findById(id);
 
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     // Emergencia ajena: 404 (no 403) para no revelar que el id existe, misma
     // regla que GET /api/emergencies/:id. Un no-citizen ya cortó con 403 en la
     // ruta (requireCitizen), así que acá solo llega un citizen que no es dueño.
     if (!canCancelEmergency(user, emergency)) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'CANCELLED');
@@ -354,12 +429,12 @@ class EmergencyController {
     const normalizedOfficerId = typeof officerId === 'string' ? officerId.trim() : '';
 
     if (!normalizedOfficerId) {
-      throw new ValidationError('officerId is required');
+      throw new ValidationError('officerId es obligatorio');
     }
 
     const emergency = await this.emergencyRepository.findById(id);
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'DISPATCHED');
@@ -395,7 +470,7 @@ class EmergencyController {
     const actor = user.sub;
     const emergency = await this.emergencyRepository.findById(id);
     if (!emergency) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, 'CLOSED');
@@ -445,14 +520,14 @@ class EmergencyController {
     const actor = user.sub;
     const emergency = await this.emergencyRepository.findById(id);
     if (!emergency || !canAdvanceEmergencyStatus(user, emergency)) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
 
     assertTransition(emergency.status, newStatus);
 
     if (!Array.isArray(causasRelacionadas)
       || causasRelacionadas.some((cause) => !RELATED_CAUSES.has(cause))) {
-      throw new ValidationError('causasRelacionadas must be an array containing only VIA, ESPACIO_PUBLICO, or RESIDUOS');
+      throw new ValidationError('causasRelacionadas tiene que ser una lista con solo VIA, ESPACIO_PUBLICO o RESIDUOS');
     }
 
     const normalizedProblemDescription = newStatus === 'RESOLVED'
@@ -461,10 +536,10 @@ class EmergencyController {
     if (newStatus === 'RESOLVED') {
       const causeIsVia = causasRelacionadas.includes('VIA');
       if (causeIsVia && !normalizedProblemDescription) {
-        throw new ValidationError('descripcionProblema is required when causasRelacionadas includes VIA');
+        throw new ValidationError('descripcionProblema es obligatoria cuando causasRelacionadas incluye VIA');
       }
       if (!causeIsVia && normalizedProblemDescription) {
-        throw new ValidationError('descripcionProblema is only allowed when causasRelacionadas includes VIA');
+        throw new ValidationError('descripcionProblema solo se acepta cuando causasRelacionadas incluye VIA');
       }
     }
 
@@ -503,4 +578,4 @@ class EmergencyController {
   }
 }
 
-module.exports = { EmergencyController };
+module.exports = { EmergencyController, forCitizen };

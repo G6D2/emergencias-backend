@@ -60,7 +60,7 @@ describe('resolveDevLoginClaims', () => {
     expect(() => resolveDevLoginClaims(
       { sub: 'hacker', groups: ['dispatcher'] },
       { NODE_ENV: 'production' }
-    )).toThrow(/Demo subject not allowed/);
+    )).toThrow(/Sub de demo no habilitado/);
 
     const demo = resolveDevLoginClaims(
       { sub: 'CIT-JuanPanico', groups: ['dispatcher'] },
@@ -74,7 +74,7 @@ describe('resolveDevLoginClaims', () => {
     expect(() => resolveDevLoginClaims(
       { sub: 'DISP-Demo001', groups: ['dispatcher'] },
       { DEV_LOGIN_STRICT: 'true' }
-    )).toThrow(/Demo subject not allowed/);
+    )).toThrow(/Sub de demo no habilitado/);
   });
 });
 

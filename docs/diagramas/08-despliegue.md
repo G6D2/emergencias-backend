@@ -52,7 +52,7 @@ flowchart TB
 
 | Variable | Para qué |
 |---|---|
-| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH` (con `hybrid` no). Producción hoy **no** corre con `production` (no manda HSTS; verificado el 12/11/2026) |
+| `NODE_ENV` | `production` fuerza HTTPS/HSTS, endurece CORS y dev login, y con `AUTH_MODE=local` exige `ALLOW_LOCAL_AUTH` (con `hybrid` no). Producción corre con `production` desde el 17/11/2026: manda HSTS y redirige a HTTPS, con `/health` afuera del redirect |
 | `DATABASE_URL` | Connection string pooled de Neon, `sslmode=require` |
 | `DATABASE_SSL`, `DATABASE_SSL_VERIFY`, `DATABASE_SSL_CA` | SSL del pool (por default cifra sin verificar el certificado) |
 | `DB_POOL_MAX` | Tope de conexiones del pool `pg` |
@@ -63,7 +63,7 @@ flowchart TB
 | `EDA_PUBLISHER_MODE`, `EDA_API_URL` | Publicación por el gateway (en producción: `gateway`, `https://test.citypass.mrfranco.net.ar`) |
 | `EDA_SCHEMA_REGISTRY_URL` (+ `_USERNAME`/`_PASSWORD` opcionales) | Registry del gateway para decodificar Avro |
 | `EDA_OAUTH_TOKEN_URL`, `EDA_OAUTH_CLIENT_ID`, `EDA_OAUTH_CLIENT_SECRET` | Token client-credentials del Login Federado para el broker (SASL/OAUTHBEARER) y el registry. Solo el secreto se setea en producción |
-| `OUTBOX_PUBLISHER_ENABLED`, `OUTBOX_PUBLISH_SINCE`, `OUTBOX_MAX_ATTEMPTS`, `OUTBOX_MAX_BACKOFF_MS`, `OUTBOX_PUBLISHED_RETENTION_HOURS` | Publisher del outbox (en producción: prendido desde el 05/11, con `EDA_PUBLISHER_MODE=gateway`) |
+| `OUTBOX_PUBLISHER_ENABLED`, `OUTBOX_PUBLISH_SINCE`, `OUTBOX_MAX_BACKOFF_MS`, `OUTBOX_BATCH_SIZE`, `OUTBOX_POLL_INTERVAL_MS`, `OUTBOX_PUBLISHED_RETENTION_HOURS` | Publisher del outbox (en producción: prendido desde el 05/11, con `EDA_PUBLISHER_MODE=gateway`) |
 | `TOPIC_PANIC_BUTTON`, `TOPIC_EMERGENCIA_ESTADO_ACTUALIZADO`, `TOPIC_EMERGENCIA_PRIORIZADA` | Tópicos de `EmergenciaCreada`, `EmergenciaActualizada` y `EmergenciaPriorizada` |
 | `LOCATION_ENCRYPTION_KEY` / `LOCATION_ENCRYPTION_KEYS` / `LOCATION_ENCRYPTION_KEY_ID` | Cifrado AES-256-GCM de ubicación (obligatoria, el server no arranca sin ella) |
 | `BUS_LOCATION_ENCRYPTION_KEY` / `BUS_*_KEYS` / `BUS_*_KEY_ID` | Cifrado de `ubicacion.latitud/longitud` en el bus (opcional; distinta a la de DB) |

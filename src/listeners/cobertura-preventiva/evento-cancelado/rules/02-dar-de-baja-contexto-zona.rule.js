@@ -5,7 +5,9 @@ const { CONTEXTO_TIPO, ORIGEN_ESPACIOS, primerInstante } = require('../../../../
 // Espacios canceló el evento comunitario: su contexto de zona se da de baja
 // y las emergencias cercanas dejan de subir de prioridad en la próxima
 // lectura. Si la cancelación llega antes que la publicación, queda la marca
-// y la publicación tardía no crea el contexto.
+// y la publicación tardía no crea el contexto ni la cobertura preventiva
+// (ProgramarCobertura la mira; issue #88). Por eso aplica siempre, aunque el
+// evento no tenga contexto.
 class DarDeBajaContextoZonaRule extends BusinessRule {
   appliesTo(context) {
     const eventoId = context.data && context.data.eventoId;

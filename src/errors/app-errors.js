@@ -33,7 +33,7 @@ class ServiceUnavailableError extends Error {
 }
 
 class UnauthorizedError extends Error {
-  constructor(message = 'Unauthorized') {
+  constructor(message = 'No autenticado') {
     super(message);
     this.name = 'UnauthorizedError';
     this.statusCode = 401;
@@ -41,7 +41,7 @@ class UnauthorizedError extends Error {
 }
 
 class ForbiddenError extends Error {
-  constructor(message = 'Forbidden') {
+  constructor(message = 'Sin permiso') {
     super(message);
     this.name = 'ForbiddenError';
     this.statusCode = 403;

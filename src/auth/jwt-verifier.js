@@ -25,33 +25,33 @@ function createJwtVerifier(config, jwks = null) {
       }));
     } catch (error) {
       logTokenRejection(verifierName, error);
-      throw new UnauthorizedError('Invalid or expired token');
+      throw new UnauthorizedError('Token inválido o vencido');
     }
 
     // Contrato CityPass+: aud siempre es lista. Si llega string, rechazar.
     if (!Array.isArray(payload.aud)) {
-      throw new UnauthorizedError('Invalid token audience claim');
+      throw new UnauthorizedError('Claim aud del token inválido');
     }
 
     if (!payload.aud.includes(config.audience)) {
-      throw new UnauthorizedError('Invalid token audience');
+      throw new UnauthorizedError('Audiencia del token inválida');
     }
 
     if (payload.token_use !== config.expectedTokenUse) {
-      throw new UnauthorizedError('Invalid token_use');
+      throw new UnauthorizedError('Claim token_use del token inválido');
     }
 
     if (payload.ver !== config.expectedVer) {
-      throw new UnauthorizedError('Unsupported token version');
+      throw new UnauthorizedError('Versión del token no soportada');
     }
 
     if (typeof payload.sub !== 'string' || payload.sub.length === 0) {
-      throw new UnauthorizedError('Invalid token subject');
+      throw new UnauthorizedError('Sujeto (sub) del token inválido');
     }
 
     // groups vacío es válido; ausente o tipo incorrecto → lista vacía / rechazo
     if (payload.groups !== undefined && !Array.isArray(payload.groups)) {
-      throw new UnauthorizedError('Invalid groups claim');
+      throw new UnauthorizedError('Claim de grupos del token inválido');
     }
 
     const groups = Array.isArray(payload.groups)

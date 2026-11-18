@@ -258,15 +258,20 @@ beforeEach(() => {
 // EDA_SCHEMA_REGISTRY_URL y OutcomeFactory con dedup.
 function createListener() {
   const factory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
-  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
-  factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository: new ContextoZonaRepository(pool) }));
+  const contextoZonaRepository = new ContextoZonaRepository(pool);
+  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, contextoZonaRepository, topic: CREATED_TOPIC }));
+  factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   const decoder = createEventDecoder({ registry: registryFromEnv({ EDA_SCHEMA_REGISTRY_URL: registryUrl }) });
   return new EventoComunitarioPublicadoListener(fakeKafka(), { factory, decoder });
 }
 
 function createActividadListener() {
   const factory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
-  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
+  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({
+    emergencyRepository,
+    contextoZonaRepository: new ContextoZonaRepository(pool),
+    topic: CREATED_TOPIC,
+  }));
   const decoder = createEventDecoder({ registry: registryFromEnv({ EDA_SCHEMA_REGISTRY_URL: registryUrl }) });
   return new ActividadCreadaListener(fakeKafka(), { factory, decoder });
 }

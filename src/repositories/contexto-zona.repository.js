@@ -136,7 +136,9 @@ class ContextoZonaRepository {
   // alerta climática): cada punto es `<referenciaBase>#<n>` y la fila
   // `<referenciaBase>` sola es la marca de baja del grupo, que deja ignorar
   // un alta que llega después de la baja (igual que darDeBaja con un
-  // contexto suelto).
+  // contexto suelto). Un evento comunitario es un grupo de un solo contexto
+  // (referenciaBase = eventoId): su fila es a la vez el contexto y la marca,
+  // y la cobertura preventiva la mira para no cubrir un evento cancelado.
 
   // Serializa alta y baja del mismo grupo dentro de la transacción del
   // caller: los dos eventos vienen por tópicos distintos y pueden procesarse

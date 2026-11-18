@@ -3,12 +3,12 @@ const { ValidationError } = require('../../../errors/app-errors');
 const { secureLog } = require('../../../security/secure-log');
 const { buildEmergencyCreatedEvent } = require('../../../services/emergency-events');
 const { severityForType } = require('../../../domain/severity');
+const { correlationIdExterno } = require('../../../domain/correlation-id');
 
 const CREAR_INTERVENCION = 'CrearIntervencionPorReclamo';
 const CAUSA_TIPO = 'RECLAMO';
 const EMERGENCY_TYPE = 'TRANSITO';
 const MAX_DESCRIPTION_LENGTH = 200;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Índice único de V29: una sola emergencia con causa RECLAMO por reclamo.
 const UNIQUE_VIOLATION = '23505';
@@ -71,9 +71,10 @@ function createCrearIntervencionHandler({ emergencyRepository, topic = emergenci
       await emergencyRepository.create({
         client,
         id: emergencyId,
-        // Este flujo conserva correlationId externos solo si son UUID; el
-        // reclamoId siempre queda asociado por causaTipo/causaId.
-        correlationId: UUID_PATTERN.test(correlationId || '') ? correlationId : emergencyId,
+        // El correlationId de Movilidad o Reclamos se conserva aunque no sea
+        // UUID; si no viene o no sirve, el id propio. El reclamoId siempre
+        // queda asociado por causaTipo/causaId.
+        correlationId: correlationIdExterno(correlationId) ?? emergencyId,
         userId: null,
         latitude: hasLocation ? latitud : null,
         longitude: hasLocation ? longitud : null,

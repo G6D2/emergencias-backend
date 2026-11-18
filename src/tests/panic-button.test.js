@@ -49,7 +49,7 @@ function createMockEmergencyRepository() {
       updateStatusCalls.push({ id, newStatus, actor, reason, outboxEvent });
       const current = emergencies.get(id);
       if (!current) {
-        throw new NotFoundError(`Emergency with ID ${id} not found`);
+        throw new NotFoundError(`No se encontró la emergencia ${id}`);
       }
       const previousStatus = current.status;
       const updated = {
@@ -475,7 +475,7 @@ describe('Panic Button API', () => {
 
       expect(response.body).toMatchObject({
         error: 'ValidationError',
-        message: 'location.latitude and location.longitude must be numbers',
+        message: 'location.latitude y location.longitude tienen que ser números',
       });
     });
 
@@ -749,7 +749,7 @@ describe('Emergencies API', () => {
         .expect(400);
 
       expect(response.body.error).toBe('ValidationError');
-      expect(response.body.message).toBe('priority must be one of: low, medium, high, critical');
+      expect(response.body.message).toBe('priority tiene que ser uno de: low, medium, high, critical');
     }
     // También cuando severity viene bien: priority se valida por su cuenta.
     await request(dispatcherApp).get('/api/emergencies?severity=high&priority=xyz').expect(400);
@@ -1482,7 +1482,7 @@ describe('Emergencies API - máquina de estados', () => {
 
     expect(response.body).toEqual({
       error: 'ConflictError',
-      message: 'Emergency in terminal status CANCELLED cannot transition to VALIDATED',
+      message: 'La emergencia está en un estado final (CANCELLED) y no puede pasar a VALIDATED',
     });
     expect(sharedRepo.updateStatusCalls).toHaveLength(0);
   });
@@ -1500,7 +1500,7 @@ describe('Emergencies API - máquina de estados', () => {
 
     expect(response.body).toEqual({
       error: 'ConflictError',
-      message: 'Invalid transition VALIDATED → DISCARDED',
+      message: 'Transición inválida: VALIDATED → DISCARDED',
     });
     expect(sharedRepo.updateStatusCalls).toHaveLength(0);
   });
@@ -1524,7 +1524,7 @@ describe('Emergencies API - máquina de estados', () => {
 
     expect(response.body).toEqual({
       error: 'ConflictError',
-      message: 'Invalid transition DISPATCHED → CANCELLED',
+      message: 'Transición inválida: DISPATCHED → CANCELLED',
     });
     expect(sharedRepo.updateStatusCalls).toHaveLength(0);
   });
@@ -1541,7 +1541,7 @@ describe('Emergencies API - máquina de estados', () => {
 
     expect(response.body).toEqual({
       error: 'ConflictError',
-      message: 'Emergency in terminal status DISCARDED cannot transition to CANCELLED',
+      message: 'La emergencia está en un estado final (DISCARDED) y no puede pasar a CANCELLED',
     });
   });
 });

@@ -77,7 +77,9 @@ describe('emergency-events', () => {
       expect(afecta('INCENDIO')).toBe(true);
       expect(afecta('INFRAESTRUCTURA')).toBe(true);
       expect(afecta('DISTURBIO_EVENTO_MASIVO')).toBe(true);
-      expect(afecta('PREVENTIVA')).toBe(true);
+      expect(afecta('TRANSITO')).toBe(true);
+      // Una cobertura programada no corta la calle (17/11).
+      expect(afecta('PREVENTIVA')).toBe(false);
       expect(afecta('MEDICA')).toBe(false);
       expect(afecta('PANICO')).toBe(false);
       expect(afecta('OTRO')).toBe(false);

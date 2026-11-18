@@ -1,5 +1,6 @@
 jest.mock('../../security/secure-log', () => ({ secureLog: jest.fn() }));
 
+const { secureLog } = require('../../security/secure-log');
 const { EventListener } = require('../../listeners/event-listener');
 const { BusinessRule } = require('../../listeners/business-rule');
 
@@ -142,6 +143,45 @@ describe('EventListener', () => {
       { metadata: { eventId: 'e1' }, data: {} },
       'payload invalido'
     );
+  });
+
+  it('una reentrega que la dedup descarta deja un log info con eventId, tipo y tópico, sin datos del evento', async () => {
+    const factory = { process: jest.fn().mockResolvedValue({ duplicate: true }) };
+    const listener = new RuleListener([new CapacidadAlta()]);
+    listener.factory = factory;
+    const event = {
+      metadata: { eventId: 'a1000000-0000-4000-8000-000000000001', eventType: 'EventoComunitarioPublicado', source: 'grupo7' },
+      data: { capacidad: 900, latitud: -34.6, longitud: -58.4 },
+    };
+    secureLog.mockClear();
+
+    await listener.onMessage({ ...toMessage(event), offset: '42' });
+
+    const duplicados = secureLog.mock.calls.filter(([, message]) => /descarto un duplicado/.test(message));
+    expect(duplicados).toEqual([[
+      'info',
+      'RuleListener descarto un duplicado (eventId ya registrado en eventos_procesados)',
+      {
+        topic: 't',
+        eventId: 'a1000000-0000-4000-8000-000000000001',
+        eventType: 'EventoComunitarioPublicado',
+        source: 'grupo7',
+        offset: '42',
+      },
+    ]]);
+    expect(JSON.stringify(duplicados)).not.toMatch(/latitud|capacidad/);
+  });
+
+  it('un evento nuevo no deja el log de duplicado', async () => {
+    const factory = { process: jest.fn().mockResolvedValue({ duplicate: false }) };
+    const listener = new RuleListener([new CapacidadAlta()]);
+    listener.factory = factory;
+    secureLog.mockClear();
+
+    await listener.onMessage(toMessage({ metadata: { eventId: 'e1' }, data: { capacidad: 900 } }));
+
+    expect(factory.process).toHaveBeenCalledTimes(1);
+    expect(secureLog.mock.calls.some(([, message]) => /duplicado/.test(message))).toBe(false);
   });
 
   it('si registrar el descarte falla por un error transitorio, se reentrega', async () => {

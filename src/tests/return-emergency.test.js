@@ -35,7 +35,7 @@ function createMockEmergencyRepository() {
     recordAccess: async () => ({ id: 1 }),
     updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
       const current = emergencies.get(id);
-      if (!current) throw new NotFoundError(`Emergency with ID ${id} not found`);
+      if (!current) throw new NotFoundError(`No se encontró la emergencia ${id}`);
       const updated = { ...current, status: newStatus, updatedAt: new Date().toISOString() };
       // Espeja el comportamiento del repo real: al devolver a VALIDATED (o
       // cancelar/cerrar) el oficial asignado vuelve a disponible.
@@ -52,7 +52,7 @@ function createMockEmergencyRepository() {
     },
     assignOfficer: async (id, { officerId }) => {
       const current = emergencies.get(id);
-      if (!current) throw new NotFoundError(`Emergency with ID ${id} not found`);
+      if (!current) throw new NotFoundError(`No se encontró la emergencia ${id}`);
       officers.set(officerId, 'ocupado');
       const updated = {
         ...current,
@@ -220,7 +220,7 @@ describe('PATCH /api/emergencies/:id/validate vs /return', () => {
 
     expect(res.body).toEqual({
       error: 'ConflictError',
-      message: `Emergency ${id} is DISPATCHED, expected PENDING`,
+      message: `La emergencia ${id} está en DISPATCHED, se esperaba PENDING`,
     });
     expect(updateStatus).not.toHaveBeenCalled();
     expect(repo.officers.get(FAKE_OFFICER_ID)).toBe('ocupado');
@@ -239,7 +239,7 @@ describe('PATCH /api/emergencies/:id/validate vs /return', () => {
       .send({})
       .expect(409);
 
-    expect(res.body.message).toBe(`Emergency ${createRes.body.emergencyId} is PENDING, expected DISPATCHED`);
+    expect(res.body.message).toBe(`La emergencia ${createRes.body.emergencyId} está en PENDING, se esperaba DISPATCHED`);
   });
 
   it('cada endpoint le pide al repository que revalide su estado de origen con la fila bloqueada', async () => {

@@ -37,7 +37,7 @@
       "properties": {
         "emergenciaId": { "type": "string", "format": "uuid" },
         "categoria": {
-          "description": "emergency_type. El contrato suma TRANSITO, que el catálogo todavía no emite.",
+          "description": "emergency_type. TRANSITO lo emite la intervención por un reclamo de ciclovía (V29).",
           "type": "string",
           "enum": [
             "MEDICA",
@@ -86,7 +86,7 @@
           }
         },
         "afectaCirculacion": {
-          "description": "Derivado de categoria (#83): true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y PREVENTIVA; false para MEDICA, PANICO y OTRO.",
+          "description": "Derivado de categoria (#83): true para INCENDIO, INFRAESTRUCTURA, DISTURBIO_EVENTO_MASIVO y TRANSITO; false para MEDICA, PANICO, OTRO y PREVENTIVA (una cobertura programada no corta la calle, desde el 17/11/2026).",
           "type": ["boolean", "null"]
         },
         "causaId": {

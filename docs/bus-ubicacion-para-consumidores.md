@@ -20,23 +20,29 @@ Para desencriptar las coords necesitás la clave **`BUS_LOCATION_ENCRYPTION_KEY`
 
 ## 2. Ejemplo de payload relevante
 
+Así llega un `EmergenciaCreada` del tópico `com.citypass.emergencias.EmergenciaCreada`: el gateway del Grupo 1 arma el sobre `{ metadata, data }` (Avro, formato Confluent) y Emergencias solo completa `data`. Se omiten los campos de `metadata` que no hacen falta para la ubicación.
+
 ```json
 {
-  "type": "EmergenciaCreada",
-  "eventId": "…",
-  "correlationId": "5d1e9a7c-…",
+  "metadata": {
+    "eventId": "…",
+    "eventType": "com.citypass.emergencias.EmergenciaCreada",
+    "receivedAt": 1793918014120
+  },
   "data": {
     "emergenciaId": "5d1e9a7c-…",
     "categoria": "PANICO",
     "prioridad": "CRITICA",
     "estado": "PENDIENTE",
     "barrio": "MONSERRAT",
+    "latitud": -34.612,
+    "longitud": -58.381,
     "ubicacion": {
       "barrio": "MONSERRAT",
       "latitud": "RUxDAQEx…",
       "longitud": "RUxDAQEx…"
     },
-    "afectaCirculacion": null,
+    "afectaCirculacion": false,
     "causaId": null,
     "causaTipo": null,
     "prioridadOriginal": null,
@@ -47,7 +53,9 @@ Para desencriptar las coords necesitás la clave **`BUS_LOCATION_ENCRYPTION_KEY`
 }
 ```
 
-Si no había coordenadas al crear, o Emergencias no tiene clave de bus, `ubicacion.latitud` / `longitud` vienen `null`. El barrio puede existir igual (o ser `null` si no se pudo resolver).
+`data.latitud` y `data.longitud` (raíz de `data`) son las aproximadas en claro, redondeadas a 3 decimales; `data.ubicacion.latitud` y `data.ubicacion.longitud` son las exactas, cifradas. `EmergenciaActualizada` trae los mismos cuatro campos y el barrio.
+
+Si no había coordenadas al crear, las cuatro coordenadas vienen `null`. Si Emergencias no tiene clave de bus, solo `ubicacion.latitud` / `longitud` vienen `null`: las aproximadas de la raíz salen igual. El barrio puede existir igual (o ser `null` si no se pudo resolver).
 
 ---
 

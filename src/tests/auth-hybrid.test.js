@@ -196,7 +196,7 @@ describe('AUTH_MODE=hybrid', () => {
     it('rechaza groups con un tipo inválido', async () => {
       const token = await ctx.federatedToken({ groups: { dispatcher: true } });
       const res = await me(ctx.app, token).expect(401);
-      expect(res.body.message).toBe('Invalid groups claim');
+      expect(res.body.message).toBe('Claim de grupos del token inválido');
     });
 
     it('acepta un token sin token_use ni ver (opcionales por default)', async () => {
@@ -209,13 +209,13 @@ describe('AUTH_MODE=hybrid', () => {
     it('rechaza un token de servicio del mismo IdP', async () => {
       const token = await ctx.federatedToken({ token_use: 'service', groups: undefined });
       const res = await me(ctx.app, token).expect(401);
-      expect(res.body.message).toBe('Invalid token_use');
+      expect(res.body.message).toBe('Claim token_use del token inválido');
     });
 
     it('rechaza una versión de contrato desconocida', async () => {
       const token = await ctx.federatedToken({ ver: 2 });
       const res = await me(ctx.app, token).expect(401);
-      expect(res.body.message).toBe('Unsupported token version');
+      expect(res.body.message).toBe('Versión del token no soportada');
     });
 
     it('rechaza un token vencido', async () => {
@@ -223,20 +223,20 @@ describe('AUTH_MODE=hybrid', () => {
       const token = await ctx.federatedToken({ iat: now - 3600, exp: now - 1800 });
       const res = await me(ctx.app, token);
       expect(res.status).toBe(401);
-      expect(res.body.message).toBe('Invalid or expired token');
+      expect(res.body.message).toBe('Token inválido o vencido');
     });
 
     it('rechaza un token sin exp', async () => {
       const token = await ctx.federatedToken({ exp: undefined });
       const res = await me(ctx.app, token);
       expect(res.status).toBe(401);
-      expect(res.body.message).toBe('Invalid or expired token');
+      expect(res.body.message).toBe('Token inválido o vencido');
     });
 
     it('rechaza un sub vacío', async () => {
       const token = await ctx.federatedToken({ sub: '   ' });
       const res = await me(ctx.app, token).expect(401);
-      expect(res.body.message).toBe('Invalid token subject');
+      expect(res.body.message).toBe('Sujeto (sub) del token inválido');
     });
 
     it('rechaza la firma de una clave que no está en el JWKS federado', async () => {
@@ -244,7 +244,7 @@ describe('AUTH_MODE=hybrid', () => {
       const token = await other.sign({ groups: ['dispatcher'] });
       const res = await me(ctx.app, token);
       expect(res.status).toBe(401);
-      expect(res.body.message).toBe('Invalid or expired token');
+      expect(res.body.message).toBe('Token inválido o vencido');
     });
   });
 
@@ -361,7 +361,7 @@ describe('AUTH_MODE=hybrid', () => {
       });
       const res = await me(ctx.app, token);
       expect(res.status).toBe(401);
-      expect(res.body.message).toBe('Invalid or expired token');
+      expect(res.body.message).toBe('Token inválido o vencido');
     });
 
     it('sigue exigiendo aud como lista', async () => {
@@ -377,7 +377,7 @@ describe('AUTH_MODE=hybrid', () => {
         exp: now + 900,
       });
       const res = await me(ctx.app, token).expect(401);
-      expect(res.body.message).toBe('Invalid token audience claim');
+      expect(res.body.message).toBe('Claim aud del token inválido');
     });
 
     it('un token firmado con la clave local que dice ser federado da 401', async () => {
@@ -394,14 +394,14 @@ describe('AUTH_MODE=hybrid', () => {
       });
       const res = await me(ctx.app, token);
       expect(res.status).toBe(401);
-      expect(res.body.message).toBe('Invalid or expired token');
+      expect(res.body.message).toBe('Token inválido o vencido');
     });
 
     it('un token firmado por el IdP federado que dice ser local da 401', async () => {
       const token = await ctx.federatedToken({ iss: ctx.localConfig.issuer, groups: ['dispatcher'] });
       const res = await me(ctx.app, token);
       expect(res.status).toBe(401);
-      expect(res.body.message).toBe('Invalid or expired token');
+      expect(res.body.message).toBe('Token inválido o vencido');
     });
   });
 
@@ -409,18 +409,18 @@ describe('AUTH_MODE=hybrid', () => {
     it('un iss desconocido da 401', async () => {
       const token = await ctx.federatedToken({ iss: 'https://otro-idp.example', groups: ['dispatcher'] });
       const res = await me(ctx.app, token).expect(401);
-      expect(res.body.message).toBe('Unknown token issuer');
+      expect(res.body.message).toBe('Emisor del token desconocido');
     });
 
     it('un token sin iss da 401', async () => {
       const token = await ctx.federatedToken({ iss: undefined });
       const res = await me(ctx.app, token).expect(401);
-      expect(res.body.message).toBe('Unknown token issuer');
+      expect(res.body.message).toBe('Emisor del token desconocido');
     });
 
     it('algo que no es un JWT da 401', async () => {
       const res = await me(ctx.app, 'no-es-un-jwt').expect(401);
-      expect(res.body.message).toBe('Invalid or expired token');
+      expect(res.body.message).toBe('Token inválido o vencido');
     });
   });
 });

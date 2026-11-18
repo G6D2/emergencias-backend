@@ -991,6 +991,54 @@ describe('EmergencyRepository.findPage', () => {
 
     await expect(repo.findPage(baseArgs)).rejects.toThrow('count caído');
   });
+
+  describe('officerScope (vista del oficial, issue #17)', () => {
+    function recordingRepo() {
+      const calls = [];
+      const pool = createPool({
+        query: async (sql, params) => {
+          calls.push({ sql, params });
+          if (sql.includes('AS total')) return { rows: [{ total: 0 }] };
+          return { rows: [] };
+        },
+      });
+      return { calls, repo: new EmergencyRepository(pool, { locationCrypto: fakeCrypto }) };
+    }
+
+    it('active: solo las suyas en DISPATCHED, EN_ROUTE u ON_SCENE, sin mirar el historial', async () => {
+      const { calls, repo } = recordingRepo();
+
+      await repo.findPage({ ...baseArgs, assignedOfficerId: 'of-1', officerScope: 'active' });
+
+      const count = calls.find(({ sql }) => sql.includes('AS total'));
+      expect(count.sql).toMatch(/e\.assigned_officer_id = \$1 AND e\.status = ANY\(\$2\)/);
+      expect(count.sql).not.toMatch(/emergency_status_history/);
+      expect(count.params).toEqual(['of-1', ['DISPATCHED', 'EN_ROUTE', 'ON_SCENE']]);
+    });
+
+    it('history: las suyas terminadas o las que le devolvieron (asignación en el historial)', async () => {
+      const { calls, repo } = recordingRepo();
+
+      await repo.findPage({
+        ...baseArgs, assignedOfficerId: 'of-1', officerScope: 'history', page: 2, limit: 10,
+      });
+
+      const select = calls.find(({ sql }) => !sql.includes('AS total'));
+      expect(select.sql).toMatch(/e\.assigned_officer_id = \$1 AND e\.status = ANY\(\$2\)/);
+      expect(select.sql).toMatch(/e\.assigned_officer_id IS DISTINCT FROM \$1 AND EXISTS/);
+      expect(select.sql).toMatch(/h\.emergency_id = e\.id AND h\.officer_id = \$1/);
+      expect(select.sql).toMatch(/LIMIT \$3 OFFSET \$4/);
+      expect(select.params).toEqual(['of-1', ['RESOLVED', 'CLOSED', 'CANCELLED'], 10, 10]);
+    });
+
+    it('sin assignedOfficerId no consulta: el scope siempre va atado a un oficial', async () => {
+      const { calls, repo } = recordingRepo();
+
+      await expect(repo.findPage({ ...baseArgs, officerScope: 'history' }))
+        .rejects.toThrow('officerScope requires assignedOfficerId');
+      expect(calls).toHaveLength(0);
+    });
+  });
 });
 
 describe('EmergencyRepository.findOutboxPage', () => {
@@ -1149,7 +1197,7 @@ describe('EmergencyRepository.updateStatus: estado de origen, closed_at y oficia
     const repo = new EmergencyRepository(createPool({ client }), { locationCrypto: fakeCrypto });
 
     await expect(repo.updateStatus('e-1', { newStatus: 'VALIDATED', requireStatus: 'PENDING' }))
-      .rejects.toThrow(new ConflictError('Emergency e-1 is DISPATCHED, expected PENDING'));
+      .rejects.toThrow(new ConflictError('La emergencia e-1 está en DISPATCHED, se esperaba PENDING'));
 
     expect(client.calls.some((c) => c.sql.startsWith('UPDATE emergencies'))).toBe(false);
     expect(client.calls.some((c) => c.sql.includes('officers'))).toBe(false);
@@ -1283,6 +1331,18 @@ describe('EmergencyRepository.assignOfficer', () => {
     expect(result.emergency.assignedOfficer).toBe('Ana');
     expect(client.calls.some((c) => c.sql.includes('INSERT INTO outbox_events'))).toBe(true);
     expect(client.calls.some((c) => c.sql === 'COMMIT')).toBe(true);
+  });
+
+  it('guarda el oficial en la fila del historial (officer_id), además del reason', async () => {
+    const client = createClient(baseHandler());
+    const pool = createPool({ client });
+    const repo = new EmergencyRepository(pool, { locationCrypto: fakeCrypto });
+
+    await repo.assignOfficer('e-1', { officerId: 'o-1', actor: 'dispatcher-1' });
+
+    const insert = client.calls.find((c) => c.sql.includes('INSERT INTO emergency_status_history'));
+    expect(insert.sql).toMatch(/reason, officer_id\)/);
+    expect(insert.params).toEqual(['e-1', 'VALIDATED', 'dispatcher-1', 'Assigned officer o-1', 'o-1']);
   });
 });
 
@@ -1481,6 +1541,56 @@ describe('EmergencyRepository.findRecentByType (candidatos para el job de detecc
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0].id).toBe('e4');
+  });
+});
+
+describe('EmergencyRepository.findActiveByIncidentIds (miembros activos de un incidente, sin ventana)', () => {
+  const crypto = createLocationCrypto(Buffer.alloc(32, 3).toString('base64'));
+
+  it('sin ids no consulta la base', async () => {
+    const query = jest.fn();
+    const repo = new EmergencyRepository(createPool({ query }), { locationCrypto: crypto });
+
+    await expect(repo.findActiveByIncidentIds([])).resolves.toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('filtra por incident_id y estados no terminales, sin created_at, y devuelve el formato de los candidatos', async () => {
+    const ciphertext = crypto.encryptLocation({ latitude: -34.6, longitude: -58.4 });
+    const otherKeyCiphertext = createLocationCrypto(Buffer.alloc(32, 7).toString('base64'))
+      .encryptLocation({ latitude: -34.6, longitude: -58.4 });
+    const query = jest.fn(async () => ({
+      rows: [
+        {
+          id: 'e1', correlation_id: 'c1', user_id: 'u1', emergency_type: 'MEDICA', location_encrypted: ciphertext, severity: 'medium', incident_id: 'inc-1', created_at: 'c1',
+        },
+        {
+          id: 'e2', correlation_id: 'c2', user_id: 'u2', emergency_type: 'MEDICA', location_encrypted: null, severity: 'low', incident_id: 'inc-1', created_at: 'c2',
+        },
+        {
+          id: 'e3', correlation_id: 'c3', user_id: 'u3', emergency_type: 'MEDICA', location_encrypted: otherKeyCiphertext, severity: 'low', incident_id: 'inc-1', created_at: 'c3',
+        },
+      ],
+    }));
+    const repo = new EmergencyRepository(createPool({ query }), { locationCrypto: crypto });
+
+    const members = await repo.findActiveByIncidentIds(['inc-1']);
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toMatch(/incident_id = ANY\(\$1::uuid\[\]\)/);
+    expect(sql).toMatch(/status <> ALL\(\$2::text\[\]\)/);
+    expect(sql).not.toMatch(/created_at >=/);
+    expect(params).toEqual([['inc-1'], TERMINAL_STATUSES]);
+    // e3 no se puede descifrar: se excluye, igual que en findRecentByType.
+    expect(members).toEqual([
+      {
+        id: 'e1', correlationId: 'c1', userId: 'u1', emergencyType: 'MEDICA', latitude: -34.6, longitude: -58.4, severity: 'medium', incidentId: 'inc-1', createdAt: 'c1',
+      },
+      {
+        id: 'e2', correlationId: 'c2', userId: 'u2', emergencyType: 'MEDICA', latitude: null, longitude: null, severity: 'low', incidentId: 'inc-1', createdAt: 'c2',
+      },
+    ]);
   });
 });
 
@@ -1683,7 +1793,7 @@ describe('EmergencyRepository.updateStatus con expiration', () => {
     const repo = (status) => new EmergencyRepository(createPool({ client: clientIn(status) }), { locationCrypto: fakeCrypto });
 
     await expect(repo('RESOLVED').updateStatus('e-1', { newStatus: 'CANCELLED', expiration: true }))
-      .rejects.toThrow('cannot expire to CANCELLED');
+      .rejects.toThrow('no puede expirar a CANCELLED');
     await expect(repo('CLOSED').updateStatus('e-1', { newStatus: 'CANCELLED', expiration: true }))
       .rejects.toThrow(ConflictError);
     await expect(repo('PENDING').updateStatus('e-1', { newStatus: 'VALIDATED', expiration: true }))

@@ -1,380 +1,1357 @@
 {
   "info": {
-    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    "name": "Emergencias Backend",
-    "description": "CityPass+ — módulo de Emergencias y Seguridad.\n\nPrimera entrega (AUTH_MODE=local):\n1. POST Dev Login → guarda accessToken\n2. Health\n3. Trigger Panic Button\n4. Get / Cancel\n\nCon IdP real: pegá el token del Grupo 2 en accessToken.",
+    "_postman_id": "d020b058-d5c1-5c8d-890b-23216fd52804",
+    "name": "Emergencias Backend: flujo de demo",
+    "description": "CityPass+, módulo de Emergencias y Seguridad. Colección corta con el recorrido de la demo, pensada para correr entera con el Runner contra un backend LOCAL (AUTH_MODE=local, DEV_LOGIN_STRICT=false). Cada request guarda lo que necesita el siguiente (tokens por rol, emergencyId) y verifica el status.\n\nNo es la referencia de la API. La lista completa y siempre al día de endpoints, parámetros y respuestas es el OpenAPI que sirve el backend: en Postman, Import → Link → http://localhost:3000/api-docs.json (o la URL del backend que uses; Swagger UI en /api-docs).\n\nNo correrla contra producción: crea emergencias reales que los otros módulos consumen, y en producción el dev login solo da ciudadanos.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "auth": {
-    "type": "bearer",
-    "bearer": [
-      {
-        "key": "token",
-        "value": "{{accessToken}}",
-        "type": "string"
-      }
-    ]
-  },
+  "item": [
+    {
+      "name": "1. Sesión (tokens por rol)",
+      "description": "Dev login sin modo estricto (DEV_LOGIN_STRICT=false, solo local): un token por rol, guardado en variables de la colección. Además, alta y login de una cuenta local nueva.",
+      "auth": {
+        "type": "noauth"
+      },
+      "item": [
+        {
+          "name": "Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          },
+          "_postman_id": "a5789d2c-5561-5116-9b70-c5acb05bc922"
+        },
+        {
+          "name": "Dev login: ciudadano",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('citizenToken', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/dev/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "dev",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sub\": \"{{citizenSub}}\",\n  \"groups\": [\n    \"citizen\"\n  ],\n  \"has_antipanic_button\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "b6e39fa3-fec8-5b64-bea9-c347a9f8fa16"
+        },
+        {
+          "name": "Dev login: dispatcher",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('dispatcherToken', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/dev/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "dev",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sub\": \"U000999\",\n  \"groups\": [\n    \"dispatcher\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "9acddcac-44d9-52bd-a900-7194ab8a3a2d"
+        },
+        {
+          "name": "Dev login: oficial",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('officerToken', pm.response.json().access_token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/dev/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "dev",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sub\": \"{{officerId}}\",\n  \"groups\": [\n    \"officer\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "El sub del oficial tiene que ser un id del catálogo (of-001, of-002): las rutas del oficial lo comparan con assigned_officer_id."
+          },
+          "_postman_id": "20f02c14-bdae-5ec3-9496-454aae4fffe6"
+        },
+        {
+          "name": "Registro de cuenta local",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('nuevoEmail', `postman-${Date.now()}@example.com`);",
+                  "pm.collectionVariables.set('nuevoPassword', `pm-${pm.variables.replaceIn('{{$randomUUID}}')}`);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{nuevoEmail}}\",\n  \"password\": \"{{nuevoPassword}}\",\n  \"preferred_username\": \"postman\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "645d1471-5ba2-5dd9-a3ba-324d34b3d13b"
+        },
+        {
+          "name": "Login de cuenta local",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));",
+                  "pm.test('trae access_token', () => pm.expect(pm.response.json().access_token).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{nuevoEmail}}\",\n  \"password\": \"{{nuevoPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "0ad553a7-0ea9-57a6-8632-f1eb99ac3f71"
+        }
+      ]
+    },
+    {
+      "name": "2. Ciudadano: SOS y perfil",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{citizenToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Usuario actual",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/user",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "user"
+              ]
+            }
+          },
+          "_postman_id": "fc7d2ac6-f191-5e61-8d2e-4774627e3cfa"
+        },
+        {
+          "name": "Disparar SOS (con Idempotency-Key)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('emergencyId', pm.response.json().emergencyId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/panic-button",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "panic-button"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"location\": {\n    \"latitude\": -34.6037,\n    \"longitude\": -58.3816\n  },\n  \"address\": \"Av. Corrientes 1234, CABA\",\n  \"emergencyType\": \"PANICO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "58d4166f-4b16-53c4-9bda-fc54019fd740"
+        },
+        {
+          "name": "Ver mi alerta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/panic-button/{{emergencyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "panic-button",
+                "{{emergencyId}}"
+              ]
+            }
+          },
+          "_postman_id": "fe3a2d6c-be33-52c2-ae4b-cbf0e4766dcd"
+        },
+        {
+          "name": "Mis emergencias",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies"
+              ]
+            }
+          },
+          "_postman_id": "686e5b98-f6c5-57ee-991e-8b3b0dc3c383"
+        },
+        {
+          "name": "Guardar perfil",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/citizen/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "citizen",
+                "profile"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Vecina de prueba\",\n  \"phone\": \"+54 11 5555-0000\",\n  \"emergencyContactName\": \"Contacto de prueba\",\n  \"emergencyContactPhone\": \"+54 11 5555-0001\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "89bd416b-9401-5d1c-8178-b62c2f1c794f"
+        },
+        {
+          "name": "Ver perfil",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/citizen/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "citizen",
+                "profile"
+              ]
+            }
+          },
+          "_postman_id": "b0412b98-c0ac-5fb2-8eed-ea3c5e7e02a8"
+        },
+        {
+          "name": "Agregar ubicación frecuente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/citizen/saved-locations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "citizen",
+                "saved-locations"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"label\": \"Casa\",\n  \"address\": \"Av. Rivadavia 5000, CABA\",\n  \"lat\": -34.6176,\n  \"lng\": -58.4337\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "ac1f91f6-60c4-501c-8088-ba61c4b892f8"
+        },
+        {
+          "name": "Ubicaciones frecuentes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/citizen/saved-locations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "citizen",
+                "saved-locations"
+              ]
+            }
+          },
+          "_postman_id": "e08e50a2-5388-50b1-a600-d9e07799157d"
+        }
+      ]
+    },
+    {
+      "name": "3. Dispatcher: validar, asignar y devolver",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{dispatcherToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Listado por prioridad",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies?sortBy=priority&limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies"
+              ],
+              "query": [
+                {
+                  "key": "sortBy",
+                  "value": "priority"
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            }
+          },
+          "_postman_id": "ec114c06-13f1-58e5-a18b-a8c108ecae33"
+        },
+        {
+          "name": "Detalle con historial",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}"
+              ]
+            }
+          },
+          "_postman_id": "36b24580-11ed-5770-952a-332c4ee72f6d"
+        },
+        {
+          "name": "Validar",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/validate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "validate"
+              ]
+            }
+          },
+          "_postman_id": "80a48b48-ca91-5084-9fde-75c18efff7e6"
+        },
+        {
+          "name": "Oficiales disponibles",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/officers?status=disponible",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "officers"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "disponible"
+                }
+              ]
+            }
+          },
+          "_postman_id": "4b321ec3-27ab-5eb2-90d5-21d42097f0a3"
+        },
+        {
+          "name": "Asignar oficial",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "assign"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"officerId\": \"{{officerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "b3cf1db9-7462-56eb-9ce8-f9d0b3895831"
+        },
+        {
+          "name": "Devolver para reasignar",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/return",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "return"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Prueba de devolución\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "c808ff30-09bd-54cb-85de-fb358750843a"
+        },
+        {
+          "name": "Asignar de nuevo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "assign"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"officerId\": \"{{officerId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "9fc832cf-1a7b-5c21-8e6d-b4205bff9911"
+        }
+      ]
+    },
+    {
+      "name": "4. Oficial: en camino, en el lugar, resuelta",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{officerToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Mis emergencias activas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies?scope=active",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies"
+              ],
+              "query": [
+                {
+                  "key": "scope",
+                  "value": "active"
+                }
+              ]
+            }
+          },
+          "_postman_id": "78c6fd53-51f2-55d4-bb5c-d51f4ebcdf1b"
+        },
+        {
+          "name": "En camino",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/en-route",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "en-route"
+              ]
+            }
+          },
+          "_postman_id": "a5de823f-7528-569d-bb20-5c11f5da4750"
+        },
+        {
+          "name": "En el lugar",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/on-scene",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "on-scene"
+              ]
+            }
+          },
+          "_postman_id": "44196689-c599-586b-b7e3-5f2918a93ef3"
+        },
+        {
+          "name": "Resuelta",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/resolve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "resolve"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"causasRelacionadas\": [\n    \"VIA\"\n  ],\n  \"descripcionProblema\": \"Auto estacionado sobre la ciclovía.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "2c48d25f-9994-5616-86de-7c8a24000bdd"
+        }
+      ]
+    },
+    {
+      "name": "5. Dispatcher: cierre y tableros",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{dispatcherToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Cerrar",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "close"
+              ]
+            }
+          },
+          "_postman_id": "3c2de3e2-998f-565a-91ec-37c86e00f65e"
+        },
+        {
+          "name": "Incidentes activos",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/incidents",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "incidents"
+              ]
+            }
+          },
+          "_postman_id": "0c54aa58-e924-5b41-a2d4-c439482e6194"
+        },
+        {
+          "name": "Outbox",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/outbox-events?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outbox-events"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            }
+          },
+          "_postman_id": "447fc9b5-cec7-5251-9c27-2f703cfc9d98"
+        },
+        {
+          "name": "Alertas climáticas activas (banner)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/contextos-zona/activos",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "contextos-zona",
+                "activos"
+              ]
+            }
+          },
+          "_postman_id": "cc66f35f-afde-5377-83cd-49cd915c3de4"
+        }
+      ]
+    },
+    {
+      "name": "6. Oficial: historial",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{officerToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Mis emergencias históricas",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies?scope=history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies"
+              ],
+              "query": [
+                {
+                  "key": "scope",
+                  "value": "history"
+                }
+              ]
+            }
+          },
+          "_postman_id": "47b08b3c-c8d7-57dd-bbcb-c16c6ec94538"
+        }
+      ]
+    },
+    {
+      "name": "7. Ciudadano: cancelar una alerta",
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{citizenToken}}",
+            "type": "string"
+          }
+        ]
+      },
+      "item": [
+        {
+          "name": "Disparar otro SOS",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 201', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('emergencyId', pm.response.json().emergencyId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/panic-button",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "panic-button"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"location\": {\n    \"latitude\": -34.6037,\n    \"longitude\": -58.3816\n  },\n  \"address\": \"Av. Corrientes 1234, CABA\",\n  \"emergencyType\": \"PANICO\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "68c159e4-6a1a-5631-8aa8-c514f769d2ae"
+        },
+        {
+          "name": "Cancelar",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responde 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/emergencies/{{emergencyId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "emergencies",
+                "{{emergencyId}}",
+                "cancel"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Falsa alarma\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "_postman_id": "3c3885aa-a6ca-5868-836a-8d26e4793714"
+        }
+      ]
+    }
+  ],
   "variable": [
     {
       "key": "baseUrl",
       "value": "http://localhost:3000"
     },
     {
+      "key": "citizenSub",
+      "value": "U000042"
+    },
+    {
+      "key": "officerId",
+      "value": "of-001"
+    },
+    {
+      "key": "citizenToken",
+      "value": ""
+    },
+    {
+      "key": "dispatcherToken",
+      "value": ""
+    },
+    {
+      "key": "officerToken",
+      "value": ""
+    },
+    {
       "key": "emergencyId",
       "value": ""
     },
     {
-      "key": "accessToken",
+      "key": "nuevoEmail",
       "value": ""
-    }
-  ],
-  "item": [
-    {
-      "name": "Health",
-      "item": [
-        {
-          "name": "GET Health",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/health",
-            "description": "Chequea si el servicio está vivo y el estado de Kafka. Público (sin JWT)."
-          }
-        }
-      ]
     },
     {
-      "name": "Dev Auth (AUTH_MODE=local)",
-      "item": [
-        {
-          "name": "POST Dev Login",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "  const body = pm.response.json();",
-                  "  if (body.access_token) {",
-                  "    pm.collectionVariables.set('accessToken', body.access_token);",
-                  "    pm.environment.set('accessToken', body.access_token);",
-                  "  }",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"sub\": \"U000042\",\n  \"preferred_username\": \"jperez\",\n  \"groups\": [\"citizen\"]\n}"
-            },
-            "url": "{{baseUrl}}/auth/dev/login",
-            "description": "Ciudadano: activar pánico y cancelar propias emergencias. Guarda accessToken."
-          }
-        },
-        {
-          "name": "POST Dev Login (dispatcher)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 200) {",
-                  "  const body = pm.response.json();",
-                  "  if (body.access_token) {",
-                  "    pm.collectionVariables.set('accessToken', body.access_token);",
-                  "    pm.environment.set('accessToken', body.access_token);",
-                  "  }",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "auth": { "type": "noauth" },
-            "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"sub\": \"U000999\",\n  \"preferred_username\": \"operador1\",\n  \"groups\": [\"dispatcher\"]\n}"
-            },
-            "url": "{{baseUrl}}/auth/dev/login",
-            "description": "Dispatcher: ver cualquier emergencia (GET). No puede activar pánico ni cancelar."
-          }
-        }
-      ]
-    },
-    {
-      "name": "User",
-      "item": [
-        {
-          "name": "GET Current User",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/user",
-            "description": "Devuelve sub, groups y username del JWT autenticado."
-          }
-        }
-      ]
-    },
-    {
-      "name": "Panic Button",
-      "item": [
-        {
-          "name": "POST Trigger Panic Button",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "if (pm.response.code === 201) {",
-                  "  const body = pm.response.json();",
-                  "  if (body.emergencyId) {",
-                  "    pm.collectionVariables.set('emergencyId', body.emergencyId);",
-                  "  }",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"location\": {\n    \"latitude\": -34.6037,\n    \"longitude\": -58.3816\n  },\n  \"description\": \"Necesito ayuda inmediata\",\n  \"severity\": \"critical\"\n}"
-            },
-            "url": "{{baseUrl}}/api/panic-button",
-            "description": "Crea una emergency en status PENDING. El userId sale del JWT (sub). Publica en Kafka.\nGuarda `emergencyId` en la variable de colección."
-          }
-        },
-        {
-          "name": "POST Trigger Panic Button (401 - no token)",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"location\": {\n    \"latitude\": -34.6037,\n    \"longitude\": -58.3816\n  }\n}"
-            },
-            "url": "{{baseUrl}}/api/panic-button",
-            "description": "Esperado: 401 UnauthorizedError."
-          }
-        },
-        {
-          "name": "POST Trigger Panic Button (400 - missing fields)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"description\": \"Falta location\"\n}"
-            },
-            "url": "{{baseUrl}}/api/panic-button",
-            "description": "Esperado: 400 ValidationError."
-          }
-        },
-        {
-          "name": "GET Panic Button by ID",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/panic-button/{{emergencyId}}",
-            "description": "Usa el emergencyId guardado por el POST."
-          }
-        },
-        {
-          "name": "GET Panic Button (404 - not found)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/panic-button/00000000-0000-0000-0000-000000000000",
-            "description": "Esperado: 404 NotFoundError."
-          }
-        }
-      ]
-    },
-    {
-      "name": "Emergencies",
-      "item": [
-        {
-          "name": "GET List Emergencies",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/emergencies?status=PENDING,VALIDATED&page=1&limit=20&sortBy=priority",
-            "description": "Lista emergencias paginadas. Filtros soportados: status, severity, from, to, assignedOfficerId, type, page, limit, sortBy, order."
-          }
-        },
-        {
-          "name": "PATCH Cancel Emergency",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"reason\": \"Falsa alarma\"\n}"
-            },
-            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/cancel",
-            "description": "Cancela solo si status es PENDING o VALIDATED y el usuario es el dueño. El actor sale del JWT (sub). Esperado: 200, status CANCELLED."
-          }
-        },
-        {
-          "name": "PATCH Cancel Emergency (409 - already cancelled)",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"reason\": \"Segundo intento\"\n}"
-            },
-            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/cancel",
-            "description": "Correr después del cancel exitoso. Esperado: 409 ConflictError."
-          }
-        },
-        {
-          "name": "PATCH Cancel Emergency (404 - not found)",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"reason\": \"No existe\"\n}"
-            },
-            "url": "{{baseUrl}}/api/emergencies/00000000-0000-0000-0000-000000000000/cancel",
-            "description": "Esperado: 404 NotFoundError."
-          }
-        },
-        {
-          "name": "PATCH Validate Emergency",
-          "request": {
-            "method": "PATCH",
-            "header": [],
-            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/validate",
-            "description": "Dispatcher: PENDING → VALIDATED."
-          }
-        },
-        {
-          "name": "PATCH Discard Emergency",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"reason\": \"Falsa alarma / prueba\"\n}"
-            },
-            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/discard",
-            "description": "Dispatcher: PENDING → DISCARDED. Motivo obligatorio."
-          }
-        },
-        {
-          "name": "PATCH Assign Officer",
-          "request": {
-            "method": "PATCH",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"officerId\": \"of-001\"\n}"
-            },
-            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/assign",
-            "description": "Dispatcher: VALIDATED → DISPATCHED. Oficial debe estar disponible."
-          }
-        },
-        {
-          "name": "PATCH Close Emergency",
-          "request": {
-            "method": "PATCH",
-            "header": [],
-            "url": "{{baseUrl}}/api/emergencies/{{emergencyId}}/close",
-            "description": "Dispatcher: RESOLVED → CLOSED. Registra closedAt y publica EmergenciaCerrada."
-          }
-        }
-      ]
-    },
-    {
-      "name": "Officers",
-      "item": [
-        {
-          "name": "GET List Officers",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/officers",
-            "description": "Catálogo de oficiales (dispatcher). Query opcional: ?status=disponible"
-          }
-        },
-        {
-          "name": "GET List Officers (disponible)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/officers?status=disponible",
-            "description": "Solo oficiales disponibles para asignar."
-          }
-        }
-      ]
+      "key": "nuevoPassword",
+      "value": ""
     }
   ]
 }

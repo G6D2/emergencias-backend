@@ -14,11 +14,13 @@ Emergencias atiende con **un nivel más de prioridad** las emergencias que se cr
 Las dos funcionan igual: un punto, un radio y una ventana. La alerta por barrio, además, exige que la emergencia sea de ese barrio. Es una regla interna de despacho:
 
 - **`data.prioridad` no cambia.** En `EmergenciaCreada` y `EmergenciaActualizada` es siempre la prioridad original de la emergencia, haya o no un evento o una alerta en curso.
-- **El vínculo sí se publica**, como evento propio: `EmergenciaVinculadaAContextoZona` (ver sección 1.1). Es la forma recomendada de saber qué emergencias se elevaron y por qué evento.
+- **El vínculo se publica como evento propio**, `EmergenciaVinculadaAContextoZona` (ver sección 1.1), **pero hoy está apagado en producción**: sale recién cuando Emergencias encienda `EVENTO_VINCULO_CONTEXTO_ENABLED`, después de registrar el tipo en el catálogo del gateway. Cuando esté encendido, va a ser la forma recomendada de saber qué emergencias se elevaron y por qué evento. Mientras tanto, la única forma es recalcular (sección 1.2).
 - **No hay un evento por cada suba ni por cada baja.** La suba se calcula al leer y desaparece sola cuando el evento termina o se cancela, o cuando la alerta vence o se finaliza.
 - **La alerta climática no tiene evento propio de Emergencias.** La alerta ya la publica Espacios para todos. Lo único que suma Emergencias es una emergencia `PREVENTIVA` por alerta (`causaTipo = EVENTO_CLIMATICO`, `causaId = alertaId`), que sale en `EmergenciaCreada`.
 
-### 1.1 Recomendado: `EmergenciaVinculadaAContextoZona`
+### 1.1 Recomendado cuando se active: `EmergenciaVinculadaAContextoZona`
+
+> **Estado (17/11/2026): apagado en producción.** `render.yaml` tiene `EVENTO_VINCULO_CONTEXTO_ENABLED=false`: el tipo todavía no está registrado en el catálogo del gateway y, sin eso, el gateway rechaza la publicación. Hoy no hay mensajes en `com.citypass.emergencias.EmergenciaVinculadaAContextoZona`. Al encenderlo, Emergencias corre una carga inicial (`backfill: true`) y avisa. Hasta entonces, usar el recálculo de la sección 1.2.
 
 Sale uno por cada emergencia vinculada a un contexto (un evento de Espacios, o un barrio o un punto de una alerta climática). Es el mismo dato que usa el tablero del dispatcher, encolado en la misma sentencia que lo guarda: no hace falta recalcular nada ni medir distancias.
 
@@ -39,14 +41,14 @@ Reglas para no contar mal:
 - **Deduplicar por `(emergenciaId, contextoId)`.** El bus es *at-least-once*: el mismo vínculo puede llegar dos veces.
 - **Significado:** la emergencia quedó vinculada al evento al crearse (o, con una alerta climática, al llegar la alerta si ya estaba abierta) y, mientras los dos estuvieron vigentes, su prioridad de despacho estuvo un nivel arriba. Una emergencia vinculada estuvo elevada.
 - **Se publican los vínculos de todas las categorías, `PANICO` incluida.** El ADR de coordenadas se aceptó con 3 decimales (~100 m) para todas, así que el vínculo no da más precisión que la coordenada.
-- **Historia:** el evento existe desde su activación. Al activarlo se cargaron (`backfill: true`) los vínculos que seguían en la base: emergencias abiertas o cerradas hace menos de 72 h. Lo anterior no se puede recuperar.
+- **Historia:** el evento va a existir desde su activación. Al activarlo se cargan (`backfill: true`) los vínculos que sigan en la base: emergencias abiertas o cerradas hace menos de 72 h. Lo anterior no se puede recuperar.
 - **Sin coordenadas.** El evento no lleva ubicación; si hace falta, sale de `EmergenciaCreada`.
 
 Schema: [`docs/contratos/emergencia-vinculada-a-contexto-zona.schema.json`](contratos/emergencia-vinculada-a-contexto-zona.schema.json).
 
 ### 1.2 Alternativa: recalcular
 
-El resto de esta guía explica cómo **recalcular** el vínculo y la suba con los eventos que ya están en el bus. Sirve para quien no pueda consumir `EmergenciaVinculadaAContextoZona` o necesite el estado de la suba en un instante dado. Tiene los límites de la sección 6: puede diferir de lo que hizo Emergencias.
+El resto de esta guía explica cómo **recalcular** el vínculo y la suba con los eventos que ya están en el bus. Es la única opción mientras `EmergenciaVinculadaAContextoZona` esté apagado, y después sirve para quien no pueda consumirlo o necesite el estado de la suba en un instante dado. Tiene los límites de la sección 6: puede diferir de lo que hizo Emergencias.
 
 ---
 

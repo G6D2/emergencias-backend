@@ -1,6 +1,7 @@
 const { NotFoundError, ConflictError } = require('../errors/app-errors');
 const {
   assertTransition, isTerminal, expirationTarget, TERMINAL_STATUSES, ACTIVE_STATUSES,
+  OFFICER_SCOPE_STATUSES,
 } = require('../domain/emergency-status');
 const { assertEmergencyType } = require('../domain/emergency-type');
 const { resolveBarrio } = require('../domain/barrio');
@@ -148,6 +149,11 @@ function mapIncidentSummary(row) {
   };
 }
 
+// Columnas que el job de detección de incidentes lee de cada emergencia
+// (findRecentByType y findActiveByIncidentIds).
+const DETECTION_CANDIDATE_FIELDS = `id, correlation_id, user_id, emergency_type, latitude, longitude, location_encrypted,
+              severity, incident_id, created_at`;
+
 // Fragmento de SELECT/JOIN reusado por findPage y findDetailById (las dos
 // lecturas que exponen el resultado del motor de incidentes al dispatcher/
 // ciudadano, tarea de visibilidad apilada sobre #36). El resto de los
@@ -238,6 +244,19 @@ function mapEmergencyWithIncident(row, locationCrypto) {
   };
 }
 
+// Condición de la vista del oficial (scope=active|history, ver
+// OFFICER_SCOPE_STATUSES). `officer` y `statuses` son placeholders ($n) ya
+// cargados. El historial suma las que le devolvieron: dejaron de estar a su
+// nombre (la devolución libera al oficial), pero el historial de estados
+// guarda cada asignación con su officer_id (V35).
+function officerScopeCondition(scope, officer, statuses) {
+  const own = `e.assigned_officer_id = ${officer} AND e.status = ANY(${statuses})`;
+  if (scope === 'active') return own;
+  return `((${own}) OR (e.assigned_officer_id IS DISTINCT FROM ${officer} AND EXISTS (
+    SELECT 1 FROM emergency_status_history h WHERE h.emergency_id = e.id AND h.officer_id = ${officer}
+  )))`;
+}
+
 function mapHistoryEntry(row) {
   if (!row) return null;
   return {
@@ -272,6 +291,26 @@ const INSERT_SQL = `INSERT INTO emergencies (
    VALUES ($1, $2, $3, NULL, NULL, $4, $5, $6, $7, COALESCE($8, 'PENDING'), $9, $10, $11, $12, $13)
    RETURNING *`;
 
+// Idempotency-Key del alta (V34): ventana en la que un pedido con la misma
+// clave del mismo usuario devuelve la emergencia ya creada, y cada cuánto se
+// borran, como mucho, las claves vencidas.
+const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
+const IDEMPOTENCY_KEY_PURGE_INTERVAL_MS = 60 * 60 * 1000;
+
+// Reserva la clave. Si ya existe pero venció, se pisa y cuenta como nueva. Si
+// otro pedido con la misma clave la reservó y todavía no confirmó, el INSERT
+// espera a que termine (clave primaria): si confirmó, no devuelve fila; si se
+// deshizo, la reserva entra.
+const RESERVE_IDEMPOTENCY_KEY_SQL = `INSERT INTO idempotency_keys
+     (scope, user_sub, idempotency_key, emergency_id, status_code)
+   VALUES ($1, $2, $3, $4, $5)
+   ON CONFLICT (scope, user_sub, idempotency_key) DO UPDATE
+     SET emergency_id = EXCLUDED.emergency_id,
+         status_code = EXCLUDED.status_code,
+         created_at = now()
+     WHERE idempotency_keys.created_at <= now() - ($6::double precision * interval '1 millisecond')
+   RETURNING emergency_id`;
+
 // Repository de persistencia de emergencies.
 // No sabe nada de Kafka, controllers ni HTTP: solo SQL + cifrado de ubicación.
 class EmergencyRepository {
@@ -280,6 +319,8 @@ class EmergencyRepository {
     this.locationCrypto = options.locationCrypto || createLocationCrypto();
     // Inyectable para tests (EVENTO_VINCULO_CONTEXTO_ENABLED y topics).
     this.env = options.env || process.env;
+    this.idempotencyKeyTtlMs = options.idempotencyKeyTtlMs || IDEMPOTENCY_KEY_TTL_MS;
+    this.lastIdempotencyKeyPurgeAt = 0;
   }
 
   // source/causa vienen de las emergencias que crea el listener de eventos
@@ -351,6 +392,83 @@ class EmergencyRepository {
       throw error;
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * create() con Idempotency-Key (V34). La clave se reserva en la misma
+   * transacción que crea la emergencia y su evento del outbox:
+   * - Reserva nueva: se crea la emergencia. Si algo falla se deshace todo y la
+   *   clave queda libre para el reintento.
+   * - Clave ya usada por el mismo usuario dentro de la ventana: no se crea
+   *   nada; se devuelve la emergencia de esa clave con el status guardado.
+   * - Dos pedidos simultáneos con la misma clave: el segundo espera en el
+   *   INSERT a que el primero termine y después cae en el caso anterior.
+   *
+   * @param {{ idempotency: { scope: string, userSub: string, key: string, statusCode: number } }} params
+   *   más los mismos campos que create() (sin `client`).
+   * @returns {Promise<{ emergency: object, statusCode: number, replayed: boolean }>}
+   */
+  async createWithIdempotencyKey({ idempotency, ...data }) {
+    const { scope, userSub, key, statusCode } = idempotency;
+    const client = await this.pool.connect();
+    let created = null;
+    try {
+      await client.query('BEGIN');
+      const reservation = await client.query(RESERVE_IDEMPOTENCY_KEY_SQL, [
+        scope, userSub, key, data.id, statusCode, this.idempotencyKeyTtlMs,
+      ]);
+      if (reservation.rowCount > 0) {
+        created = await this.create({ ...data, client });
+        await client.query('COMMIT');
+      } else {
+        await client.query('ROLLBACK');
+      }
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    if (created) {
+      await this.purgeExpiredIdempotencyKeysIfDue();
+      return { emergency: created, statusCode, replayed: false };
+    }
+    return this.findIdempotentResult({ scope, userSub, key });
+  }
+
+  async findIdempotentResult({ scope, userSub, key }) {
+    const { rows } = await this.pool.query(
+      `SELECT emergency_id, status_code FROM idempotency_keys
+       WHERE scope = $1 AND user_sub = $2 AND idempotency_key = $3`,
+      [scope, userSub, key]
+    );
+    const emergency = rows[0] ? await this.findById(rows[0].emergency_id) : null;
+    // Solo si la fila desapareció entre la reserva y esta lectura (otra
+    // transacción la venció y se deshizo): el cliente puede reintentar.
+    if (!emergency) {
+      throw new ConflictError('Idempotency-Key en uso por otro pedido: reintentá');
+    }
+    return { emergency, statusCode: rows[0].status_code, replayed: true };
+  }
+
+  // Borra las claves vencidas, como mucho una vez por hora por proceso. Es
+  // limpieza: una clave vencida ya no se usa aunque siga en la tabla (la
+  // reserva la pisa). Un error no corta el alta que la disparó.
+  async purgeExpiredIdempotencyKeysIfDue(now = Date.now()) {
+    if (now - this.lastIdempotencyKeyPurgeAt < IDEMPOTENCY_KEY_PURGE_INTERVAL_MS) return 0;
+    this.lastIdempotencyKeyPurgeAt = now;
+    try {
+      const result = await this.pool.query(
+        `DELETE FROM idempotency_keys
+         WHERE created_at < now() - ($1::double precision * interval '1 millisecond')`,
+        [this.idempotencyKeyTtlMs]
+      );
+      return result.rowCount || 0;
+    } catch (error) {
+      secureLog('warn', 'No se pudieron borrar las Idempotency-Key vencidas', { message: error.message });
+      return 0;
     }
   }
 
@@ -1030,7 +1148,12 @@ class EmergencyRepository {
     return { updatedCount: ids.length, ids };
   }
 
-  async findPage({ userId, statuses, severity, from, to, assignedOfficerId, emergencyType, page, limit, sortBy, order }) {
+  async findPage({
+    userId, statuses, severity, from, to, assignedOfficerId, officerScope, emergencyType, page, limit, sortBy, order,
+  }) {
+    if (officerScope && !assignedOfficerId) {
+      throw new Error('findPage: officerScope requires assignedOfficerId');
+    }
     const conditions = [];
     const values = [];
 
@@ -1044,7 +1167,12 @@ class EmergencyRepository {
     if (severity) addCondition('e.severity = ?', severity);
     if (from) addCondition('e.created_at >= ?', from);
     if (to) addCondition('e.created_at <= ?', to);
-    if (assignedOfficerId) addCondition('e.assigned_officer_id = ?', assignedOfficerId);
+    if (officerScope) {
+      values.push(assignedOfficerId, [...OFFICER_SCOPE_STATUSES[officerScope]]);
+      conditions.push(officerScopeCondition(officerScope, `$${values.length - 1}`, `$${values.length}`));
+    } else if (assignedOfficerId) {
+      addCondition('e.assigned_officer_id = ?', assignedOfficerId);
+    }
     // El filtro acepta canónico o alias del front; inválido → ValidationError.
     const normalizedType = assertEmergencyType(emergencyType);
     if (normalizedType) addCondition('e.emergency_type = ?', normalizedType);
@@ -1208,24 +1336,24 @@ class EmergencyRepository {
       [id]
     );
     if (current.rows.length === 0) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
     const previousStatus = current.rows[0].status;
     const assignedOfficerId = current.rows[0].assigned_officer_id;
     if (requireAssignedOfficerId !== null && assignedOfficerId !== requireAssignedOfficerId) {
-      throw new NotFoundError(`Emergency with ID ${id} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${id}`);
     }
     // La expiración no sigue la tabla de transiciones de los endpoints: tiene
     // la suya (expirationTarget) y solo la usa el job del sistema.
     if (expiration) {
       if (expirationTarget(previousStatus) !== newStatus) {
-        throw new ConflictError(`Emergency ${id} is ${previousStatus}: cannot expire to ${newStatus}`);
+        throw new ConflictError(`La emergencia ${id} está en ${previousStatus}: no puede expirar a ${newStatus}`);
       }
     } else {
       assertTransition(previousStatus, newStatus);
     }
     if (requireStatus !== null && previousStatus !== requireStatus) {
-      throw new ConflictError(`Emergency ${id} is ${previousStatus}, expected ${requireStatus}`);
+      throw new ConflictError(`La emergencia ${id} está en ${previousStatus}, se esperaba ${requireStatus}`);
     }
 
     // closed_at marca el fin de la emergencia en cualquier estado terminal
@@ -1316,8 +1444,7 @@ class EmergencyRepository {
    */
   async findRecentByType({ emergencyType, emergencyTypes = [emergencyType], since }) {
     const result = await this.pool.query(
-      `SELECT id, correlation_id, user_id, emergency_type, latitude, longitude, location_encrypted,
-              severity, incident_id, created_at
+      `SELECT ${DETECTION_CANDIDATE_FIELDS}
        FROM emergencies
        WHERE emergency_type = ANY($1::text[])
          AND created_at >= $2
@@ -1325,44 +1452,62 @@ class EmergencyRepository {
       [emergencyTypes, since, TERMINAL_STATUSES]
     );
 
+    return this.toDetectionCandidates(result.rows, 'findRecentByType');
+  }
+
+  /**
+   * Miembros activos (no terminales) de los incidentes pedidos, con el mismo
+   * formato que findRecentByType y sin mirar la ventana: el job puntúa un
+   * incidente existente con todos sus miembros activos, también los que ya
+   * salieron de la ventana. Si no, el score baja cuando los primeros
+   * reportes cumplen INCIDENT_WINDOW_MIN aunque el incidente los siga
+   * teniendo (docs/ml/calibracion-dbscan.md).
+   */
+  async findActiveByIncidentIds(incidentIds) {
+    if (incidentIds.length === 0) return [];
+
+    const result = await this.pool.query(
+      `SELECT ${DETECTION_CANDIDATE_FIELDS}
+       FROM emergencies
+       WHERE incident_id = ANY($1::uuid[])
+         AND status <> ALL($2::text[])`,
+      [incidentIds, TERMINAL_STATUSES]
+    );
+
+    return this.toDetectionCandidates(result.rows, 'findActiveByIncidentIds');
+  }
+
+  // Fila -> candidato del job de detección, con lat/lng descifrados. Una fila
+  // sin ciphertext (legacy o anonimizada) queda con lat/lng null; una con
+  // ciphertext indescifrable se excluye y queda en el log.
+  toDetectionCandidates(rows, source) {
     const candidates = [];
-    for (const row of result.rows) {
-      if (!row.location_encrypted) {
-        candidates.push({
-          id: row.id,
-          correlationId: row.correlation_id,
-          userId: row.user_id,
-          emergencyType: row.emergency_type,
-          latitude: null,
-          longitude: null,
-          severity: row.severity,
-          incidentId: row.incident_id,
-          createdAt: row.created_at,
-        });
-        continue;
+    for (const row of rows) {
+      let location = { latitude: null, longitude: null };
+      if (row.location_encrypted) {
+        try {
+          location = this.locationCrypto.decryptLocation(row.location_encrypted);
+        } catch (error) {
+          secureLog('warn', `Emergency excluded from ${source}: location ciphertext could not be decrypted`, {
+            emergencyId: row.id,
+            message: error.message,
+          });
+          continue;
+        }
       }
 
-      try {
-        const location = this.locationCrypto.decryptLocation(row.location_encrypted);
-        candidates.push({
-          id: row.id,
-          correlationId: row.correlation_id,
-          userId: row.user_id,
-          emergencyType: row.emergency_type,
-          latitude: location.latitude,
-          longitude: location.longitude,
-          severity: row.severity,
-          incidentId: row.incident_id,
-          createdAt: row.created_at,
-        });
-      } catch (error) {
-        secureLog('warn', 'Emergency excluded from findRecentByType: location ciphertext could not be decrypted', {
-          emergencyId: row.id,
-          message: error.message,
-        });
-      }
+      candidates.push({
+        id: row.id,
+        correlationId: row.correlation_id,
+        userId: row.user_id,
+        emergencyType: row.emergency_type,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        severity: row.severity,
+        incidentId: row.incident_id,
+        createdAt: row.created_at,
+      });
     }
-
     return candidates;
   }
 
@@ -1391,7 +1536,7 @@ class EmergencyRepository {
         [id]
       );
       if (current.rows.length === 0) {
-        throw new NotFoundError(`Emergency with ID ${id} not found`);
+        throw new NotFoundError(`No se encontró la emergencia ${id}`);
       }
 
       const previousStatus = current.rows[0].status;
@@ -1402,11 +1547,11 @@ class EmergencyRepository {
         [officerId]
       );
       if (officerResult.rows.length === 0) {
-        throw new NotFoundError(`Officer with ID ${officerId} not found`);
+        throw new NotFoundError(`No se encontró el oficial ${officerId}`);
       }
       const officerRow = officerResult.rows[0];
       if (officerRow.status !== 'disponible') {
-        throw new ConflictError(`Officer ${officerId} is not available`);
+        throw new ConflictError(`El oficial ${officerId} no está disponible`);
       }
 
       const previousOfficerId = current.rows[0].assigned_officer_id;
@@ -1431,10 +1576,12 @@ class EmergencyRepository {
         [officerId]
       );
 
+      // officer_id deja la asignación consultable (vista del oficial,
+      // scope=history); el reason queda igual para el historial del detalle.
       const history = await client.query(
-        `INSERT INTO emergency_status_history (emergency_id, previous_status, new_status, actor, reason)
-         VALUES ($1, $2, 'DISPATCHED', $3, $4) RETURNING *`,
-        [id, previousStatus, actor, `Assigned officer ${officerId}`]
+        `INSERT INTO emergency_status_history (emergency_id, previous_status, new_status, actor, reason, officer_id)
+         VALUES ($1, $2, 'DISPATCHED', $3, $4, $5) RETURNING *`,
+        [id, previousStatus, actor, `Assigned officer ${officerId}`, officerId]
       );
 
       const officer = mapOfficer(officerRow);

@@ -168,7 +168,8 @@ class EventListener {
     try {
       const outcomes = await this.handle(event);
       if (this.factory) {
-        await this.factory.process(outcomes, context);
+        const result = await this.factory.process(outcomes, context);
+        if (result && result.duplicate) this.logDuplicate(context, message);
       }
       return outcomes;
     } catch (error) {
@@ -181,6 +182,21 @@ class EventListener {
       await this.recordDiscard(context, error);
       return null;
     }
+  }
+
+  // Reentrega de un eventId que ya está en eventos_procesados (PROCESSED o
+  // DISCARDED): la factory hizo ROLLBACK sin efectos y el offset avanza. Sin
+  // este log, el único rastro era el "proceso evento" de handle(), que se
+  // escribe antes de la dedup. Solo datos del sobre: nada de `data`.
+  logDuplicate(context, message) {
+    const { metadata } = context;
+    secureLog('info', `${this.constructor.name} descarto un duplicado (eventId ya registrado en eventos_procesados)`, {
+      topic: this.topic,
+      eventId: metadata.eventId,
+      eventType: metadata.eventType,
+      source: metadata.source,
+      offset: message.offset,
+    });
   }
 
   // Deja constancia del descarte en eventos_procesados. Si la base no

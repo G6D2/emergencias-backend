@@ -43,7 +43,7 @@ describe('OutcomeFactory', () => {
   describe('process — sin dedup', () => {
     it('sin outcomes no abre transaccion', async () => {
       const { pool } = buildPool();
-      await new OutcomeFactory(pool).process([]);
+      await expect(new OutcomeFactory(pool).process([])).resolves.toEqual({ duplicate: false });
       expect(pool.connect).not.toHaveBeenCalled();
     });
 
@@ -98,7 +98,7 @@ describe('OutcomeFactory', () => {
       const f = new OutcomeFactory(pool, { dedupRepo }).register('A', handler);
       const context = { metadata: { eventId: EV1, source: 'com.espacios', eventType: 'EventoComunitarioPublicado' }, data: {} };
 
-      await f.process([{ type: 'A', payload: {} }], context);
+      await expect(f.process([{ type: 'A', payload: {} }], context)).resolves.toEqual({ duplicate: false });
 
       expect(dedupRepo.tryMarkProcessed).toHaveBeenCalledWith(client, {
         eventId: EV1,
@@ -110,14 +110,14 @@ describe('OutcomeFactory', () => {
       expect(queries(client)).toEqual(['BEGIN', 'COMMIT']);
     });
 
-    it('evento duplicado: ROLLBACK sin ejecutar handlers', async () => {
+    it('evento duplicado: ROLLBACK sin ejecutar handlers y avisa que es duplicado', async () => {
       const { pool, client } = buildPool();
       const dedupRepo = buildDedupRepo(false);
       const handler = jest.fn();
       const f = new OutcomeFactory(pool, { dedupRepo }).register('A', handler);
       const context = { metadata: { eventId: EV_DUP, source: 'src', eventType: 'T' }, data: {} };
 
-      await f.process([{ type: 'A', payload: {} }], context);
+      await expect(f.process([{ type: 'A', payload: {} }], context)).resolves.toEqual({ duplicate: true });
 
       expect(handler).not.toHaveBeenCalled();
       expect(queries(client)).toEqual(['BEGIN', 'ROLLBACK']);

@@ -1,7 +1,7 @@
 const { ValidationError } = require('../../../errors/app-errors');
 const { secureLog } = require('../../../security/secure-log');
 const { buildEmergencyUpdatedEvent } = require('../../../services/emergency-events');
-const { CAUSA_TIPO, EMERGENCY_TYPE } = require('./programar-cobertura.handler');
+const { CAUSA_TIPO, EMERGENCY_TYPE, bloquearEvento } = require('./programar-cobertura.handler');
 
 const CANCELAR_COBERTURA = 'CancelarCobertura';
 const ACTOR = 'eda:espacios';
@@ -17,20 +17,31 @@ function emergenciaActualizadaTopic() {
 // de baja. Pasa por el repositorio (transición válida, historial y
 // EmergenciaActualizada en el outbox), en la transacción del OutcomeFactory.
 // Si la cobertura ya avanzó (despachada o más), no se toca: se loguea.
-function createCancelarCoberturaHandler({ emergencyRepository, topic = emergenciaActualizadaTopic() }) {
+//
+// Toma el lock del evento antes de buscar la cobertura (ver bloquearEvento) y
+// lo tiene hasta el COMMIT, así la marca de baja que deja la regla 02 en la
+// misma transacción ya está escrita cuando una publicación tardía la busca
+// (issue #88).
+function createCancelarCoberturaHandler({
+  emergencyRepository,
+  contextoZonaRepository,
+  topic = emergenciaActualizadaTopic(),
+}) {
   if (!emergencyRepository) throw new Error('createCancelarCoberturaHandler requiere emergencyRepository');
+  if (!contextoZonaRepository) throw new Error('createCancelarCoberturaHandler requiere contextoZonaRepository');
 
   return async function cancelarCobertura(client, payload) {
     const { eventoId } = payload || {};
     if (!eventoId) throw new ValidationError('CancelarCobertura requiere eventoId');
 
+    await bloquearEvento(contextoZonaRepository, client, eventoId);
     const coberturas = await emergencyRepository.findByCausa(client, {
       causaTipo: CAUSA_TIPO,
       causaId: eventoId,
       emergencyType: EMERGENCY_TYPE,
     });
     if (coberturas.length === 0) {
-      secureLog('info', 'EventoCancelado sin cobertura preventiva', { eventoId });
+      secureLog('info', 'EventoCancelado sin cobertura preventiva: la marca de baja frena una publicación tardía', { eventoId });
       return { cancelled: 0 };
     }
 

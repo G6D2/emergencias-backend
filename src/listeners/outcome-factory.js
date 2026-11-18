@@ -23,7 +23,9 @@ function causationIdOf(metadata) {
 // Todos los resultados de un evento van en una sola transaccion: se aplican
 // juntos o ninguno. Si se configura dedupRepo, el primer paso de la transaccion
 // es tryMarkProcessed: si el eventId ya fue procesado, hace ROLLBACK y retorna
-// sin side effects (idempotencia garantizada).
+// sin side effects (idempotencia garantizada). process() devuelve
+// { duplicate: true } en ese caso y { duplicate: false } en los demas: el
+// listener, que conoce el topic, deja el log del duplicado descartado.
 //
 // Un type sin handler o un eventId que no es UUID fallan antes de abrir la
 // transaccion, sin escribir nada. Cualquier error se propaga al listener, que
@@ -69,7 +71,7 @@ class OutcomeFactory {
 
   async process(outcomes, context = {}) {
     const hasDedupWork = this.dedupRepo && context.metadata?.eventId;
-    if (outcomes.length === 0 && !hasDedupWork) return;
+    if (outcomes.length === 0 && !hasDedupWork) return { duplicate: false };
 
     // eventos_procesados.event_id es uuid: con otro valor el INSERT de dedup
     // falla igual en cada reentrega. Se descarta sin abrir la transaccion.
@@ -95,7 +97,7 @@ class OutcomeFactory {
         });
         if (!fresh) {
           await client.query('ROLLBACK');
-          return;
+          return { duplicate: true };
         }
       }
 
@@ -104,6 +106,7 @@ class OutcomeFactory {
       }
 
       await client.query('COMMIT');
+      return { duplicate: false };
     } catch (error) {
       try {
         await client.query('ROLLBACK');

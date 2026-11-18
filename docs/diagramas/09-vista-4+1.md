@@ -58,10 +58,11 @@ classDiagram
         estado
     }
     class ContextoDeZona {
+        tipo
         centro
         radioMetros
         vigencia
-        eventoOrigen
+        referenciaExterna
     }
     class EventoDeOutbox {
         tipo
@@ -132,7 +133,7 @@ classDiagram
 | Severidad y prioridad | Cuatro niveles (`low`, `medium`, `high`, `critical`). La prioridad efectiva nunca queda por debajo de la severidad individual | `src/domain/severity.js`, `src/domain/risk-engine.js` (`applyPriorityInvariant`) |
 | Estado | `PENDING → VALIDATED → DISPATCHED → EN_ROUTE → ON_SCENE → RESOLVED → CLOSED`, con `CANCELLED` y `DISCARDED` como terminales. Cada transición tiene un rol dueño | `src/domain/emergency-status.js`, `04-maquina-de-estados.md` |
 | Incidente | Agrupa emergencias del mismo tipo, cercanas y de ciudadanos distintos; un solo usuario repitiendo reportes no forma incidente | `src/domain/incident-detector.js`, `dbscan-grouper.js`, `rule-based-grouper.js` |
-| Contexto de zona | Mientras dura un evento público, lo que se crea dentro de su radio sube un nivel de prioridad | `src/domain/contexto-zona.js` |
+| Contexto de zona | Mientras dura un evento público o una alerta climática `ALTA`/`CRITICA`, lo que se crea dentro de su radio sube un nivel de prioridad | `src/domain/contexto-zona.js`, `src/domain/alerta-climatica.js` |
 | Evento de outbox | Se guarda en la misma transacción que el cambio que lo origina | `src/repositories/emergency.repository.js`, `src/services/emergency-events.js` |
 | Evento procesado | Un evento externo se aplica una sola vez, aunque el bus lo entregue repetido | `src/repositories/eventos-procesados.repository.js`, `src/listeners/outcome-factory.js` |
 
@@ -196,10 +197,11 @@ flowchart TB
 
 | Aspecto | Cómo se resuelve | Código |
 |---|---|---|
-| Concurrencia del consumo | Un único consumer para los 8 listeners (el bus limita las conexiones por IP). Procesa una partición por tópico, hasta 3 a la vez, para no agotar el pool | `src/listeners/event-consumer.js` (`KAFKA_CONSUMER_CONCURRENCY`) |
+| Concurrencia del consumo | Un único consumer para los 10 listeners (el bus limita las conexiones por IP). Procesa una partición por tópico, hasta 3 a la vez, para no agotar el pool | `src/listeners/event-consumer.js` (`KAFKA_CONSUMER_CONCURRENCY`) |
 | Entrega repetida (at-least-once) | Cada evento externo se procesa dentro de una transacción que también registra su `eventId`; el repetido se descarta | `src/listeners/outcome-factory.js`, tabla `eventos_procesados` |
 | Publicación confiable | El evento se escribe en `outbox_events` en la misma transacción que el cambio de estado; el publisher lo envía después y reintenta | `src/services/outbox-publisher.js`, `src/services/gateway-publisher.js` |
 | Dos instancias a la vez (primario y backup) | El job de incidentes toma un advisory lock de Postgres: solo una instancia detecta por vez. El outbox no pisa una fila que otro proceso ya reclamó | `src/services/incident-detection-job.js`, `src/services/outbox-publisher.js` |
+| Reintento de un alta (SOS) | Con `Idempotency-Key`, el mismo usuario y la misma clave dentro de 24 h devuelven la emergencia ya creada; la clave se reserva en la base, en la misma transacción que el alta, así que también vale con dos instancias y con pedidos simultáneos | `src/repositories/emergency.repository.js` (`createWithIdempotencyKey`), tabla `idempotency_keys` |
 | Errores de un evento externo | Transitorio (base o red caídas): no se confirma el offset y Kafka lo reentrega. Permanente (payload inválido): se registra como descartado, con su motivo, y el tópico sigue | `src/listeners/error-classifier.js` |
 | Caída del consumer | Se reinicia con backoff en vez de quedar muerto hasta el próximo deploy | `src/listeners/listener-supervisor.js` |
 | Servicio dormido (Render free) | Mientras duerme no consume ni publica; al despertar retoma desde el último offset confirmado y drena el outbox pendiente | `src/jobs/keep-warm.js`, `.github/workflows/keep-warm.yml` |
@@ -208,9 +210,8 @@ flowchart TB
 
 Limitaciones conocidas de esta vista: no hay *dead-letter topic* (un evento con error
 permanente se registra como descartado en `eventos_procesados`, sin un tópico desde donde
-reprocesarlo), y el
-`POST /api/panic-button` no usa el `Idempotency-Key` que manda el BFF, por lo que el BFF solo
-reintenta ese alta ante un 502 o 503 o si no llegó a conectar.
+reprocesarlo), y el BFF sigue reintentando `POST /api/panic-button` solo ante un 502 o 503 o
+si no llegó a conectar, aunque el backend ya deduplica por `Idempotency-Key`.
 
 Los intercambios paso a paso están en `05-secuencias.md`; la semántica de orden y entrega de
 los eventos, en `06-eventos.md`.
@@ -225,7 +226,7 @@ flowchart LR
     subgraph org["GitHub · G6D2"]
         direction TB
 
-        subgraph be["emergencias-backend (Node.js 20, Express, CommonJS)"]
+        subgraph be["emergencias-backend (Node.js 22, Express, CommonJS)"]
             direction TB
             routes["src/routes"]
             authM["src/auth"]
@@ -235,7 +236,7 @@ flowchart LR
             svc["src/services"]
             lst["src/listeners<br/>(un directorio por módulo de origen,<br/>una regla por archivo)"]
             sec["src/security"]
-            migr["db/migrations<br/>(Flyway V1..V33)"]
+            migr["db/migrations<br/>(Flyway V1..V35)"]
             contr["asyncapi.yaml + OpenAPI<br/>(contratos)"]
             tests["src/tests<br/>(unitarios e integración)"]
         end
@@ -306,7 +307,7 @@ flowchart TB
 
     subgraph render["Render · región Oregon · plan free"]
         feN["Web service: Frontend<br/>Next.js"]
-        beN["Web service: emergencias-backend<br/>contenedor Docker (node:20-alpine)"]
+        beN["Web service: emergencias-backend<br/>contenedor Docker (node:22-alpine)"]
     end
 
     subgraph render2["Render · segunda cuenta"]
@@ -364,8 +365,9 @@ Variables de entorno, secretos y notas operativas: `08-despliegue.md`.
 
 ## 5. Escenarios (+1)
 
-Cinco casos de uso recorren las cuatro vistas y sirven para comprobar que encajan. Cada uno
-tiene su diagrama de secuencia en `05-secuencias.md`.
+Siete escenarios recorren las cuatro vistas y sirven para comprobar que encajan: cinco son
+propios del módulo y dos son transversales, con otros módulos de CityPass+ (filas 5.f y 5.g).
+Cada uno tiene su diagrama de secuencia en `05-secuencias.md`.
 
 | Escenario | Caso de uso | Lógica | Procesos | Desarrollo | Física | Secuencia |
 |---|---|---|---|---|---|---|
@@ -374,6 +376,23 @@ tiene su diagrama de secuencia en `05-secuencias.md`.
 | El ciudadano cancela y el resto de la ciudad se entera | HU-03 | Transición a `CANCELLED` y `EmergenciaActualizada` | El cambio y el evento van en una transacción; la publicación es asíncrona y reintenta | `emergency-events` → `outbox-publisher` → `gateway-publisher` | Backend → gateway del Grupo 1 → Kafka → otros módulos | 5.c |
 | Varios reportes cercanos se vuelven un incidente | CU-04 | `DetectorDeIncidentes` agrupa y `MotorDeRiesgo` sube la prioridad sin bajar nunca la individual | Job cada 60 s con advisory lock | `incident-detection-job` → `domain/*` → `incident.repository` | Solo backend y Neon | 5.d |
 | Espacios publica un evento masivo | CU-03 | Se crea una `Emergencia` `PREVENTIVA` y un `ContextoDeZona` | Mensaje de Kafka, dedup por `eventId`, transacción única | `listeners/cobertura-preventiva/.../rules` → `OutcomeFactory` | Kafka del Grupo 1 → backend → Neon | 5.e |
+| **Transversal:** un reclamo por ciclovía obstruida termina en una intervención | CU-03, CU-05 a CU-09 | Nace una `Emergencia` `TRANSITO` con causa `RECLAMO`, una sola por reclamo, y recorre la `MaquinaDeEstados` completa; un `ReclamoActualizado` final la cancela si no se despachó | Dos mensajes de otros módulos por el mismo consumer (el disparador elige cuál crea), dedup por `eventId` e índice único; después, requests HTTP del personal y el outbox en orden por emergencia | `listeners/reclamo-intervencion` (`disparador.js`, reglas, handlers) → `emergency.repository` → `emergency-events` | Reclamos y Movilidad → Kafka del Grupo 1 → backend → Neon → gateway → Kafka | 5.f |
+| **Transversal:** una alerta climática sube la prioridad en la zona | CU-03, CU-04 | `ContextoDeZona` `ALERTA_CLIMATICA` por punto y una `PREVENTIVA` por alerta; las `Emergencia` nuevas dentro del radio suben un nivel mientras dura | Confirmación y finalización por tópicos distintos, serializadas con un advisory lock por alerta; la suba se calcula al leer, sin job | `listeners/alerta-climatica` → `contexto-zona.repository`; `linkZoneContexts` en el alta; `GET /api/contextos-zona/activos` | Espacios → Kafka del Grupo 1 → backend → Neon; tablero del dispatcher por polling | 5.g |
+
+### 5.1 Escenario transversal en detalle: reclamo por ciclovía obstruida
+
+Es el caso 3 del Hito 2 ("Reclamo ciudadano que desencadena una intervención urbana"): un vecino
+reporta un auto que bloquea la ciclovía, Movilidad evalúa la obstrucción y Emergencias manda un
+agente. Así lo cubre cada vista:
+
+| Vista | Qué pasa | Dónde mirarlo |
+|---|---|---|
+| Lógica | La intervención es una `Emergencia` más: tipo `TRANSITO` (severidad base `medium`, o la prioridad que pide Movilidad), origen `EXTERNAL`, sin ciudadano, causa `RECLAMO` con el `reclamoId` y el `correlationId` de Movilidad. Sigue la misma `MaquinaDeEstados` que un SOS; la única transición propia es la cancelación por `ReclamoActualizado`, y solo desde `PENDING` o `VALIDATED`, igual que la del ciudadano | `src/domain/emergency-type.js`, `src/domain/emergency-status.js`, `src/listeners/reclamo-intervencion/handlers/` |
+| Procesos | `EmergenciaSolicitada` (Movilidad) y `ReclamoCreado` (Reclamos) llegan por tópicos distintos al mismo consumer, que procesa particiones en paralelo. `RECLAMO_INTERVENCION_DISPARADOR` decide cuál crea la intervención (`movilidad` por defecto); con `ambos`, el índice único `uq_emergencies_reclamo_causa` y un `SAVEPOINT` resuelven la carrera. Cada mensaje es una transacción con su `eventId` en `eventos_procesados`. Después, dispatcher y oficial operan por HTTP y cada cambio sale por el outbox, en orden por emergencia | `src/listeners/event-consumer.js`, `src/listeners/outcome-factory.js`, `src/services/outbox-publisher.js` |
+| Desarrollo | Un subpaquete por caso de negocio (`src/listeners/reclamo-intervencion/`): un listener por evento, una regla por archivo y dos handlers registrados en el `OutcomeFactory`. Pasar al plan B (`ReclamoCreado`) es cambiar `RECLAMO_INTERVENCION_DISPARADOR`, sin tocar código ni el consumer | `src/listeners/README.md`, `src/index.js` |
+| Física | Reclamos y Movilidad publican en el bus del Grupo 1; el backend (Render) consume por Kafka con SASL_SSL, escribe en Neon y publica `EmergenciaCreada` y `EmergenciaActualizada` por HTTP al gateway, que las deja en Kafka con `correlationId` como clave. El dispatcher y el oficial entran por el Login Federado (LDAP) desde el Frontend | `render.yaml`, `08-despliegue.md` |
+
+Secuencia completa en `05-secuencias.md` (f); contrato de los eventos en `asyncapi.yaml`.
 
 ## Fuente en el código
 
@@ -387,4 +406,5 @@ tiene su diagrama de secuencia en `05-secuencias.md`.
 - Desarrollo: estructura de `src/` y de `Frontend/app/`, `Frontend/app/api/backend/[...path]/route.js`,
   `.github/workflows/ci.yml`, `.github/workflows/cd.yml`, `.github/CODEOWNERS`
 - Física: `render.yaml`, `Dockerfile`, `Frontend/render.yaml`, `.github/workflows/activate-backup.yml`
-- Escenarios: `docs/diagramas/01-casos-de-uso.md`, `docs/diagramas/05-secuencias.md`
+- Escenarios: `docs/diagramas/01-casos-de-uso.md`, `docs/diagramas/05-secuencias.md`,
+  `src/listeners/reclamo-intervencion/`, `src/listeners/alerta-climatica/`

@@ -177,13 +177,13 @@ describe('filas reales del outbox contra el contrato', () => {
 
     // Alta externa: cobertura preventiva del listener (sin ciudadano, con causa).
     const factory = new OutcomeFactory(pool, { dedupRepo: new EventosProcesadosRepository(pool) });
+    const contextoZonaRepository = new ContextoZonaRepository(pool);
     factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({
       emergencyRepository: new EmergencyRepository(pool),
+      contextoZonaRepository,
       topic: COBERTURA_TOPIC,
     }));
-    factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({
-      contextoZonaRepository: new ContextoZonaRepository(pool),
-    }));
+    factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
     const listener = new EventoComunitarioPublicadoListener({ consumer: jest.fn() }, { factory });
     await listener.onMessage({ value: Buffer.from(JSON.stringify(coberturaEvent)) });
 
@@ -226,6 +226,13 @@ describe('filas reales del outbox contra el contrato', () => {
   it('todas las filas cumplen su JSON Schema', () => {
     const errors = rows.flatMap((row) => contractErrors(row.payload).map((error) => `${row.id}: ${error}`));
     expect(errors).toEqual([]);
+  });
+
+  it('la cobertura sale con el correlationId de Espacios aunque no sea UUID (#77) y cumple el contrato', () => {
+    const cobertura = rows.find((row) => row.topic === COBERTURA_TOPIC);
+    expect(cobertura.payload.correlationId).toBe(coberturaEvent.data.correlationId);
+    expect(cobertura.payload.data.correlationId).toBe(coberturaEvent.data.correlationId);
+    expect(contractErrors(cobertura.payload)).toEqual([]);
   });
 
   it('el correlationId del sobre coincide con el de data y el eventId con la fila', () => {

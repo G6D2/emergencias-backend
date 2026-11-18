@@ -182,8 +182,11 @@ describe('reclamo de ciclovía → intervención', () => {
 
     const [row] = await intervenciones(event.data.reclamoId);
     expect(row).toMatchObject({ requires_manual_validation: true, barrio: 'SAN NICOLAS' });
-    // Un correlationId que no es UUID no entra en la columna: usa el id propio.
-    expect(row.correlation_id).toBe(row.id);
+    // El correlationId se conserva aunque no sea UUID (#77) y sale en EmergenciaCreada.
+    expect(row.correlation_id).toBe('req-7c9e6679');
+    const [created] = await eventosDe(row.id, CREATED_TOPIC);
+    expect(created.correlationId).toBe('req-7c9e6679');
+    expect(created.data.correlationId).toBe('req-7c9e6679');
   });
 
   it('el reclamo RESUELTO cancela la intervención pendiente y publica EmergenciaActualizada', async () => {

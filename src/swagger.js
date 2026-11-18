@@ -36,6 +36,7 @@ const options = {
       { name: 'CitizenProfile', description: 'Perfil personal y ubicaciones frecuentes del ciudadano' },
       { name: 'Outbox', description: 'Estado operativo de los eventos pendientes de publicar (dispatcher)' },
       { name: 'ContextosZona', description: 'Alertas climáticas activas para el banner del tablero (dispatcher)' },
+      { name: 'Analitica', description: 'Tablero embebido de Analítica (dispatcher)' },
     ],
     components: {
       securitySchemes: {
@@ -61,8 +62,9 @@ const options = {
             id: { type: 'string', format: 'uuid' },
             correlationId: {
               type: 'string',
-              format: 'uuid',
-              description: 'Igual al id al crear (ADR-001). Traza creación → priorización → despacho en los eventos.',
+              description: 'Igual al id en las altas ciudadanas (ADR-001). En las externas conserva el id de '
+                + 'correlación del otro módulo aunque no sea UUID (p. ej. EMG-... de Movilidad, V32). '
+                + 'Traza creación → priorización → despacho en los eventos.',
             },
             userId: {
               type: 'string',
@@ -122,7 +124,8 @@ const options = {
               nullable: true,
               example: null,
               description: 'Id del oficial asignado (catálogo de /api/officers). null hasta el despacho. '
-                + 'Al devolver (return), cancelar o cerrar, el oficial vuelve a disponible pero el id queda en la fila.',
+                + 'Al devolver (return), cancelar o cerrar, el oficial vuelve a disponible pero el id queda en la fila. '
+                + 'Al citizen le llega siempre null: ve el nombre (assignedOfficer), no el id.',
             },
             assignedOfficer: {
               type: 'string',
@@ -143,7 +146,8 @@ const options = {
               enum: ['INTERNAL', 'EXTERNAL'],
               example: 'INTERNAL',
               description: 'INTERNAL: reportada por un ciudadano. EXTERNAL: creada por un listener de '
-                + 'eventos de otro módulo (hoy, la cobertura preventiva de Espacios).',
+                + 'eventos de otro módulo (cobertura preventiva y alerta climática de Espacios, intervención '
+                + 'por reclamo de ciclovía, emergencia en bicicleta de Movilidad).',
             },
             requiresManualValidation: {
               type: 'boolean',
@@ -153,10 +157,12 @@ const options = {
             causaTipo: {
               type: 'string',
               nullable: true,
-              enum: ['EVENTO_CLIMATICO', 'RECLAMO', 'INCIDENTE_VIAL', 'EVENTO_PUBLICO', 'RESERVA', null],
+              enum: ['EVENTO_CLIMATICO', 'RECLAMO', 'INCIDENTE_VIAL', 'EVENTO_PUBLICO', 'RESERVA', 'MOVILIDAD_BICICLETA', null],
               example: null,
-              description: 'Qué originó la emergencia (CHECK de V23). null en las reportadas por un ciudadano; '
-                + 'hoy solo se completa con EVENTO_PUBLICO (cobertura preventiva).',
+              description: 'Qué originó la emergencia (CHECK de V23 y V32). null en las reportadas por un ciudadano. '
+                + 'Lo completan los listeners: EVENTO_PUBLICO y RESERVA (cobertura preventiva), EVENTO_CLIMATICO '
+                + '(alerta climática), RECLAMO (intervención por reclamo de ciclovía) y MOVILIDAD_BICICLETA. '
+                + 'INCIDENTE_VIAL todavía no lo usa ningún listener.',
             },
             causaId: {
               type: 'string',
@@ -178,9 +184,9 @@ const options = {
               nullable: true,
               description: 'Incidente al que fue agrupada esta emergencia (motor de detección de '
                 + 'incidentes, corre cada 60s), o null si todavía no fue agrupada a ninguno. '
-                + 'Solo viene en el listado y el detalle. En el listado (GET /api/emergencies) se le '
-                + 'recorta al citizen; el detalle (GET /api/emergencies/{id} y GET /api/panic-button/{id}) '
-                + 'lo devuelve también al citizen dueño.',
+                + 'Solo viene en el listado y el detalle. Lo reciben el dispatcher y el officer (en su '
+                + 'listado, que es lo único que ve); al citizen se lo recortan el listado y el detalle '
+                + '(GET /api/emergencies/{id} y GET /api/panic-button/{id}).',
             },
             effectivePriority: {
               type: 'string',
@@ -197,13 +203,14 @@ const options = {
                 + 'la emergencia se creó dentro del radio de un contexto de zona que sigue en curso, por '
                 + 'ejemplo un evento en un espacio público. Se calcula al leer: cuando el contexto vence o se da '
                 + 'de baja vuelve a ser igual a effectivePriority. No sube en emergencias PREVENTIVA ni '
-                + 'en estados terminales. sortBy=priority ordena por este valor. Solo para el dispatcher.',
+                + 'en estados terminales. sortBy=priority ordena por este valor. Para el dispatcher y el '
+                + 'officer (en su listado); el citizen no lo recibe.',
             },
             priorityContext: {
               type: 'object',
               nullable: true,
               description: 'Contexto de zona que eleva dispatchPriority, o null si no hay ninguno '
-                + 'vigente. Solo para el dispatcher.',
+                + 'vigente. Para el dispatcher y el officer (en su listado); el citizen no lo recibe.',
               properties: {
                 tipo: { type: 'string', enum: ['EVENTO_ESPACIO_PUBLICO', 'ALERTA_CLIMATICA'] },
                 latitud: { type: 'number', example: -34.5711, description: 'Punto del contexto (ubicación del evento).' },
@@ -316,9 +323,17 @@ const options = {
               type: 'string',
               nullable: true,
               example: 'D000007',
-              description: 'Claim sub del JWT de quien hizo la transición',
+              description: 'Claim sub del JWT de quien hizo la transición, o el actor fijo del módulo o job '
+                + '(eda:reclamos, eda:espacios, sistema:expiracion). Al citizen le llega el rol (dispatcher, '
+                + 'oficial o sistema) en vez del sub, salvo en los cambios que hizo él (cancelar).',
             },
-            reason: { type: 'string', nullable: true, example: 'Confirmado por operador' },
+            reason: {
+              type: 'string',
+              nullable: true,
+              example: 'Confirmado por operador',
+              description: 'Al citizen, el de la asignación ("Assigned officer of-001") le llega como '
+                + '"Se asignó un oficial", sin el id.',
+            },
             createdAt: { type: 'string', format: 'date-time' },
           },
         },
@@ -505,15 +520,25 @@ const options = {
         ErrorResponse: {
           type: 'object',
           properties: {
-            error: { type: 'string', example: 'ValidationError' },
-            message: { type: 'string' },
+            error: {
+              type: 'string',
+              example: 'NotFoundError',
+              description: 'Código del error, para máquinas: no cambia. Para distinguir casos, '
+                + 'comparar el status HTTP y este campo, no el texto de message.',
+            },
+            message: {
+              type: 'string',
+              example: 'No se encontró la emergencia 8e03978e-40d5-43e8-bc93-6894a57f9324',
+              description: 'Texto para mostrar, en castellano. Puede cambiar.',
+            },
           },
         },
         OutboxStatus: {
           type: 'string',
           enum: OUTBOX_STATUSES,
           description: 'PENDING: espera publicación. PROCESSING: reclamado por el publisher. '
-            + 'PUBLISHED: Kafka confirmó el envío. FAILED: agotó OUTBOX_MAX_ATTEMPTS. '
+            + 'PUBLISHED: Kafka confirmó el envío. FAILED: error propio del evento (400/403/404/413 del gateway); '
+            + 'frena a los posteriores de su emergencia hasta reencolarlo o descartarlo (npm run outbox:requeue-failed). '
             + 'SKIPPED: PENDING anterior a OUTBOX_PUBLISH_SINCE, descartado al arrancar el publisher (V21).',
         },
         HealthResponse: {
@@ -534,6 +559,17 @@ const options = {
                 enabled: { type: 'boolean', example: false },
                 producerConnected: { type: 'boolean', example: false },
                 lastPollAt: { type: 'string', format: 'date-time', nullable: true },
+                pausedUntil: {
+                  type: 'string',
+                  format: 'date-time',
+                  nullable: true,
+                  description: 'Hasta cuándo no publica porque el bus no respondió (issue #104). null si anda.',
+                },
+                consecutiveFailures: {
+                  type: 'integer',
+                  example: 0,
+                  description: 'Errores transitorios seguidos del bus; vuelve a 0 con el primer envío que sale bien.',
+                },
               },
             },
             listeners: {

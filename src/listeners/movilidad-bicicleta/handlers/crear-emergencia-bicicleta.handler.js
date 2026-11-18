@@ -2,6 +2,7 @@ const { randomUUID } = require('crypto');
 const { ValidationError } = require('../../../errors/app-errors');
 const { secureLog } = require('../../../security/secure-log');
 const { buildEmergencyCreatedEvent } = require('../../../services/emergency-events');
+const { correlationIdExterno } = require('../../../domain/correlation-id');
 
 const CREAR_EMERGENCIA_BICICLETA = 'CrearEmergenciaBicicleta';
 const CAUSA_TIPO = 'MOVILIDAD_BICICLETA';
@@ -95,7 +96,9 @@ function createCrearEmergenciaBicicletaHandler({
       await emergencyRepository.create({
         client,
         id: emergencyId,
-        correlationId: emergenciaId,
+        // El id de Movilidad (EMG-...) vuelve como correlationId, con el
+        // mismo filtro que el resto de las altas externas.
+        correlationId: correlationIdExterno(emergenciaId) ?? emergencyId,
         userId: null,
         latitude: latitud,
         longitude: longitud,

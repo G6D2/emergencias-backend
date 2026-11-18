@@ -1,6 +1,7 @@
 const request = require('supertest');
 const { createApp } = require('../app');
 const { NotFoundError } = require('../errors/app-errors');
+const { forCitizen } = require('../controllers/emergency.controller');
 
 const mockKafkaService = {
   publishEvent: async () => {},
@@ -26,7 +27,7 @@ function createMockEmergencyRepository() {
     recordAccess: async () => ({ id: 1 }),
     updateStatus: async (id, { newStatus, actor = null, reason = null }) => {
       const current = emergencies.get(id);
-      if (!current) throw new NotFoundError(`Emergency with ID ${id} not found`);
+      if (!current) throw new NotFoundError(`No se encontró la emergencia ${id}`);
       const updated = { ...current, status: newStatus, updatedAt: new Date().toISOString() };
       emergencies.set(id, updated);
       return {
@@ -155,7 +156,111 @@ describe('GET /api/emergencies', () => {
 
     expect(res.body.data).toHaveLength(1);
     expect(res.body.data[0].id).toBe(mine);
-    expect(res.body.data[0]).not.toHaveProperty('effectivePriority');
+  });
+
+  describe('?scope=active|history (vista del oficial, issue #17)', () => {
+    // El filtro real vive en el repository (ver emergency.repository tests);
+    // acá se prueba qué le pide el controller y cómo arma la respuesta.
+    function repoReturning(rows) {
+      const repo = createMockEmergencyRepository();
+      repo.findPage = jest.fn(async () => ({ emergencies: rows, total: rows.length }));
+      return repo;
+    }
+
+    it('history: pide el scope con el oficial del token y marca las devueltas sin mostrar a quién quedaron', async () => {
+      const repo = repoReturning([
+        { id: 'e-own', status: 'CLOSED', assignedOfficerId: 'of-001', assignedOfficer: 'Ana', effectivePriority: 'high' },
+        { id: 'e-ret', status: 'DISPATCHED', assignedOfficerId: 'of-002', assignedOfficer: 'Beto' },
+      ]);
+
+      const res = await request(createTestApp(OFFICER_1, repo))
+        .get('/api/emergencies?scope=history&assignedOfficerId=of-002')
+        .expect(200);
+
+      expect(repo.findPage).toHaveBeenCalledWith(expect.objectContaining({
+        assignedOfficerId: OFFICER_1.sub,
+        officerScope: 'history',
+        statuses: [],
+      }));
+      expect(res.body.data).toEqual([
+        {
+          id: 'e-own', status: 'CLOSED', assignedOfficerId: 'of-001', assignedOfficer: 'Ana', effectivePriority: 'high', returned: false,
+        },
+        { id: 'e-ret', status: 'DISPATCHED', assignedOfficerId: null, assignedOfficer: null, returned: true },
+      ]);
+    });
+
+    it('el oficial recibe la prioridad de despacho, su motivo y el incidente; el citizen no', async () => {
+      const zoneContext = {
+        tipo: 'ALERTA_CLIMATICA',
+        latitud: -34.6,
+        longitud: -58.4,
+        radioMetros: 500,
+        origen: 'espacios',
+        referenciaExterna: 'alerta-1#0',
+        descripcion: 'Alerta climática CRITICA: tormenta fuerte',
+        vigenteDesde: '2026-11-17T10:00:00.000Z',
+        vigenteHasta: '2026-11-17T22:00:00.000Z',
+      };
+      const operational = {
+        incident: { id: 'inc-1', priority: 'high', score: 56, reportCount: 3, uniqueCitizens: 3, reasonCodes: ['MULTI_REPORT'] },
+        effectivePriority: 'high',
+        dispatchPriority: 'critical',
+        priorityContext: zoneContext,
+      };
+      const row = {
+        id: 'e-1', userId: CITIZEN_A.sub, status: 'DISPATCHED', severity: 'medium', assignedOfficerId: OFFICER_1.sub, ...operational,
+      };
+
+      const asOfficer = await request(createTestApp(OFFICER_1, repoReturning([row])))
+        .get('/api/emergencies?scope=active&sortBy=priority')
+        .expect(200);
+      const asCitizen = await request(createTestApp(CITIZEN_A, repoReturning([row])))
+        .get('/api/emergencies')
+        .expect(200);
+
+      expect(asOfficer.body.data[0]).toMatchObject({ ...operational, severity: 'medium', returned: false });
+      for (const field of Object.keys(operational)) {
+        expect(asCitizen.body.data[0]).not.toHaveProperty(field);
+      }
+      expect(asCitizen.body.data[0].severity).toBe('medium');
+    });
+
+    it('active: pasa el scope al repository', async () => {
+      const repo = repoReturning([]);
+
+      await request(createTestApp(OFFICER_1, repo)).get('/api/emergencies?scope=active').expect(200);
+
+      expect(repo.findPage).toHaveBeenCalledWith(expect.objectContaining({
+        assignedOfficerId: OFFICER_1.sub,
+        officerScope: 'active',
+      }));
+    });
+
+    it('sin scope el oficial lista como antes (officerScope undefined)', async () => {
+      const repo = repoReturning([]);
+
+      await request(createTestApp(OFFICER_1, repo)).get('/api/emergencies?status=CLOSED').expect(200);
+
+      expect(repo.findPage).toHaveBeenCalledWith(expect.objectContaining({
+        officerScope: undefined,
+        statuses: ['CLOSED'],
+      }));
+    });
+
+    it.each([
+      ['un scope desconocido', OFFICER_1, 'scope=todas', 'scope tiene que ser uno de: active, history'],
+      ['scope junto con status', OFFICER_1, 'scope=history&status=CLOSED', 'Usá scope o status, no los dos'],
+      ['un dispatcher', DISPATCHER, 'scope=history', 'scope solo está disponible para oficiales'],
+      ['un citizen', CITIZEN_A, 'scope=active', 'scope solo está disponible para oficiales'],
+    ])('400 con %s', async (_label, user, query, message) => {
+      const repo = repoReturning([]);
+
+      const res = await request(createTestApp(user, repo)).get(`/api/emergencies?${query}`).expect(400);
+
+      expect(res.body).toMatchObject({ error: 'ValidationError', message });
+      expect(repo.findPage).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -533,6 +638,133 @@ describe('GET /api/emergencies/:id — recorte para citizen y auditoría', () =>
     await request(app).get('/api/emergencies').expect(200);
 
     expect(repo.recordAccess).not.toHaveBeenCalled();
+  });
+});
+
+describe('El citizen no recibe los ids del personal', () => {
+  const OFFICER_NAME = 'Oficial Carlos Gómez';
+  const at = (minute) => `2026-11-17T10:${String(minute).padStart(2, '0')}:00.000Z`;
+  const entry = (id, previousStatus, newStatus, actor, reason = null) => ({
+    id, emergencyId: DETAIL_UUID, previousStatus, newStatus, actor, reason, createdAt: at(id),
+  });
+  // Pasó por el dispatcher, el oficial y el job de expiración, con el actor
+  // y el motivo tal como quedan en emergency_status_history.
+  const STAFF_HISTORY = [
+    entry(1, 'PENDING', 'VALIDATED', DISPATCHER.sub),
+    entry(2, 'VALIDATED', 'DISPATCHED', DISPATCHER.sub, `Assigned officer ${OFFICER_1.sub}`),
+    entry(3, 'DISPATCHED', 'EN_ROUTE', OFFICER_1.sub),
+    entry(4, 'EN_ROUTE', 'ON_SCENE', OFFICER_1.sub),
+    entry(5, 'ON_SCENE', 'RESOLVED', OFFICER_1.sub),
+    entry(6, 'RESOLVED', 'CLOSED', 'sistema:expiracion', 'Expirada: sin cambios de estado en 72 h'),
+  ];
+
+  function repoWithHistory(statusHistory) {
+    const detail = {
+      id: DETAIL_UUID,
+      userId: CITIZEN_A.sub,
+      status: statusHistory[statusHistory.length - 1].newStatus,
+      severity: 'high',
+      assignedOfficerId: OFFICER_1.sub,
+      assignedOfficer: OFFICER_NAME,
+    };
+    return createRepositoryWithDetail({
+      findDetailById: async (id) => (id === DETAIL_UUID ? { ...detail, statusHistory } : null),
+      findPage: async () => ({ emergencies: [detail], total: 1 }),
+    });
+  }
+
+  const actorsAndReasons = (body) => body.data.statusHistory.map((e) => [e.newStatus, e.actor, e.reason]);
+
+  it('en el detalle recibe el rol en vez del sub del dispatcher y del oficial, y el oficial sin id', async () => {
+    const app = createTestApp(CITIZEN_A, repoWithHistory(STAFF_HISTORY));
+
+    const res = await request(app).get(`/api/emergencies/${DETAIL_UUID}`).expect(200);
+
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain(DISPATCHER.sub);
+    expect(body).not.toContain(OFFICER_1.sub);
+    expect(actorsAndReasons(res.body)).toEqual([
+      ['VALIDATED', 'dispatcher', null],
+      ['DISPATCHED', 'dispatcher', 'Se asignó un oficial'],
+      ['EN_ROUTE', 'oficial', null],
+      ['ON_SCENE', 'oficial', null],
+      ['RESOLVED', 'oficial', null],
+      ['CLOSED', 'sistema', 'Expirada: sin cambios de estado en 72 h'],
+    ]);
+    expect(res.body.data.assignedOfficerId).toBeNull();
+    expect(res.body.data.assignedOfficer).toBe(OFFICER_NAME);
+    expect(res.body.data.statusHistory[0]).toMatchObject({ id: 1, previousStatus: 'PENDING', createdAt: at(1) });
+  });
+
+  it('el dispatcher sí recibe el sub de cada actor, el motivo original y el id del oficial', async () => {
+    const app = createTestApp(DISPATCHER, repoWithHistory(STAFF_HISTORY));
+
+    const res = await request(app).get(`/api/emergencies/${DETAIL_UUID}`).expect(200);
+
+    expect(actorsAndReasons(res.body)).toEqual(
+      STAFF_HISTORY.map((e) => [e.newStatus, e.actor, e.reason])
+    );
+    expect(res.body.data.assignedOfficerId).toBe(OFFICER_1.sub);
+  });
+
+  it('su propia cancelación conserva su sub; la de otro módulo llega como sistema', async () => {
+    const own = repoWithHistory([
+      entry(1, 'PENDING', 'VALIDATED', DISPATCHER.sub),
+      entry(2, 'VALIDATED', 'CANCELLED', CITIZEN_A.sub, 'Falsa alarma'),
+    ]);
+    const byModule = repoWithHistory([entry(1, 'PENDING', 'CANCELLED', 'eda:espacios', 'Evento cancelado')]);
+
+    const ownRes = await request(createTestApp(CITIZEN_A, own)).get(`/api/emergencies/${DETAIL_UUID}`).expect(200);
+    const moduleRes = await request(createTestApp(CITIZEN_A, byModule)).get(`/api/emergencies/${DETAIL_UUID}`).expect(200);
+
+    expect(actorsAndReasons(ownRes.body)).toEqual([
+      ['VALIDATED', 'dispatcher', null],
+      ['CANCELLED', CITIZEN_A.sub, 'Falsa alarma'],
+    ]);
+    expect(actorsAndReasons(moduleRes.body)).toEqual([['CANCELLED', 'sistema', 'Evento cancelado']]);
+  });
+
+  it('GET /api/panic-button/:id le da el mismo recorte (delega en el detalle)', async () => {
+    const app = createTestApp(CITIZEN_A, repoWithHistory(STAFF_HISTORY));
+
+    const res = await request(app).get(`/api/panic-button/${DETAIL_UUID}`).expect(200);
+
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain(DISPATCHER.sub);
+    expect(body).not.toContain(OFFICER_1.sub);
+    expect(res.body.data.statusHistory.map((e) => e.actor))
+      .toEqual(['dispatcher', 'dispatcher', 'oficial', 'oficial', 'oficial', 'sistema']);
+  });
+
+  it('en el listado recibe el nombre del oficial pero no su id; el dispatcher recibe los dos', async () => {
+    const repo = repoWithHistory(STAFF_HISTORY);
+
+    const asCitizen = await request(createTestApp(CITIZEN_A, repo)).get('/api/emergencies').expect(200);
+    const asDispatcher = await request(createTestApp(DISPATCHER, repo)).get('/api/emergencies').expect(200);
+
+    expect(JSON.stringify(asCitizen.body)).not.toContain(OFFICER_1.sub);
+    expect(asCitizen.body.data[0]).toMatchObject({ assignedOfficerId: null, assignedOfficer: OFFICER_NAME });
+    expect(asDispatcher.body.data[0]).toMatchObject({ assignedOfficerId: OFFICER_1.sub, assignedOfficer: OFFICER_NAME });
+  });
+
+  describe('forCitizen', () => {
+    it('deja sin tocar una emergencia sin oficial ni historial', () => {
+      const emergency = { id: DETAIL_UUID, userId: CITIZEN_A.sub, assignedOfficerId: null, assignedOfficer: null };
+
+      expect(forCitizen(emergency, CITIZEN_A.sub)).toEqual(emergency);
+    });
+
+    it('un actor vacío queda como está y uno que no encaja en ningún rol queda en null', () => {
+      const view = forCitizen({
+        id: DETAIL_UUID,
+        statusHistory: [
+          entry(1, 'PENDING', 'VALIDATED', null),
+          entry(2, 'VALIDATED', 'CANCELLED', 'DISP-999'),
+        ],
+      }, CITIZEN_A.sub);
+
+      expect(view.statusHistory.map((e) => e.actor)).toEqual([null, null]);
+    });
   });
 });
 

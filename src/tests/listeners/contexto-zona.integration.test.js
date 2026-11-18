@@ -118,8 +118,8 @@ beforeAll(async () => {
   contextoZonaRepository = new ContextoZonaRepository(pool);
 
   const factory = new OutcomeFactory(pool, { dedupRepo: new EventosProcesadosRepository(pool) });
-  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, topic: CREATED_TOPIC }));
-  factory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository, topic: UPDATED_TOPIC }));
+  factory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository, contextoZonaRepository, topic: CREATED_TOPIC }));
+  factory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository, contextoZonaRepository, topic: UPDATED_TOPIC }));
   factory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   factory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
 

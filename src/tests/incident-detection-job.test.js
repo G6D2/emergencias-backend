@@ -1,9 +1,11 @@
 const {
   startIncidentDetectionJob,
   withDetectionLock,
+  detectIncidents,
   DETECTION_LOCK_KEY,
   GROUPABLE_EMERGENCY_TYPES,
 } = require('../services/incident-detection-job');
+const { TERMINAL_STATUSES } = require('../domain/emergency-status');
 
 const BASE_LATITUDE = -34.6037;
 const BASE_LONGITUDE = -58.3816;
@@ -27,6 +29,7 @@ function buildRepos() {
   return {
     emergencyRepository: {
       findRecentByType: jest.fn().mockResolvedValue([]),
+      findActiveByIncidentIds: jest.fn().mockResolvedValue([]),
     },
     incidentRepository: {
       create: jest.fn(),
@@ -173,6 +176,175 @@ describe('incident-detection-job', () => {
       ['inc-INCENDIO', 'f1'], ['inc-INCENDIO', 'f2'], ['inc-MEDICA', 'm1'], ['inc-MEDICA', 'm2'],
     ]));
     expect(incidentRepository.addMember).toHaveBeenCalledTimes(4);
+  });
+
+  it('con candidatos ya vinculados, pide una sola vez los miembros activos de esos incidentes y los puntúa', async () => {
+    const { emergencyRepository, incidentRepository } = buildRepos();
+    emergencyRepository.findRecentByType.mockResolvedValue([
+      closeCandidate({ id: 'e2', userId: 'u2', incidentId: 'inc-1' }),
+      closeCandidate({
+        id: 'e3', userId: 'u3', incidentId: 'inc-1', latitude: BASE_LATITUDE + 0.0002,
+      }),
+      closeCandidate({
+        id: 'm1', userId: 'u4', emergencyType: 'MEDICA', incidentId: 'inc-2', latitude: BASE_LATITUDE + 1,
+      }),
+    ]);
+    // e1 es del mismo incidente pero ya salió de la ventana.
+    emergencyRepository.findActiveByIncidentIds.mockResolvedValue([
+      closeCandidate({
+        id: 'e1', userId: 'u1', incidentId: 'inc-1', createdAt: new Date(Date.now() - 16 * 60000),
+      }),
+    ]);
+
+    const job = createJob(emergencyRepository, incidentRepository);
+    await job.runOnce();
+
+    expect(emergencyRepository.findActiveByIncidentIds).toHaveBeenCalledTimes(1);
+    expect(emergencyRepository.findActiveByIncidentIds.mock.calls[0][0].sort()).toEqual(['inc-1', 'inc-2']);
+    expect(incidentRepository.addMember).not.toHaveBeenCalled();
+    expect(incidentRepository.applyScoringDecision).toHaveBeenCalledTimes(1);
+    const [incidentId, decision] = incidentRepository.applyScoringDecision.mock.calls[0];
+    expect(incidentId).toBe('inc-1');
+    expect(decision.factors.reportCount).toBe(3);
+    expect(decision.members.map((m) => m.emergencyId).sort()).toEqual(['e1', 'e2', 'e3']);
+  });
+
+  it('sin candidatos vinculados a un incidente no busca miembros de incidentes', async () => {
+    const { emergencyRepository, incidentRepository } = buildRepos();
+    emergencyRepository.findRecentByType.mockResolvedValue([
+      closeCandidate({ id: 'e1', userId: 'u1' }),
+      closeCandidate({ id: 'e2', userId: 'u2', latitude: BASE_LATITUDE + 0.0002 }),
+    ]);
+    incidentRepository.create.mockResolvedValue({ id: 'incident-1' });
+
+    const job = createJob(emergencyRepository, incidentRepository);
+    await job.runOnce();
+
+    expect(emergencyRepository.findActiveByIncidentIds).not.toHaveBeenCalled();
+    expect(incidentRepository.applyScoringDecision).toHaveBeenCalledTimes(1);
+  });
+
+  // Hallazgo de docs/ml/calibracion-dbscan.md: el job puntuaba un incidente
+  // solo con los miembros que seguían en la ventana. Cuando el primer
+  // reporte cumplía 15 min, el incidente de la demo pasaba de high a medium
+  // (score 56 → 42) con sus tres reportes y se publicaba EmergenciaPriorizada
+  // con la baja. Repositorios en memoria que se comportan como los reales y
+  // un reloj simulado, una pasada por minuto como en producción.
+  describe('incidente de la demo con el reloj más allá de la ventana', () => {
+    const T0 = Date.UTC(2026, 10, 17, 15, 0, 0);
+    const WINDOW_MIN = 15;
+    const TYPE = 'DISTURBIO_EVENTO_MASIVO';
+
+    function buildDemo() {
+      const emergencies = [
+        { id: 'e1', userId: 'JuanPanico', latitude: -34.6037, longitude: -58.3816, createdAtMs: T0 },
+        { id: 'e2', userId: 'LuciaTranquila', latitude: -34.6033, longitude: -58.3816, createdAtMs: T0 + 30000 },
+        { id: 'e3', userId: 'U000042', latitude: -34.6037, longitude: -58.3810, createdAtMs: T0 + 60000 },
+      ].map((emergency) => ({ ...emergency, severity: 'medium', status: 'PENDING', incidentId: null }));
+      const incidents = new Map();
+      // Como IncidentRepository.applyScoringDecision: una EmergenciaPriorizada
+      // por miembro, solo si cambió la prioridad del incidente.
+      const prioritizedEvents = [];
+      let now = T0;
+
+      const isActive = (emergency) => !TERMINAL_STATUSES.includes(emergency.status);
+      const toCandidate = (emergency) => ({
+        id: emergency.id,
+        correlationId: emergency.id,
+        userId: emergency.userId,
+        emergencyType: TYPE,
+        latitude: emergency.latitude,
+        longitude: emergency.longitude,
+        severity: emergency.severity,
+        incidentId: emergency.incidentId,
+        createdAt: new Date(emergency.createdAtMs),
+      });
+
+      const emergencyRepository = {
+        findRecentByType: jest.fn(async ({ since }) => emergencies
+          .filter((e) => isActive(e) && e.createdAtMs >= since.getTime() && e.createdAtMs <= now)
+          .map(toCandidate)),
+        findActiveByIncidentIds: jest.fn(async (incidentIds) => emergencies
+          .filter((e) => isActive(e) && incidentIds.includes(e.incidentId))
+          .map(toCandidate)),
+      };
+      const incidentRepository = {
+        create: jest.fn(async () => {
+          const id = `inc-${incidents.size + 1}`;
+          incidents.set(id, { id, priority: null });
+          return { id };
+        }),
+        addMember: jest.fn(async (incidentId, emergencyId) => {
+          emergencies.find((e) => e.id === emergencyId).incidentId = incidentId;
+        }),
+        applyScoringDecision: jest.fn(async (incidentId, { priority, score, factors, members }) => {
+          const incident = incidents.get(incidentId);
+          if (incident.priority !== priority) {
+            members.forEach((member) => prioritizedEvents.push({
+              minute: (now - T0) / 60000, emergencyId: member.emergencyId, incidentPriority: priority,
+            }));
+          }
+          Object.assign(incident, { priority, score, reportCount: factors.reportCount });
+        }),
+      };
+
+      async function runAt(minute) {
+        now = T0 + minute * 60000;
+        jest.spyOn(Date, 'now').mockReturnValue(now);
+        await detectIncidents({
+          emergencyRepository,
+          incidentRepository,
+          since: new Date(now - WINDOW_MIN * 60000),
+          radiusMeters: 300,
+          minUniqueCitizens: 2,
+        });
+        return { minute, ...incidents.get('inc-1') };
+      }
+
+      return { emergencies, prioritizedEvents, runAt };
+    }
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('el score y la prioridad no bajan cuando los primeros reportes salen de la ventana, ni se publica una baja', async () => {
+      const demo = buildDemo();
+      const history = [];
+      for (let minute = 1.5; minute < 30; minute += 1) {
+        history.push(await demo.runAt(minute));
+      }
+
+      const at = (minute) => history.find((pass) => pass.minute === minute);
+      expect(at(1.5)).toMatchObject({ priority: 'high', reportCount: 3 });
+      // En la pasada de 15,5 la ventana ya no tiene a e1 (salió a los 15 min)
+      // y todavía tiene a e2 y e3: DBSCAN vuelve a armar el grupo con dos.
+      expect(at(15.5)).toMatchObject({ priority: 'high', reportCount: 3 });
+      expect(at(15.5).score).toBeGreaterThanOrEqual(50);
+      // Solo la recencia le resta (~1 punto por minuto), no la salida de e1.
+      expect(at(15.5).score).toBeGreaterThanOrEqual(at(14.5).score - 1);
+      history.forEach((pass) => {
+        expect(pass.priority).toBe('high');
+        expect(pass.reportCount).toBe(3);
+      });
+
+      // Una sola EmergenciaPriorizada por miembro: la de cuando se formó.
+      expect(demo.prioritizedEvents.map((event) => event.emergencyId).sort()).toEqual(['e1', 'e2', 'e3']);
+      expect(demo.prioritizedEvents.every((event) => event.minute === 1.5 && event.incidentPriority === 'high')).toBe(true);
+    });
+
+    it('una emergencia que pasa a un estado terminal sí deja de contar y puede bajar la prioridad', async () => {
+      const demo = buildDemo();
+      await demo.runAt(1.5);
+
+      demo.emergencies.find((e) => e.id === 'e1').status = 'CANCELLED';
+      const pass = await demo.runAt(10);
+
+      expect(pass).toMatchObject({ priority: 'medium', reportCount: 2 });
+      const events = demo.prioritizedEvents.filter((event) => event.minute === 10);
+      expect(events.map((event) => event.emergencyId).sort()).toEqual(['e2', 'e3']);
+      expect(events.every((event) => event.incidentPriority === 'medium')).toBe(true);
+    });
   });
 
   it('sin candidatos no toca el repository de incidentes', async () => {

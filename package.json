@@ -11,6 +11,8 @@
     "security:anonymize-locations": "node scripts/anonymize-locations.js",
     "security:backfill-barrios": "node scripts/backfill-barrios.js",
     "backfill:vinculos-contexto": "node scripts/backfill-vinculos-contexto.js",
+    "outbox:requeue-failed": "node scripts/outbox-requeue-failed.js",
+    "eventos:descartados": "node scripts/eventos-descartados.js",
     "seed": "node scripts/seed.js",
     "test": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js --runInBand",
@@ -29,7 +31,7 @@
   "author": "Grupo 6 - Emergencias y Seguridad",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@kafkajs/confluent-schema-registry": "^4.1.0",

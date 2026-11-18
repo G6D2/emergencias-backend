@@ -13,6 +13,11 @@ services:
     # Sin auto-deploy: el CD (.github/workflows/cd.yml) migra Neon y después
     # dispara el deploy hook.
     autoDeployTrigger: "off"
+    # Health check de Render (cargado en el dashboard el 17/11/2026). /health
+    # responde 200 si el proceso atiende, sin mirar la base ni Kafka, y está
+    # excluido del redirect a HTTPS: un deploy que no levanta no reemplaza a la
+    # instancia que anda, y Render reinicia si deja de responder.
+    healthCheckPath: /health
     envVars:
       # Producción corre con NODE_ENV=production desde el 17/11/2026 (antes no
       # mandaba Strict-Transport-Security). Prende HSTS + redirect a HTTPS
@@ -29,6 +34,14 @@ services:
       # sslmode=require. No se usa Postgres de Render.
       - key: DATABASE_URL
         sync: false
+      # Verificar el certificado de Neon (cargada el 17/11/2026). Con pg 8,
+      # el sslmode=require de la URL ya se trata como verify-full (lo avisa
+      # pg en el log) y pisa la opción ssl del código; esta variable deja la
+      # intención explícita y cubre una URL sin sslmode. Ojo con pg 9: ahí
+      # require pasa a la semántica de libpq (sin verificar), así que conviene
+      # usar sslmode=verify-full en la URL antes de subir de versión.
+      - key: DATABASE_SSL_VERIFY
+        value: "true"
       # Máximo de conexiones del pool de pg (ver README > Pool de conexiones).
       - key: DB_POOL_MAX
         value: "10"
@@ -66,11 +79,12 @@ services:
       # U000025 = jefe.gorgory (grupo poli) → of-001, 16/11/2026.
       - key: IDP_SUB_ALIASES
         value: '{"U000025":"of-001"}'
-      # Vida del token local (default 900 s): una sesión de demo dura 15 minutos
-      # y no se renueva. Para una demo larga conviene subirlo (ej. 14400). No
-      # sabemos si está cargada en el dashboard.
-      # - key: LOCAL_TOKEN_TTL_SECONDS
-      #   value: "14400"
+      # Vida del token local (default 900 s = 15 minutos, sin renovación).
+      # Cargada en 4 h el 17/11/2026 para que una sesión de demo no se corte en
+      # medio de la presentación. Solo afecta a las cuentas locales (ciudadanos
+      # y atajos de demo); el personal usa el token del Login Federado.
+      - key: LOCAL_TOKEN_TTL_SECONDS
+        value: "14400"
 
       # Bus del Grupo 1. Se consume por Kafka (SASL_SSL) y se publica por HTTP
       # al gateway desde el 05/11/2026 (ver EDA_PUBLISHER_MODE más abajo).
@@ -105,6 +119,18 @@ services:
         value: com.citypass.espacios.EventoComunitarioPublicado
       - key: EDA_TOPIC_EVENTO_CANCELADO
         value: com.citypass.espacios.EventoCancelado
+      # ActividadCreada usa el default del código
+      # (com.citypass.espacios.ActividadCreada.v3); se pisa con
+      # EDA_TOPIC_ACTIVIDAD_CREADA.
+      # ReservaCreada es opt-in (sin default): sin esta variable no se consume.
+      - key: EDA_TOPIC_RESERVA_CREADA
+        value: com.citypass.espacios.ReservaCreada
+      # Umbral de personas para la cobertura preventiva, el mismo para evento,
+      # actividad y reserva (respuesta de Producto en el ADR de cobertura
+      # preventiva, 17/11/2026). Es el default del código; se carga explícito
+      # para que prod y este archivo no dependan de un valor viejo.
+      - key: UMBRAL_CAPACIDAD_COBERTURA_PREVENTIVA
+        value: "500"
       # Listeners del caso ciclovía: usan el default del código
       # (com.citypass.movilidad.EmergenciaSolicitada,
       # com.citypass.reclamos.ReclamoCreado.v3 y ...ReclamoActualizado). Se
@@ -114,12 +140,16 @@ services:
       # Pedido de asistencia en bicicleta: listener independiente y tópico propio.
       - key: EDA_TOPIC_EMERGENCIA_BICICLETA
         value: com.citypass.movilidad.EmergenciaBicicleta
-      # Alerta climática: opt-in, sin default. Para activarla, confirmar los
-      # nombres en el catálogo del gateway y cargar a mano
-      # EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA y _FINALIZADA (las dos).
-      # Radios por nivel: CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS (default
-      # 1000) y CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS (default 500). Solo para
-      # alertas sin barrios del catálogo; con barrios, el círculo de cada barrio.
+      # Alerta climática (ADR "Responder a las alertas climáticas de
+      # Espacios"): opt-in, sin default; las dos van juntas. Activada en prod
+      # el 17/11/2026. Radios por nivel: CONTEXTO_ZONA_RADIO_CLIMA_CRITICA_METROS
+      # (default 1000) y CONTEXTO_ZONA_RADIO_CLIMA_ALTA_METROS (default 500),
+      # con el default. Solo para alertas sin barrios del catálogo; con
+      # barrios, el círculo de cada barrio.
+      - key: EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA
+        value: com.citypass.espacios.CriticidadClimaticaConfirmada
+      - key: EDA_TOPIC_CRITICIDAD_CLIMATICA_FINALIZADA
+        value: com.citypass.espacios.CriticidadClimaticaFinalizada
       # Piso de consumo: un grupo sin offset lee desde el principio y saltea lo
       # anterior a esta fecha. Tiene que quedar cargada siempre.
       - key: EDA_CONSUMER_SINCE

@@ -44,10 +44,10 @@ function createMockRepository(initial = {}) {
     updateStatus: jest.fn(async (id, options) => {
       updateCalls.push({ id, ...options });
       const current = emergencies.get(id);
-      if (!current) throw new NotFoundError(`Emergency with ID ${id} not found`);
+      if (!current) throw new NotFoundError(`No se encontró la emergencia ${id}`);
       if (options.requireAssignedOfficerId != null
         && current.assignedOfficerId !== options.requireAssignedOfficerId) {
-        throw new NotFoundError(`Emergency with ID ${id} not found`);
+        throw new NotFoundError(`No se encontró la emergencia ${id}`);
       }
       const updated = {
         ...current,
@@ -105,7 +105,7 @@ describe('login de desarrollo: grupo officer', () => {
   it('modo estricto no emite officer: los oficiales entran por el Login Federado', () => {
     for (const sub of ['of-001', 'of-002']) {
       expect(() => resolveDevLoginClaims({ sub, groups: ['officer'] }, { NODE_ENV: 'production' }))
-        .toThrow(/not allowed/);
+        .toThrow(/no habilitado/);
     }
     const grupos = Object.values(DEV_LOGIN_ALLOWLIST).flatMap((entry) => entry.groups);
     expect(new Set(grupos)).toEqual(new Set(['citizen']));
@@ -113,7 +113,7 @@ describe('login de desarrollo: grupo officer', () => {
 
   it('modo estricto rechaza un oficial que no está en la allowlist', () => {
     expect(() => resolveDevLoginClaims({ sub: 'of-999', groups: ['officer'] }, { NODE_ENV: 'production' }))
-      .toThrow(/not allowed/);
+      .toThrow(/no habilitado/);
   });
 });
 
@@ -274,7 +274,7 @@ describe('PATCH acciones de estado operativo del oficial', () => {
       .patch(`/api/emergencies/${EMERGENCY_ID}/en-route`)
       .expect(404);
 
-    expect(response.body.message).toMatch(/not found/i);
+    expect(response.body.message).toMatch(/no se encontró/i);
     expect(repository.updateStatus).not.toHaveBeenCalled();
   });
 
@@ -330,7 +330,7 @@ describe('PATCH acciones de estado operativo del oficial', () => {
       id: EMERGENCY_ID, status: 'DISPATCHED', assignedOfficerId: 'of-001',
     });
     repository.updateStatus.mockImplementationOnce(async () => {
-      throw new NotFoundError(`Emergency with ID ${EMERGENCY_ID} not found`);
+      throw new NotFoundError(`No se encontró la emergencia ${EMERGENCY_ID}`);
     });
 
     await request(buildApp(repository)).patch(`/api/emergencies/${EMERGENCY_ID}/en-route`).expect(404);

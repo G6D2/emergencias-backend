@@ -86,7 +86,7 @@ describe('Ciclo de vida de una emergencia: validar/devolver, closed_at y V26 (in
 
       const res = await request(appAs(DISPATCHER)).patch(`/api/emergencies/${id}/validate`).expect(409);
 
-      expect(res.body.message).toBe(`Emergency ${id} is DISPATCHED, expected PENDING`);
+      expect(res.body.message).toBe(`La emergencia ${id} está en DISPATCHED, se esperaba PENDING`);
       const after = await rowOf(id);
       expect(after.status).toBe('DISPATCHED');
       expect(after.assigned_officer_id).toBe(OFFICER_ID);

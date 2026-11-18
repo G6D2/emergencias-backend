@@ -106,17 +106,24 @@ async function start() {
   // KAFKA_CONSUMER_ENABLED=true (cada uno necesita ademas su topic).
   const eventosProcesadosRepo = new EventosProcesadosRepository(pool);
   const outcomeFactory = new OutcomeFactory(pool, { dedupRepo: eventosProcesadosRepo });
-  outcomeFactory.register(PROGRAMAR_COBERTURA, createProgramarCoberturaHandler({ emergencyRepository }));
-  outcomeFactory.register(CANCELAR_COBERTURA, createCancelarCoberturaHandler({ emergencyRepository }));
+  // Contexto de zona: mientras dura el evento, las emergencias que se crean
+  // dentro de su radio suben un nivel de prioridad de despacho. La cobertura
+  // preventiva lo usa además para la marca de baja de un evento cancelado.
+  const contextoZonaRepository = new ContextoZonaRepository(pool);
+  outcomeFactory.register(
+    PROGRAMAR_COBERTURA,
+    createProgramarCoberturaHandler({ emergencyRepository, contextoZonaRepository })
+  );
+  outcomeFactory.register(
+    CANCELAR_COBERTURA,
+    createCancelarCoberturaHandler({ emergencyRepository, contextoZonaRepository })
+  );
   outcomeFactory.register(CREAR_INTERVENCION, createCrearIntervencionHandler({ emergencyRepository }));
   outcomeFactory.register(CERRAR_INTERVENCION, createCerrarIntervencionHandler({ emergencyRepository }));
   outcomeFactory.register(
     CREAR_EMERGENCIA_BICICLETA,
     createCrearEmergenciaBicicletaHandler({ emergencyRepository })
   );
-  // Contexto de zona: mientras dura el evento, las emergencias que se crean
-  // dentro de su radio suben un nivel de prioridad de despacho.
-  const contextoZonaRepository = new ContextoZonaRepository(pool);
   outcomeFactory.register(REGISTRAR_CONTEXTO_ZONA, createRegistrarContextoZonaHandler({ contextoZonaRepository }));
   outcomeFactory.register(DAR_DE_BAJA_CONTEXTO_ZONA, createDarDeBajaContextoZonaHandler({ contextoZonaRepository }));
   // Alerta climática de Espacios (#80 y #88, ADR "Responder a las alertas

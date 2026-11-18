@@ -112,10 +112,10 @@ Hay tres números distintos que se confunden al presentar el pipeline:
 
 | Repo | Fecha | Statements | Branches | Functions | Lines | Run |
 |---|---|---|---|---|---|---|
-| `emergencias-backend` | 2026-11-05 | **95.73 %** | **84.78 %** | **95.65 %** | **96.54 %** | [42050901474](https://github.com/G6D2/emergencias-backend/actions/runs/42050901474) |
+| `emergencias-backend` | 2026-11-17 | **96.78 %** | **89.47 %** | **98.06 %** | **97.55 %** | [44132432612](https://github.com/G6D2/emergencias-backend/actions/runs/44132432612) |
 | `Frontend` | 2026-09-21 | **96.12 %** | **89.59 %** | **95.18 %** | **98.43 %** | [35664969982](https://github.com/G6D2/Frontend/actions/runs/35664969982) |
 
-Los cuatro ejes están holgadamente por encima del gate interno (80%) y del requisito externo (60%). El eje más cerca del umbral en ambos repos es **branches**.
+La tabla tiene fecha porque envejece con cada PR: el valor vigente está siempre en la última corrida de CI sobre `main` de cada repo. Los cuatro ejes están holgadamente por encima del gate interno (80%) y del requisito externo (60%). El eje más cerca del umbral en ambos repos es **branches**.
 
 > **Aviso de scope:** los porcentajes del frontend son sobre `lib/**` y `app/lib/**` únicamente (con exclusiones puntuales listadas en `vitest.config.mjs`). No cubren componentes ni páginas — ver detalle en la sección "Front CI" y en el `README.md` del frontend.
 
@@ -148,7 +148,7 @@ Si preguntan "¿SonarCloud es su quality gate?": **no**. El gate efectivo hoy es
 
 | Repo | Trigger | Pasos | Nota |
 |---|---|---|---|
-| `emergencias-backend` | `workflow_run` de CI sobre `main`, si CI salió `success` en un push (deploya el SHA que CI aprobó) | `npm run migrate` (Flyway contra `DATABASE_URL` secret) → deploy hook de Render | Sin `FLYWAY_BASELINE_VERSION` a propósito (ver comentario en `cd.yml`): una base nueva necesita correr todas las migraciones (V1…V16 y V21…V23) |
+| `emergencias-backend` | `workflow_run` de CI sobre `main`, si CI salió `success` en un push (deploya el SHA que CI aprobó) | `npm run migrate` (Flyway contra `DATABASE_URL` secret) → deploy hook de Render | Sin `FLYWAY_BASELINE_VERSION` a propósito (ver comentario en `cd.yml`): una base nueva necesita correr todas las migraciones (V1…V16 y V21…V35) |
 | `Frontend` | `push` a `main` | Deploy hook de Render únicamente | No corre migraciones (no tiene schema propio) |
 
 ## Failover manual: `activate-backup.yml`
