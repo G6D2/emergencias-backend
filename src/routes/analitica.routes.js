@@ -47,7 +47,7 @@ function createAnaliticaRoutes(authenticate, client) {
   router.get('/', authenticate, requireDispatcher, asyncHandler(async (req, res) => {
     const token = readBearer(req);
     if (!token) {
-      throw new UnauthorizedError('Missing Authorization header');
+      throw new UnauthorizedError('Falta el header Authorization');
     }
 
     const result = await embed.fetchDashboard(token);

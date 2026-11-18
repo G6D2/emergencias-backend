@@ -16,7 +16,7 @@ function headerMap(entries) {
 function appWith(user, fetchImpl) {
   const authenticate = (req, res, next) => {
     if (!req.headers.authorization) {
-      next(new UnauthorizedError('Missing Authorization header'));
+      next(new UnauthorizedError('Falta el header Authorization'));
       return;
     }
     req.user = user;
