@@ -27,6 +27,7 @@ flowchart TB
 
     login["Login Federado Grupo 2<br/>token de servicio del bus"]
     idp["Login Federado Grupo 2 para el personal<br/>(AUTH_MODE=hybrid, en producción)"]
+    analitica["Analítica (Grupo 8)<br/>tablero embebido de Emergencias"]
 
     subgraph geo["Geocodificación externa"]
         bdc["BigDataCloud<br/>(primario)"]
@@ -46,12 +47,13 @@ flowchart TB
     ciudadano -->|HTTPS| bff
     bff -->|"Bearer JWT (cookie httpOnly server-side) + retry 502/503/504"| api
     api -->|"pg pool, DB_POOL_MAX"| neon
-    kafka -->|"consume 8 tipos de evento:<br/>Espacios (EventoComunitarioPublicado, EventoCancelado, ActividadCreada, ReservaCreada),<br/>Movilidad (EmergenciaSolicitada, EmergenciaBicicleta),<br/>Reclamos (ReclamoCreado, ReclamoActualizado)<br/>+ alerta climática de Espacios (opt-in)"| api
+    kafka -->|"consume 10 tipos de evento:<br/>Espacios (EventoComunitarioPublicado, EventoCancelado, ActividadCreada, ReservaCreada,<br/>CriticidadClimaticaConfirmada, CriticidadClimaticaFinalizada),<br/>Movilidad (EmergenciaSolicitada, EmergenciaBicicleta),<br/>Reclamos (ReclamoCreado, ReclamoActualizado)"| api
     api -->|"decodifica Avro (Bearer)"| registry
     api -->|"client-credentials"| login
     api -->|"outbox -> GatewayPublisher (EDA_PUBLISHER_MODE=gateway):<br/>EmergenciaCreada, EmergenciaActualizada"| gateway
     gateway -->|"sella metadata y publica"| kafka
     api -->|"verify RS256 via JWKS (tokens del personal)"| idp
+    api -->|"GET /admin/analitica: pide el tablero con el token del dispatcher"| analitica
     bff -->|"GET reverse-geocode"| bdc
     bff -.->|"respaldo si BigDataCloud falla"| nom
     ci --> cd
@@ -84,7 +86,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    routes["routes<br/>panic-button, emergencies, officer, user, outbox, dev-auth, incidents, citizen-profile"]
+    routes["routes<br/>panic-button, emergencies, officer, user, outbox, dev-auth, incidents,<br/>citizen-profile, contextos-zona, analitica, asyncapi"]
     auth["auth<br/>authenticate, authorize, jwt-verifier, groups, dev-login-policy, setup"]
     controllers["controllers<br/>panic-button, emergency, officer, user, incident, auth, citizen-profile"]
     domain["domain<br/>emergency-status, emergency-type, severity"]
@@ -93,7 +95,7 @@ flowchart TB
     dbscanGrouper["dbscan-grouper<br/>(estrategia primaria, DBSCAN vía density-clustering)"]:::incident
     ruleGrouper["rule-based-grouper<br/>(estrategia fallback, Union-Find + Haversine)"]:::incident
     repositories["repositories<br/>emergency, officer, incident, citizen-profile, auth-user,<br/>eventos-procesados, contexto-zona"]
-    services["services<br/>emergency-events, kafka.service, outbox-publisher,<br/>gateway-publisher, eda-auth-client"]
+    services["services<br/>emergency-events, kafka.service, outbox-publisher,<br/>gateway-publisher, eda-auth-client, analitica-embed<br/>(+ herramientas: outbox-failed, eventos-descartados)"]
     listeners["listeners<br/>EventConsumer (un solo consumer) + cobertura-preventiva +<br/>reclamo-intervencion + movilidad-bicicleta<br/>(reglas por evento, OutcomeFactory con dedup)"]:::consumer
     detectionJob["incident-detection-job<br/>cada 60s, pg_try_advisory_lock"]:::incident
     security["security<br/>location-crypto, location-retention, cors, rate-limit, secure-log, security-headers"]
@@ -153,6 +155,7 @@ flowchart TB
 | `Kafka` | Conectado al bus del Grupo 1 (`KAFKA_ENABLED=true`, SASL/OAUTHBEARER + SSL) para consumir: diez listeners sobre un único consumer (`EventConsumer`) leen eventos de Espacios (`EventoComunitarioPublicado`, `EventoCancelado`, `ActividadCreada`, `ReservaCreada`, `CriticidadClimaticaConfirmada`, `CriticidadClimaticaFinalizada`), Movilidad (`EmergenciaSolicitada`, `EmergenciaBicicleta`) y Reclamos (`ReclamoCreado`, `ReclamoActualizado`). Los ocho primeros figuraban `running` en `GET /health` de producción el 16/11/2026; los dos de alerta climática son opt-in y se activaron el 17/11/2026 (`EDA_TOPIC_CRITICIDAD_CLIMATICA_CONFIRMADA` y `_FINALIZADA` en `render.yaml`). Los eventos propios salen por HTTP al gateway (`EDA_PUBLISHER_MODE=gateway`, `OUTBOX_PUBLISHER_ENABLED=true`), no por el producer de Kafka (ver `06-eventos.md`) |
 | `Login Federado` (token de servicio) | Token client-credentials del bus y del schema registry (`EDA_OAUTH_*`, `src/services/eda-auth-client.js`) |
 | `IdP Grupo 2` | En uso desde el 12/11/2026: producción corre `AUTH_MODE=hybrid`. Los tokens del personal se validan contra el JWKS del Login Federado y los de ciudadanos y atajos de demo contra la clave local, según el `iss` (ver `src/auth/setup.js` y `src/auth/hybrid-verifier.js`) |
+| `Analítica (Grupo 8)` | En uso desde el 18/11/2026: `GET /admin/analitica` (solo dispatcher) pide al módulo de Analítica el HTML del tablero de Emergencias con el token del usuario y lo devuelve para mostrarlo en `/ops/analitica`. No se agregan datos ni se llama a `/analytics/*`; la URL es `ANALITICA_EMBED_URL` (`src/services/analitica-embed.js`, `src/routes/analitica.routes.js`) |
 | Render free | El backend duerme sin tráfico; mientras duerme no consume. Al despertar, el consumer group sigue desde su último offset confirmado |
 | SonarCloud | Corre en los dos repos (secret `SONAR_TOKEN` cargado en backend y, desde el 21/09, en `Frontend`); sigue siendo `continue-on-error: true`, no bloquea el pipeline |
 | Stack de backup | Confirmado en el código por `.github/workflows/activate-backup.yml` (PR #38); manual, sin failover automático (ver nota arriba) |

@@ -172,6 +172,7 @@ flowchart TB
     kafka["Kafka del Grupo 1"]
     gw["Event gateway del Grupo 1"]
     idp["Login Federado Grupo 2<br/>JWKS y token de servicio"]
+    anaP["Analítica (Grupo 8)<br/>tablero embebido"]
 
     ui -->|HTTPS| bff
     bff -->|"Bearer JWT"| http
@@ -188,6 +189,7 @@ flowchart TB
     outbox -->|"HTTP POST por evento"| gw
     gw --> kafka
     http -.->|"valida firma (JWKS en caché)"| idp
+    http -.->|"GET del tablero embebido (solo dispatcher)"| anaP
     consumer -.->|"token OAUTHBEARER"| idp
     outbox -.->|"token client-credentials"| idp
     incid -.->|"pg_try_advisory_lock"| db
@@ -293,7 +295,8 @@ flowchart LR
 | Camino a producción | Rama → PR con plantilla y `CODEOWNERS` → CI (lint, unitarios con cobertura mínima de 80 %, integración contra Postgres) → merge a `main` → CD (migración Flyway y deploy hook de Render). Detalle en `07-ci-cd.md` |
 
 Deuda conocida de esta vista: `src/repositories/emergency.repository.js` concentra consultas,
-transiciones y escritura del outbox en un solo archivo de más de 1.300 líneas, y no hay una capa
+transiciones y escritura del outbox en un solo archivo de más de 1.600 líneas (hay un plan para partirlo en
+`docs/plan-partir-emergency-repository.md`), y no hay una capa
 de casos de uso entre controllers y repositories. El código es JavaScript sin tipos estáticos.
 
 ## 4. Vista física
@@ -328,6 +331,7 @@ flowchart TB
     end
 
     geoN["BigDataCloud / Nominatim<br/>geocodificación"]
+    anaN["Analítica (Grupo 8)<br/>Azure App Service"]
 
     subgraph gh["GitHub"]
         act["GitHub Actions<br/>CI, CD, keep-warm, activate-backup"]
@@ -339,6 +343,7 @@ flowchart TB
     kf -->|"SASL_SSL 9092"| beN
     beN -->|"HTTPS"| gwN
     beN -->|"HTTPS"| idpN
+    beN -->|"HTTPS, tablero embebido"| anaN
     feN -->|"HTTPS"| geoN
     act -->|"migración Flyway"| pg
     act -->|"deploy hook"| beN
@@ -355,6 +360,7 @@ flowchart TB
 | Neon | Base de datos | Único almacenamiento con estado del módulo |
 | Grupo 1 | Bus de eventos | Fuera de nuestro control: si cae, lo propio queda pendiente en el outbox y se publica al volver |
 | Grupo 2 | Identidad del personal y token de servicio | Si cae, el personal no puede entrar y el consumer no renueva su token |
+| Analítica (Grupo 8) | Tablero de Emergencias que el backend pide y el dispatcher ve en `/ops/analitica` | Si cae, solo se pierde esa pantalla; el resto del módulo sigue igual |
 | GitHub Actions | CI y CD | Único camino para cambiar el esquema de la base y desplegar |
 
 Limitaciones conocidas de esta vista: hay un solo ambiente (no existe uno de pruebas separado
