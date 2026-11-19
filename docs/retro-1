@@ -1,0 +1,39 @@
+# Retrospectiva simulada — Sprint 3
+
+Sprint 3: semana del 03/09 al 09/09. 53 commits y 27 PRs mergeados entre backend y Frontend, con
+6 personas activas.
+
+## Qué entregamos
+
+- Máquina de estados de las emergencias, con validar y descartar.
+- Outbox para publicar los eventos de forma confiable.
+- Catálogo de oficiales y asignación a emergencias.
+- Detalle de la emergencia con su historial de estados.
+- Severidad con valores cerrados y su restricción en la base.
+- En Frontend: registro de ciudadanos, validar, descartar y asignar desde la central, diseño
+  responsive y geocodificación inversa.
+
+## Qué funcionó
+
+- Fue el primer sprint con casi todo el equipo trabajando a la vez: seis personas con commits.
+- La máquina de estados quedó escrita antes de que Front armara las pantallas de la central, y
+  eso evitó rehacer botones.
+- El CI en cada PR frenó varios errores de lint y de build antes del merge.
+
+## Qué no funcionó
+
+- El backend en Render se duerme y el primer login de la clase devolvía 502. Lo vimos en vivo.
+- Los PRs del repositorio de ADRs quedan días esperando a un único aprobador; el PR #8 estuvo
+  listo para mergear diez días.
+- El trabajo se concentró en tres días de la semana y el resto quedó vacío.
+- La severidad llega como texto libre desde el Frontend y el backend la normaliza a mano.
+
+## Acciones
+
+| Acción | Responsable | Cómo sabemos que se cumplió |
+|---|---|---|
+| Mantener el backend despierto en horario de clase | Producto | Job de keep-warm en el backend |
+| Que el BFF reintente mientras el backend despierta | Producto / Front | Reintento ante 502 en el BFF |
+| Cobertura mínima en CI y análisis con SonarCloud | DevOps | Umbral de cobertura en el workflow de CI |
+| Geocodificación con un proveedor principal y uno de respaldo | Front | BigDataCloud primario y Nominatim de respaldo en el BFF |
+| Ningún PR de ADR abierto más de 48 h sin revisión | Scrum Master | Tiempo de PR abierto en el repositorio de ADRs |
